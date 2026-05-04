@@ -1,0 +1,61 @@
+import { Navigate, Route, Routes } from 'react-router-dom'
+import { useAuth } from './contexts/AuthContext.jsx'
+import { SidebarProvider } from './contexts/SidebarContext.jsx'
+import { Landing } from './pages/Landing.jsx'
+import { Login } from './pages/Login.jsx'
+import { Register } from './pages/Register.jsx'
+import { DashboardLayout } from './components/layout/DashboardLayout.jsx'
+import { Dashboard } from './pages/dashboard/Dashboard.jsx'
+import { Connect } from './pages/dashboard/Connect.jsx'
+import { Groups } from './pages/dashboard/Groups.jsx'
+import { GroupDetails } from './pages/dashboard/GroupDetails.jsx'
+import { Messages } from './pages/dashboard/Messages.jsx'
+import { Automations } from './pages/dashboard/Automations.jsx'
+import { Members } from './pages/dashboard/Members.jsx'
+import { Analytics } from './pages/dashboard/Analytics.jsx'
+import { Integrations } from './pages/dashboard/Integrations.jsx'
+import { Settings } from './pages/dashboard/Settings.jsx'
+
+function ProtectedRoute({ children }) {
+  const { user } = useAuth()
+  if (!user) return <Navigate to="/login" replace />
+  return children
+}
+
+function DashboardShell() {
+  return (
+    <SidebarProvider>
+      <DashboardLayout />
+    </SidebarProvider>
+  )
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <DashboardShell />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Dashboard />} />
+        <Route path="connect" element={<Connect />} />
+        <Route path="groups" element={<Groups />} />
+        <Route path="groups/:id" element={<GroupDetails />} />
+        <Route path="messages" element={<Messages />} />
+        <Route path="automations" element={<Automations />} />
+        <Route path="members" element={<Members />} />
+        <Route path="analytics" element={<Analytics />} />
+        <Route path="integrations" element={<Integrations />} />
+        <Route path="settings" element={<Settings />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}

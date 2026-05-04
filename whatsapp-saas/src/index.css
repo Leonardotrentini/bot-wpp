@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+  /* Verde floresta (referência logo VESTO) */
+  --color-brand-50: #ecfdf3;
+  --color-brand-100: #d0f0dd;
+  --color-brand-200: #a3dcc0;
+  --color-brand-300: #6bb894;
+  --color-brand-400: #3d8f6a;
+  --color-brand-500: #2d6b4f;
+  --color-brand-600: #245a42;
+  --color-brand-700: #1d4836;
+  --color-brand-800: #153528;
+  --color-brand-900: #0f241c;
+  --color-brand-950: #070f0c;
+  /* Dourado metálico */
+  --color-accent-200: #f5ebd4;
+  --color-accent-300: #e8d5a3;
+  --color-accent-400: #d4af37;
+  --color-accent-500: #c9a227;
+  --color-accent-600: #a8861f;
+  --color-accent-700: #8a6f1a;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-brand-950 text-stone-200 antialiased font-sans;
+  }
+  h1,
+  h2,
+  h3,
+  .font-heading {
+    @apply font-serif tracking-tight;
+  }
+}
+
+@keyframes vg-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.vg-toast {
+  animation: vg-toast-in 0.28s ease-out;
+}
