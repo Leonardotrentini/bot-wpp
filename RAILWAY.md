@@ -36,7 +36,7 @@ Health check opcional: `GET /health`
 
 - **Root Directory:** `whatsapp-saas`
 - **Build Command:** `npm install && npm run build`
-- **Start Command:** `npm run preview -- --host 0.0.0.0 --port $PORT`
+- **Start Command:** `npm run start` (definido em `package.json` + `railway.json`; o Vite usa `PORT` do Railway via `vite.config.js`)
 
 **Variáveis de ambiente (build):**
 
