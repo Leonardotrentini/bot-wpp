@@ -35,6 +35,6 @@ npm run dev
 
 ## Deploy no Railway
 
-Instruções detalhadas (dois serviços + Postgres): **[RAILWAY.md](./RAILWAY.md)**.
+Instruções detalhadas + checklist pós-push: **[RAILWAY.md](./RAILWAY.md)**.
 
 Repositório: [github.com/Leonardotrentini/bot-wpp](https://github.com/Leonardotrentini/bot-wpp)

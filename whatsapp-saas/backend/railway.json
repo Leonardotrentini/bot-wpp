@@ -1,0 +1,10 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "buildCommand": "npm install && npm run prisma:generate"
+  },
+  "deploy": {
+    "startCommand": "npm run prisma:push && npm start",
+    "healthcheckPath": "/health"
+  }
+}
