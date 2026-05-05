@@ -37,9 +37,10 @@ Health check opcional: `GET /health`
 ## 3. Serviço — Frontend
 
 - **Root Directory:** `whatsapp-saas`
-- Com **`Dockerfile`** na pasta `whatsapp-saas/`, o Railway usa **Docker** (build + `serve` estático). Não forces Railpack/Nixpacks por cima, a menos que removas o Dockerfile de propósito.
-- Sem Docker (só Node): **Build** `npm install && npm run build`, **Start** `npm run start` (usa `scripts/serve-dist.mjs` + pacote `serve` na pasta `dist`).
-- Se no painel tiveres **Start Command** antigo a apontar para o backend, **apaga** esse override e redeploy.
+- O ficheiro **`whatsapp-saas/railway.json`** força **`builder: DOCKERFILE`** para o Railway **não** usar Railpack (evita builds com `railpack-plan.json` / Prisma no front).
+- Nos **Build Logs** do front deves ver **Docker build** (ex.: `FROM node:20-alpine`), **não** `npm run start` como passo de build nem cópias em cache do **Prisma**.
+- Nos **Deploy Logs** após arrancar **não** deve aparecer `node src/server.js` nem `Backend online` — isso indica que o serviço ainda está a usar a pasta do **backend**.
+- Se no painel tiveres **Start Command** manual, **apaga-o** (o `CMD` do Dockerfile já define o start).
 
 **Variáveis de ambiente (build):**
 
