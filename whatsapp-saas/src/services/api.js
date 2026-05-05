@@ -23,6 +23,29 @@ export const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+// #region agent log
+if (import.meta.env.DEV) {
+  const _d = {
+    sessionId: '855908',
+    hypothesisId: 'H1',
+    location: 'api.js:init',
+    message: 'Vite env + apiClient',
+    data: {
+      VITE_USE_REAL_API_raw: import.meta.env.VITE_USE_REAL_API,
+      useRealApi,
+      VITE_API_URL: import.meta.env.VITE_API_URL ?? '(undefined)',
+      resolvedBaseURL: apiClient.defaults.baseURL,
+    },
+    timestamp: Date.now(),
+  }
+  fetch('http://127.0.0.1:7849/ingest/14afd426-0281-49ff-96ac-f3b8cb6971c7', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '855908' },
+    body: JSON.stringify(_d),
+  }).catch(() => {})
+}
+// #endregion
+
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('vg_auth_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
@@ -40,11 +63,56 @@ let whatsappConnected = mockWhatsAppStatus.connected
 
 export async function login(email, password) {
   if (useRealApi) {
-    const { data } = await apiClient.post('/auth/login', { email, password })
-    sessionUser = data.user
-    localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
-    localStorage.setItem('vg_auth_token', data.token)
-    return { data }
+    // #region agent log
+    if (import.meta.env.DEV) {
+      const _d = {
+        sessionId: '855908',
+        hypothesisId: 'H2',
+        location: 'api.js:login',
+        message: 'real login attempt',
+        data: {
+          baseURL: apiClient.defaults.baseURL,
+          fullUrlApprox: `${apiClient.defaults.baseURL || ''}/auth/login`,
+        },
+        timestamp: Date.now(),
+      }
+      fetch('http://127.0.0.1:7849/ingest/14afd426-0281-49ff-96ac-f3b8cb6971c7', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '855908' },
+        body: JSON.stringify(_d),
+      }).catch(() => {})
+    }
+    // #endregion
+    try {
+      const { data } = await apiClient.post('/auth/login', { email, password })
+      sessionUser = data.user
+      localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+      localStorage.setItem('vg_auth_token', data.token)
+      return { data }
+    } catch (err) {
+      // #region agent log
+      if (import.meta.env.DEV) {
+        const _d = {
+          sessionId: '855908',
+          hypothesisId: 'H3',
+          location: 'api.js:login.catch',
+          message: 'login request failed',
+          data: {
+            status: err.response?.status,
+            code: err.code,
+            msg: String(err.message || err).slice(0, 200),
+          },
+          timestamp: Date.now(),
+        }
+        fetch('http://127.0.0.1:7849/ingest/14afd426-0281-49ff-96ac-f3b8cb6971c7', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '855908' },
+          body: JSON.stringify(_d),
+        }).catch(() => {})
+      }
+      // #endregion
+      throw err
+    }
   }
   await delay()
   if (!email || !password) throw new Error('E-mail e senha são obrigatórios')
