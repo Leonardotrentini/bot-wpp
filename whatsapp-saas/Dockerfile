@@ -1,12 +1,12 @@
-# Imagem de produção: build Vite + servidor estático (evita Railpack a arrancar o comando errado)
-FROM node:20-alpine AS builder
+# bookworm (glibc): npm ci no Alpine falhava no Railway; npm install + Debian evita binários opcionais quebrados em musl
+FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm install
 COPY . .
 RUN npm run build
 
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 WORKDIR /app
 RUN npm install -g serve@14.2.4
 COPY --from=builder /app/dist ./dist
