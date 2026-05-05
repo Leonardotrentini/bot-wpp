@@ -4,7 +4,8 @@
     "buildCommand": "npm install && npm run prisma:generate"
   },
   "deploy": {
-    "startCommand": "npm run prisma:push && npm start",
+    "preDeployCommand": "npm run prisma:push",
+    "startCommand": "npm start",
     "healthcheckPath": "/health"
   }
 }
