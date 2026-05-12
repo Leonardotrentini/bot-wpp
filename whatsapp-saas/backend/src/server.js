@@ -8,6 +8,7 @@ const { v4: uuid } = require("uuid")
 const { createServer } = require("http")
 const { Server } = require("socket.io")
 const { prisma } = require("./lib/prisma")
+const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
 const {
   createInstance,
@@ -59,11 +60,12 @@ app.post("/api/auth/register", async (req, res) => {
   const exists = await prisma.user.findUnique({ where: { email } })
   if (exists) return res.status(409).json({ error: "EMAIL_IN_USE", message: "E-mail já cadastrado." })
 
+  await ensureDefaultPlans()
   const freePlan = await prisma.plan.findUnique({ where: { slug: "free" } })
   if (!freePlan) {
     return res.status(503).json({
       error: "NO_DEFAULT_PLAN",
-      message: "Execute o seed da base de dados (npm run prisma:seed no backend).",
+      message: "Não foi possível criar o plano padrão. Verifique a base de dados.",
     })
   }
 
@@ -342,5 +344,6 @@ app.use((err, _req, res, _next) => {
 const port = Number(process.env.PORT || 4000)
 
 httpServer.listen(port, () => {
+  void ensureDefaultPlans().catch((err) => console.error("[bootstrap] ensureDefaultPlans:", err?.message || err))
   console.log(`Backend online na porta ${port}`)
 })

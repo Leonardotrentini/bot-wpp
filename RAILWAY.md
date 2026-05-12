@@ -18,8 +18,8 @@ Use **um projeto Railway** com **PostgreSQL** + **2 serviços** (backend e front
 
 - **Root Directory:** `whatsapp-saas/backend`
 - O ficheiro **`whatsapp-saas/backend/railway.json`** define build/start para o Railway (podes apagar os comandos manuais no painel se estiverem em conflito).
-- **Build / Start** (equivalente ao ficheiro): `npm install && npm run prisma:generate` → `npm run prisma:push && npm start`  
-  *(Em produção madura, prefira migrações versionadas: `prisma migrate deploy`.)*
+- **Build / Start** (equivalente ao ficheiro): `npm install && npm run prisma:generate` → `preDeploy: prisma:push && prisma:seed` → `npm start`  
+  O **seed** cria os planos `free`/`pro` e o utilizador admin; sem isso o registo devolve **503** (`NO_DEFAULT_PLAN`).
 
 **Obrigatório nas variáveis do backend:** `JWT_SECRET` (texto longo aleatório) e `FRONTEND_URL` (URL HTTPS exata do front), além de `DATABASE_URL` ligada ao Postgres.
 
