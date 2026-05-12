@@ -31,6 +31,10 @@ Use **um projeto Railway** com **PostgreSQL** + **2 serviços** (backend e front
 | `JWT_SECRET` | String longa e aleatória (obrigatório em produção) |
 | `FRONTEND_URL` | URL pública do front no Railway, ex. `https://seu-front.up.railway.app` |
 | `PORT` | O Railway injeta automaticamente; o servidor já usa `process.env.PORT` |
+| `EVOLUTION_BASE_URL` | URL base da sua Evolution API |
+| `EVOLUTION_API_KEY` | API key da Evolution |
+| `EVOLUTION_INSTANCE_PREFIX` | Prefixo dos nomes de instância (ex. `vesto`) |
+| `EVOLUTION_WEBHOOK_URL` | URL pública opcional para receber eventos |
 
 Health check opcional: `GET /health`
 
@@ -42,16 +46,18 @@ Health check opcional: `GET /health`
 - Nos **Deploy Logs** após arrancar **não** deve aparecer `node src/server.js` nem `Backend online` — isso indica que o serviço ainda está a usar a pasta do **backend**.
 - Se no painel tiveres **Start Command** manual, **apaga-o** (o `CMD` do Dockerfile já define o start).
 
-**Variáveis de ambiente (build):**
+**Variáveis de ambiente (build e/ou runtime):**
 
 | Variável | Valor |
 |----------|--------|
-| `VITE_USE_REAL_API` | `true` |
-| `VITE_API_URL` | `https://<URL-pública-do-backend>/api` |
+| `VITE_USE_REAL_API` | `true` (opcional se usares runtime abaixo) |
+| `VITE_API_URL` | `https://<URL-pública-do-backend>/api` (opcional se usares runtime abaixo) |
+| `BACKEND_API_BASE` | `https://<URL-pública-do-backend>/api` — **lida em runtime** pelo arranque do container; ideal para mudar a API **sem** rebuild (define no serviço `bot-wpp` e **reinicia**). |
+| `BACKEND_USE_REAL_API` | `true` (default no script) — força API real quando usas `BACKEND_API_BASE`. |
 
 O domínio público do backend aparece no painel do serviço (Settings → Networking / Domains). Deve terminar com `/api` porque o cliente Axios já usa essa base.
 
-**Importante:** variáveis `VITE_*` são embutidas no **build**. Se mudar a URL da API, faça **redeploy** do frontend.
+**Importante:** variáveis `VITE_*` são embutidas no **build**. Se só usares `BACKEND_API_BASE`, podes alterar a URL da API com **reinício** do serviço (o `railway-serve.mjs` injeta `window.__VESTO_ENV__` no `dist/index.html` ao arrancar). Após o **primeiro** deploy com esta imagem, confirma que `BACKEND_API_BASE` está definida. Se mudares `VITE_*`, é preciso **rebuild** do frontend.
 
 ## 4. Conectar o repositório
 
@@ -85,7 +91,7 @@ Depois disso, registro/login passam a usar a API real e o restante das rotas moc
 ### Front (`bot-wpp`)
 
 1. **Root Directory:** `whatsapp-saas`.
-2. **Variables:** `VITE_USE_REAL_API=true`, `VITE_API_URL=https://<backend>/api`.
+2. **Variables:** `BACKEND_API_BASE=https://<backend>/api` e `BACKEND_USE_REAL_API=true` (recomendado), **ou** `VITE_USE_REAL_API=true` + `VITE_API_URL=https://<backend>/api` (rebuild ao mudar).
 3. **Deploy:** remove **Start Command** que aponte para Express; com **Dockerfile** em `whatsapp-saas/`, o Railway deve fazer build Docker.
 4. **Redeploy** após mudar `VITE_*`.
 

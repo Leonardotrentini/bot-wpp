@@ -6,6 +6,7 @@ export const mockUser = {
   id: 'u1',
   name: 'Carlos Mendes',
   email: 'carlos.mendes@empresa.com.br',
+  role: 'USER',
   phone: '+55 (11) 99876-5432',
   avatar: avatar('Carlos Mendes'),
   plan: 'Pro',

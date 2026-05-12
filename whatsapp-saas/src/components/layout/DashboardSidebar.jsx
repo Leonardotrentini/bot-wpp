@@ -11,8 +11,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Smartphone,
+  Shield,
 } from 'lucide-react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
+import { useAuth } from '../../contexts/AuthContext.jsx'
 import { BrandLogo } from '../common/BrandLogo.jsx'
 
 const nav = [
@@ -29,6 +31,7 @@ const nav = [
 
 export function DashboardSidebar() {
   const { collapsed, setCollapsed } = useSidebar()
+  const { isAdmin } = useAuth()
 
   return (
     <aside
@@ -67,6 +70,22 @@ export function DashboardSidebar() {
             {!collapsed && <span className="truncate">{item.label}</span>}
           </NavLink>
         ))}
+        {isAdmin && (
+          <NavLink
+            to="/dashboard/admin"
+            title="Administração"
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                isActive
+                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25 shadow-sm'
+                  : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'
+              }`
+            }
+          >
+            <Shield className="h-5 w-5 shrink-0 text-amber-400/90" />
+            {!collapsed && <span className="truncate">Administração</span>}
+          </NavLink>
+        )}
       </nav>
       <div className="border-t border-brand-800 p-2">
         <button

@@ -28,6 +28,10 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 
+# Cursor (logs locais; manter só mcp do projeto)
+.cursor/*
+!.cursor/mcp.json
+
 # Vite
 *.tsbuildinfo
 .vite/

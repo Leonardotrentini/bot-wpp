@@ -1,6 +1,6 @@
 # Backend Vesto Group
 
-API Node.js/Express para autenticação, grupos, mensagens, analytics e sessão WhatsApp (QR mock).
+API Node.js/Express para autenticação, grupos, mensagens, analytics e sessão WhatsApp via Evolution API.
 
 ## Stack
 
@@ -56,4 +56,17 @@ Crie 2 serviços no mesmo projeto:
    - Start Command: `npm run preview -- --host 0.0.0.0 --port $PORT`
    - Variáveis: `VITE_API_URL=https://<url-do-backend>/api`, `VITE_USE_REAL_API=true`
 
-> Para WhatsApp real com QR em produção, substitua o fluxo mock por Baileys/whatsapp-web.js com persistência de sessão.
+## WhatsApp real (Evolution)
+
+Defina as variáveis no backend:
+
+- `EVOLUTION_BASE_URL`
+- `EVOLUTION_API_KEY`
+- `EVOLUTION_INSTANCE_PREFIX` (opcional, padrão `vesto`)
+- `EVOLUTION_WEBHOOK_URL` (opcional)
+
+As rotas abaixo já usam Evolution API:
+
+- `GET /api/whatsapp/status`
+- `POST /api/whatsapp/connect`
+- `POST /api/whatsapp/disconnect`

@@ -43,7 +43,7 @@ export function Connect() {
     setActionLoading(true)
     try {
       await connectWhatsApp()
-      toast.success('Conexão restabelecida (simulado).')
+      toast.success('QR gerado. Escaneie no seu WhatsApp.')
       await refresh()
     } catch {
       toast.error('Falha ao reconectar.')
@@ -87,10 +87,12 @@ export function Connect() {
           <div className="flex h-48 w-48 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-brand-600 bg-brand-900/80">
             {connected ? (
               <span className="text-xs text-stone-500 text-center px-2">Sessão ativa — QR não necessário</span>
+            ) : status?.qr ? (
+              <img src={status.qr} alt="QR Code do WhatsApp" className="h-44 w-44 rounded-md bg-white p-2" />
             ) : (
               <div className="text-center p-2">
                 <QrCode className="h-16 w-16 mx-auto text-stone-600 mb-2" />
-                <span className="text-xs text-stone-500">Placeholder do QR</span>
+                <span className="text-xs text-stone-500">Clique em Reconectar para gerar QR</span>
               </div>
             )}
           </div>

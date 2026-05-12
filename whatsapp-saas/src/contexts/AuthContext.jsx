@@ -1,5 +1,6 @@
-import { createContext, useContext, useMemo, useState } from 'react'
-import { loadSessionFromStorage, logout as apiLogout } from '../services/api.js'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { loadSessionFromStorage, logout as apiLogout, fetchMe } from '../services/api.js'
+import { resolveUseRealApi } from '../lib/runtimeEnv.js'
 
 const AuthContext = createContext(null)
 
@@ -12,7 +13,28 @@ export function AuthProvider({ children }) {
     setUser(null)
   }
 
-  const value = useMemo(() => ({ user, login, logout, isAuthenticated: !!user }), [user])
+  useEffect(() => {
+    if (!resolveUseRealApi()) return
+    const token = localStorage.getItem('vg_auth_token')
+    if (!token) return
+    fetchMe()
+      .then((d) => setUser(d.user))
+      .catch(() => {
+        apiLogout()
+        setUser(null)
+      })
+  }, [])
+
+  const value = useMemo(
+    () => ({
+      user,
+      login,
+      logout,
+      isAuthenticated: !!user,
+      isAdmin: user?.role === 'ADMIN',
+    }),
+    [user],
+  )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

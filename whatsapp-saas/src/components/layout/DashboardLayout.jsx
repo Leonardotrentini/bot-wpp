@@ -14,6 +14,7 @@ const titles = {
   '/dashboard/analytics': 'Analytics',
   '/dashboard/integrations': 'Integrações',
   '/dashboard/settings': 'Configurações',
+  '/dashboard/admin': 'Administração',
 }
 
 export function DashboardLayout() {

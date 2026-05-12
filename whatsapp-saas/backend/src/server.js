@@ -3,14 +3,25 @@ require("dotenv").config()
 const express = require("express")
 const cors = require("cors")
 const bcrypt = require("bcryptjs")
-const QRCode = require("qrcode")
 const { z } = require("zod")
 const { v4: uuid } = require("uuid")
 const { createServer } = require("http")
 const { Server } = require("socket.io")
 const { prisma } = require("./lib/prisma")
 const { signToken, authMiddleware } = require("./lib/auth")
+const {
+  createInstance,
+  connectInstance,
+  getConnectionState,
+  logoutInstance,
+  pickQr,
+  pickConnected,
+  pickStatus,
+  pickPhone,
+  isInstanceAlreadyExistsError,
+} = require("./lib/evolution")
 const { groups, scheduledMessages, sentMessages, getAnalyticsSnapshot } = require("./data/mock")
+const adminRoutes = require("./routes/admin")
 
 const app = express()
 const httpServer = createServer(app)
@@ -29,11 +40,7 @@ app.use(
 )
 app.use(express.json({ limit: "8mb" }))
 
-let whatsappState = {
-  connected: false,
-  qr: null,
-  lastSync: null,
-}
+app.use("/api/admin", adminRoutes)
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "vesto-backend", ts: new Date().toISOString() })
@@ -52,12 +59,30 @@ app.post("/api/auth/register", async (req, res) => {
   const exists = await prisma.user.findUnique({ where: { email } })
   if (exists) return res.status(409).json({ error: "EMAIL_IN_USE", message: "E-mail já cadastrado." })
 
+  const freePlan = await prisma.plan.findUnique({ where: { slug: "free" } })
+  if (!freePlan) {
+    return res.status(503).json({
+      error: "NO_DEFAULT_PLAN",
+      message: "Execute o seed da base de dados (npm run prisma:seed no backend).",
+    })
+  }
+
   const passwordHash = await bcrypt.hash(password, 10)
-  const user = await prisma.user.create({
-    data: { name, email, passwordHash },
+  const user = await prisma.$transaction(async (tx) => {
+    const u = await tx.user.create({
+      data: { name, email, passwordHash },
+    })
+    await tx.subscription.create({
+      data: { userId: u.id, planId: freePlan.id, status: "ACTIVE" },
+    })
+    return u
   })
+
   const token = signToken(user)
-  return res.status(201).json({ user: { id: user.id, name: user.name, email: user.email }, token })
+  return res.status(201).json({
+    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    token,
+  })
 })
 
 app.post("/api/auth/login", async (req, res) => {
@@ -76,13 +101,36 @@ app.post("/api/auth/login", async (req, res) => {
   if (!ok) return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "E-mail ou senha inválidos." })
 
   const token = signToken(user)
-  return res.json({ user: { id: user.id, name: user.name, email: user.email }, token })
+  return res.json({
+    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    token,
+  })
 })
 
 app.get("/api/auth/me", authMiddleware, async (req, res) => {
-  const user = await prisma.user.findUnique({ where: { id: req.user.sub } })
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.sub },
+    include: {
+      subscriptions: {
+        where: { status: "ACTIVE" },
+        take: 1,
+        orderBy: { startedAt: "desc" },
+        include: { plan: { select: { id: true, name: true, slug: true, maxGroups: true } } },
+      },
+    },
+  })
   if (!user) return res.status(404).json({ error: "NOT_FOUND", message: "Usuário não encontrado." })
-  return res.json({ user: { id: user.id, name: user.name, email: user.email } })
+
+  const sub = user.subscriptions[0]
+  return res.json({
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      plan: sub ? { id: sub.plan.id, name: sub.plan.name, slug: sub.plan.slug, maxGroups: sub.plan.maxGroups } : null,
+    },
+  })
 })
 
 app.get("/api/groups", authMiddleware, (_req, res) => {
@@ -106,6 +154,7 @@ app.post("/api/messages/send", authMiddleware, (req, res) => {
   const schema = z.object({
     groupIds: z.array(z.string()).min(1),
     body: z.string().min(1),
+    recipients: z.array(z.string()).optional(),
     attachments: z.array(z.any()).optional(),
   })
   const parsed = schema.safeParse(req.body)
@@ -150,40 +199,139 @@ app.post("/api/messages/schedule", authMiddleware, (req, res) => {
   res.status(201).json({ item: row })
 })
 
-app.get("/api/whatsapp/status", authMiddleware, (_req, res) => {
-  res.json({
-    connected: whatsappState.connected,
-    qr: whatsappState.qr,
-    lastSync: whatsappState.lastSync,
+function toInstanceName(userId) {
+  const prefix = process.env.EVOLUTION_INSTANCE_PREFIX || "vesto"
+  return `${prefix}-${userId}`.replace(/[^a-zA-Z0-9-_]/g, "")
+}
+
+function formatConnectionPayload(conn) {
+  return {
+    connected: conn?.connected || false,
+    qr: conn?.qrCode || null,
+    lastSync: conn?.lastSync?.toISOString() || null,
+    status: conn?.status || "DISCONNECTED",
+    phone: conn?.phone || null,
+    instanceName: conn?.instanceName || null,
+  }
+}
+
+async function upsertConnectionFromEvolution({ userId, instanceName, stateData, qrData }) {
+  const connected = pickConnected(stateData)
+  const qr = pickQr(qrData)
+  const status = pickStatus(stateData).toUpperCase()
+  const phone = pickPhone(stateData)
+
+  const conn = await prisma.whatsAppConnection.upsert({
+    where: { userId },
+    create: {
+      userId,
+      instanceName,
+      connected,
+      status,
+      qrCode: connected ? null : qr,
+      phone: phone ? String(phone) : null,
+      lastSync: new Date(),
+    },
+    update: {
+      instanceName,
+      connected,
+      status,
+      qrCode: connected ? null : qr,
+      phone: phone ? String(phone) : null,
+      lastSync: new Date(),
+    },
   })
-})
 
-app.post("/api/whatsapp/connect", authMiddleware, async (_req, res) => {
-  const payload = `vesto:${Date.now()}`
-  const qr = await QRCode.toDataURL(payload)
-  whatsappState = {
-    connected: false,
-    qr,
-    lastSync: whatsappState.lastSync,
+  return conn
+}
+
+function handleEvolutionError(res, err) {
+  if (err?.code === "EVOLUTION_CONFIG_MISSING") {
+    return res.status(503).json({
+      error: "EVOLUTION_NOT_CONFIGURED",
+      message: "Defina EVOLUTION_BASE_URL e EVOLUTION_API_KEY no backend.",
+    })
   }
-  io.emit("whatsapp:qr", { qr })
-  res.status(201).json({ connected: false, qr })
-})
+  console.error("Evolution error:", err)
+  return res.status(502).json({
+    error: "EVOLUTION_ERROR",
+    message: "Falha ao comunicar com a Evolution API.",
+    details: err?.details || null,
+  })
+}
 
-app.post("/api/whatsapp/confirm-scan", authMiddleware, (_req, res) => {
-  whatsappState = {
-    connected: true,
-    qr: null,
-    lastSync: new Date().toISOString(),
+app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.sub
+    const existing = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+    if (!existing) return res.json(formatConnectionPayload(null))
+
+    const stateData = await getConnectionState(existing.instanceName)
+    const conn = await upsertConnectionFromEvolution({
+      userId,
+      instanceName: existing.instanceName,
+      stateData,
+      qrData: null,
+    })
+
+    io.emit("whatsapp:status", formatConnectionPayload(conn))
+    return res.json(formatConnectionPayload(conn))
+  } catch (err) {
+    return handleEvolutionError(res, err)
   }
-  io.emit("whatsapp:status", { connected: true, lastSync: whatsappState.lastSync })
-  res.json({ connected: true, lastSync: whatsappState.lastSync })
 })
 
-app.post("/api/whatsapp/disconnect", authMiddleware, (_req, res) => {
-  whatsappState = { connected: false, qr: null, lastSync: new Date().toISOString() }
-  io.emit("whatsapp:status", { connected: false, lastSync: whatsappState.lastSync })
-  res.json({ connected: false, lastSync: whatsappState.lastSync })
+app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.sub
+    const instanceName = toInstanceName(userId)
+    const webhook = process.env.EVOLUTION_WEBHOOK_URL || undefined
+
+    try {
+      await createInstance(instanceName, webhook)
+    } catch (err) {
+      if (!isInstanceAlreadyExistsError(err)) throw err
+    }
+    const qrData = await connectInstance(instanceName)
+    const stateData = await getConnectionState(instanceName)
+
+    const conn = await upsertConnectionFromEvolution({
+      userId,
+      instanceName,
+      stateData,
+      qrData,
+    })
+
+    io.emit("whatsapp:qr", { qr: conn.qrCode })
+    io.emit("whatsapp:status", formatConnectionPayload(conn))
+    return res.status(201).json(formatConnectionPayload(conn))
+  } catch (err) {
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.sub
+    const existing = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+    if (!existing) return res.json(formatConnectionPayload(null))
+
+    await logoutInstance(existing.instanceName)
+    const conn = await prisma.whatsAppConnection.update({
+      where: { userId },
+      data: {
+        connected: false,
+        status: "DISCONNECTED",
+        qrCode: null,
+        lastSync: new Date(),
+      },
+    })
+
+    io.emit("whatsapp:status", formatConnectionPayload(conn))
+    return res.json(formatConnectionPayload(conn))
+  } catch (err) {
+    return handleEvolutionError(res, err)
+  }
 })
 
 app.use((err, _req, res, _next) => {

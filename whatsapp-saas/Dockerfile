@@ -10,6 +10,7 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 RUN npm install -g serve@14.2.4
 COPY --from=builder /app/dist ./dist
+COPY scripts/railway-serve.mjs ./scripts/railway-serve.mjs
 ENV NODE_ENV=production
 EXPOSE 8080
-CMD ["sh", "-c", "serve -s dist -l tcp://0.0.0.0:${PORT:-8080}"]
+CMD ["node", "scripts/railway-serve.mjs"]

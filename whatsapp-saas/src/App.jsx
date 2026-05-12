@@ -15,10 +15,18 @@ import { Members } from './pages/dashboard/Members.jsx'
 import { Analytics } from './pages/dashboard/Analytics.jsx'
 import { Integrations } from './pages/dashboard/Integrations.jsx'
 import { Settings } from './pages/dashboard/Settings.jsx'
+import { Admin } from './pages/dashboard/Admin.jsx'
 
 function ProtectedRoute({ children }) {
   const { user } = useAuth()
   if (!user) return <Navigate to="/login" replace />
+  return children
+}
+
+function AdminRoute({ children }) {
+  const { user } = useAuth()
+  if (!user) return <Navigate to="/login" replace />
+  if (user.role !== 'ADMIN') return <Navigate to="/dashboard" replace />
   return children
 }
 
@@ -54,6 +62,14 @@ export default function App() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="integrations" element={<Integrations />} />
         <Route path="settings" element={<Settings />} />
+        <Route
+          path="admin"
+          element={
+            <AdminRoute>
+              <Admin />
+            </AdminRoute>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

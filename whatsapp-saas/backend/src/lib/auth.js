@@ -6,6 +6,7 @@ function signToken(user) {
       sub: user.id,
       email: user.email,
       name: user.name,
+      role: user.role,
     },
     process.env.JWT_SECRET,
     { expiresIn: "7d" },

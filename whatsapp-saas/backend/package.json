@@ -8,7 +8,11 @@
     "start": "node src/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-    "prisma:push": "prisma db push --accept-data-loss"
+    "prisma:push": "prisma db push --accept-data-loss",
+    "prisma:seed": "node prisma/seed.js"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
   },
   "keywords": [],
   "author": "",
@@ -21,7 +25,6 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
-    "qrcode": "^1.5.4",
     "socket.io": "^4.8.3",
     "uuid": "^14.0.0",
     "zod": "^4.3.6"

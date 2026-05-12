@@ -13,38 +13,15 @@ import {
   mockWhatsAppStatus,
   mockGroupSettings,
 } from '../utils/mockData.js'
+import { resolveApiBaseURL, resolveUseRealApi } from '../lib/runtimeEnv.js'
 
 const delay = (ms = 400) => new Promise((r) => setTimeout(r, ms))
-const useRealApi = import.meta.env.VITE_USE_REAL_API === 'true'
 
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:4000/api',
+  baseURL: resolveApiBaseURL(),
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
-
-// #region agent log
-if (import.meta.env.DEV) {
-  const _d = {
-    sessionId: '855908',
-    hypothesisId: 'H1',
-    location: 'api.js:init',
-    message: 'Vite env + apiClient',
-    data: {
-      VITE_USE_REAL_API_raw: import.meta.env.VITE_USE_REAL_API,
-      useRealApi,
-      VITE_API_URL: import.meta.env.VITE_API_URL ?? '(undefined)',
-      resolvedBaseURL: apiClient.defaults.baseURL,
-    },
-    timestamp: Date.now(),
-  }
-  fetch('http://127.0.0.1:7849/ingest/14afd426-0281-49ff-96ac-f3b8cb6971c7', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '855908' },
-    body: JSON.stringify(_d),
-  }).catch(() => {})
-}
-// #endregion
 
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('vg_auth_token')
@@ -62,57 +39,12 @@ let sessionUser = null
 let whatsappConnected = mockWhatsAppStatus.connected
 
 export async function login(email, password) {
-  if (useRealApi) {
-    // #region agent log
-    if (import.meta.env.DEV) {
-      const _d = {
-        sessionId: '855908',
-        hypothesisId: 'H2',
-        location: 'api.js:login',
-        message: 'real login attempt',
-        data: {
-          baseURL: apiClient.defaults.baseURL,
-          fullUrlApprox: `${apiClient.defaults.baseURL || ''}/auth/login`,
-        },
-        timestamp: Date.now(),
-      }
-      fetch('http://127.0.0.1:7849/ingest/14afd426-0281-49ff-96ac-f3b8cb6971c7', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '855908' },
-        body: JSON.stringify(_d),
-      }).catch(() => {})
-    }
-    // #endregion
-    try {
-      const { data } = await apiClient.post('/auth/login', { email, password })
-      sessionUser = data.user
-      localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
-      localStorage.setItem('vg_auth_token', data.token)
-      return { data }
-    } catch (err) {
-      // #region agent log
-      if (import.meta.env.DEV) {
-        const _d = {
-          sessionId: '855908',
-          hypothesisId: 'H3',
-          location: 'api.js:login.catch',
-          message: 'login request failed',
-          data: {
-            status: err.response?.status,
-            code: err.code,
-            msg: String(err.message || err).slice(0, 200),
-          },
-          timestamp: Date.now(),
-        }
-        fetch('http://127.0.0.1:7849/ingest/14afd426-0281-49ff-96ac-f3b8cb6971c7', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '855908' },
-          body: JSON.stringify(_d),
-        }).catch(() => {})
-      }
-      // #endregion
-      throw err
-    }
+  if (resolveUseRealApi()) {
+    const { data } = await apiClient.post('/auth/login', { email, password })
+    sessionUser = data.user
+    localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+    localStorage.setItem('vg_auth_token', data.token)
+    return { data }
   }
   await delay()
   if (!email || !password) throw new Error('E-mail e senha são obrigatórios')
@@ -122,7 +54,7 @@ export async function login(email, password) {
 }
 
 export async function register(name, email, password) {
-  if (useRealApi) {
+  if (resolveUseRealApi()) {
     const { data } = await apiClient.post('/auth/register', { name, email, password })
     sessionUser = data.user
     localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
@@ -134,6 +66,47 @@ export async function register(name, email, password) {
   sessionUser = { ...mockUser, name, email }
   localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
   return mockResponse({ user: sessionUser, token: 'mock-jwt-token' })
+}
+
+/** Atualiza sessão a partir do servidor (role, plano). Usar após login ou ao montar a app. */
+export async function fetchMe() {
+  if (!resolveUseRealApi()) {
+    const u = loadSessionFromStorage()
+    return { user: u }
+  }
+  const { data } = await apiClient.get('/auth/me')
+  sessionUser = data.user
+  localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+  return data
+}
+
+export async function getAdminUsers(params = {}) {
+  if (!resolveUseRealApi()) {
+    await delay()
+    return {
+      data: {
+        users: [
+          {
+            id: 'u-mock',
+            name: mockUser.name,
+            email: mockUser.email,
+            role: 'USER',
+            createdAt: new Date().toISOString(),
+            plan: { name: 'Grátis', slug: 'free' },
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 20,
+      },
+    }
+  }
+  return apiClient.get('/admin/users', { params })
+}
+
+export async function patchAdminUser(userId, body) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.patch(`/admin/users/${userId}`, body)
 }
 
 export function loadSessionFromStorage() {
@@ -153,7 +126,7 @@ export function logout() {
 }
 
 export async function getGroups() {
-  if (useRealApi) return apiClient.get('/groups')
+  if (resolveUseRealApi()) return apiClient.get('/groups')
   return mockResponse({ groups: mockGroups })
 }
 
@@ -174,13 +147,13 @@ export async function getGroupDetails(id) {
 }
 
 export async function sendMessage({ groupIds, body }) {
-  if (useRealApi) return apiClient.post('/messages/send', { groupIds, body })
+  if (resolveUseRealApi()) return apiClient.post('/messages/send', { groupIds, body })
   await delay()
   return mockResponse({ ok: true, sent: groupIds?.length || 0, body })
 }
 
 export async function scheduleMessage({ groupIds, body, scheduledAt, recurrence, timezone, retryPolicy }) {
-  if (useRealApi) {
+  if (resolveUseRealApi()) {
     return apiClient.post('/messages/schedule', { groupIds, body, scheduledAt, recurrence, timezone, retryPolicy })
   }
   await delay()
@@ -194,12 +167,12 @@ export async function scheduleMessage({ groupIds, body, scheduledAt, recurrence,
 }
 
 export async function getScheduledMessages() {
-  if (useRealApi) return apiClient.get('/messages/scheduled')
+  if (resolveUseRealApi()) return apiClient.get('/messages/scheduled')
   return mockResponse({ items: mockScheduledMessages })
 }
 
 export async function getMessageHistory() {
-  if (useRealApi) return apiClient.get('/messages/history')
+  if (resolveUseRealApi()) return apiClient.get('/messages/history')
   return mockResponse({ items: mockMessageHistory })
 }
 
@@ -235,7 +208,7 @@ export async function getMemberDetails(id) {
 }
 
 export async function getAnalytics(period = '7d') {
-  if (useRealApi) return apiClient.get('/analytics', { params: { period } })
+  if (resolveUseRealApi()) return apiClient.get('/analytics', { params: { period } })
   await delay()
   return mockResponse({ ...mockAnalytics, period })
 }
@@ -249,20 +222,20 @@ export async function getIntegrations() {
 }
 
 export async function connectWhatsApp() {
-  if (useRealApi) return apiClient.post('/whatsapp/connect')
+  if (resolveUseRealApi()) return apiClient.post('/whatsapp/connect')
   await delay(600)
   whatsappConnected = true
   return mockResponse({ connected: true, qr: null })
 }
 
 export async function disconnectWhatsApp() {
-  if (useRealApi) return apiClient.post('/whatsapp/disconnect')
+  if (resolveUseRealApi()) return apiClient.post('/whatsapp/disconnect')
   await delay(400)
   whatsappConnected = false
   return mockResponse({ connected: false })
 }
 
 export async function getWhatsAppStatus() {
-  if (useRealApi) return apiClient.get('/whatsapp/status')
+  if (resolveUseRealApi()) return apiClient.get('/whatsapp/status')
   return mockResponse({ connected: whatsappConnected, lastSync: mockWhatsAppStatus.lastSync })
 }

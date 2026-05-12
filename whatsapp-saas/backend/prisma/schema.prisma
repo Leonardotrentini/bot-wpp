@@ -7,13 +7,59 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  TRIAL
+}
+
 model User {
-  id           String   @id @default(cuid())
-  name         String
-  email        String   @unique
-  passwordHash String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String              @id @default(cuid())
+  name               String
+  email              String              @unique
+  passwordHash       String
+  role               UserRole            @default(USER)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  subscriptions      Subscription[]
+  whatsappConnection WhatsAppConnection?
+}
+
+model Plan {
+  id            String         @id @default(cuid())
+  name          String
+  slug          String         @unique
+  description   String?
+  priceMonthly  Int?
+  maxGroups     Int            @default(5)
+  active        Boolean        @default(true)
+  sortOrder     Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id               String             @id @default(cuid())
+  userId           String
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId           String
+  plan             Plan               @relation(fields: [planId], references: [id], onDelete: Restrict)
+  status           SubscriptionStatus @default(ACTIVE)
+  startedAt        DateTime           @default(now())
+  currentPeriodEnd DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([userId])
+  @@index([planId])
 }
 
 model TrackedLinkEvent {
@@ -25,4 +71,20 @@ model TrackedLinkEvent {
   clicks     Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+model WhatsAppConnection {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instanceName String    @unique
+  status       String    @default("DISCONNECTED")
+  connected    Boolean   @default(false)
+  qrCode       String?
+  phone        String?
+  lastSync     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([instanceName])
 }
