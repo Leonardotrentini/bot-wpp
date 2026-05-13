@@ -104,17 +104,22 @@ function pickQrSync(data) {
  */
 async function resolveQrForStorage(data) {
   if (!data) return null
-  const direct = pickQrSync(data)
-  if (direct) return direct
   const code = data.code
   if (typeof code === "string" && code.length > 10) {
     try {
-      return await QRCode.toDataURL(code, { margin: 2, width: 280, errorCorrectionLevel: "M" })
+      return await QRCode.toDataURL(code, {
+        margin: 4,
+        width: 360,
+        errorCorrectionLevel: "M",
+        color: { dark: "#000000", light: "#ffffff" },
+      })
     } catch (e) {
       console.error("[evolution] Falha ao gerar QR a partir de code:", e?.message || e)
       return null
     }
   }
+  const direct = pickQrSync(data)
+  if (direct) return direct
   return null
 }
 

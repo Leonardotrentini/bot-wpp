@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, QrCode, Unplug, RefreshCw } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -25,6 +25,18 @@ export function Connect() {
   useEffect(() => {
     refresh()
   }, [])
+
+  const connected = status?.connected
+
+  useEffect(() => {
+    if (connected || !status?.qr) return undefined
+    const timer = window.setInterval(() => {
+      getWhatsAppStatus()
+        .then(({ data }) => setStatus(data))
+        .catch(() => {})
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [connected, status?.qr])
 
   async function onDisconnect() {
     setActionLoading(true)
@@ -57,7 +69,28 @@ export function Connect() {
     }
   }
 
-  const connected = status?.connected
+  const step = useMemo(() => {
+    if (loading) {
+      return { progress: 15, label: 'Verificando conexão', description: 'Consultando o backend e a Evolution.' }
+    }
+    if (connected) {
+      const sync = status?.sync
+      if (sync?.status === 'SYNCING_GROUPS') {
+        return { progress: sync.progress || 75, label: 'Sincronizando grupos', description: sync.message || 'Buscando metadados leves dos grupos.' }
+      }
+      if (sync?.status === 'RATE_LIMITED') {
+        return { progress: sync.progress || 80, label: 'Conectado, em cooldown', description: sync.message || 'WhatsApp limitou consultas temporariamente.' }
+      }
+      return { progress: 100, label: 'WhatsApp conectado', description: 'Sessão ativa. O QR não é mais necessário.' }
+    }
+    if (status?.qr) {
+      return { progress: 45, label: 'QR pronto para escanear', description: 'Abra Aparelhos conectados no WhatsApp e escaneie o código.' }
+    }
+    if (actionLoading) {
+      return { progress: 30, label: 'Gerando QR', description: 'Criando ou recuperando a instância na Evolution.' }
+    }
+    return { progress: 0, label: 'Aguardando início', description: 'Clique em Reconectar para gerar o QR no Vesto.' }
+  }, [actionLoading, connected, loading, status])
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -85,15 +118,28 @@ export function Connect() {
       </Card>
 
       <Card>
+        <div className="mb-6 rounded-2xl border border-brand-700 bg-brand-950/50 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-stone-50">{step.label}</p>
+              <p className="mt-1 text-xs text-stone-400">{step.description}</p>
+            </div>
+            <span className="text-sm font-medium text-accent-300">{step.progress}%</span>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-brand-800">
+            <div className="h-full rounded-full bg-accent-400 transition-all" style={{ width: `${step.progress}%` }} />
+          </div>
+        </div>
+
         <h3 className="text-md font-semibold text-stone-50 mb-4 flex items-center gap-2">
           <QrCode className="h-5 w-5 text-accent-400" /> QR Code
         </h3>
         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-          <div className="flex h-48 w-48 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-brand-600 bg-brand-900/80">
+          <div className="flex h-72 w-72 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-brand-600 bg-white">
             {connected ? (
-              <span className="text-xs text-stone-500 text-center px-2">Sessão ativa — QR não necessário</span>
+              <span className="text-xs text-stone-500 text-center px-6">Sessão ativa — QR não necessário</span>
             ) : status?.qr ? (
-              <img src={status.qr} alt="QR Code do WhatsApp" className="h-44 w-44 rounded-md bg-white p-2" />
+              <img src={status.qr} alt="QR Code do WhatsApp" className="h-64 w-64 rounded-md bg-white p-3" />
             ) : (
               <div className="text-center p-2">
                 <QrCode className="h-16 w-16 mx-auto text-stone-600 mb-2" />

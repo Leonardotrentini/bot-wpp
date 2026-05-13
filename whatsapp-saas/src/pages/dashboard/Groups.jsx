@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { RefreshCw, Settings2 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
@@ -15,20 +15,34 @@ export function Groups() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('todos')
   const [q, setQ] = useState('')
+  const [sync, setSync] = useState(null)
 
-  async function load() {
+  const load = useCallback(async ({ syncNow = false } = {}) => {
     setLoading(true)
     try {
-      const { data } = await getGroups()
-      setGroups(data.groups)
+      const { data } = await getGroups({ sync: syncNow })
+      setGroups(data.groups || [])
+      setSync(data.sync || null)
+      if (syncNow) {
+        const msg = data.sync?.message || 'Lista atualizada.'
+        if (data.sync?.status === 'RATE_LIMITED') toast.info(msg)
+        else toast.success(msg)
+      }
+    } catch (e) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        'Não foi possível carregar os grupos.'
+      toast.error(typeof msg === 'string' ? msg : 'Não foi possível carregar os grupos.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [toast])
 
   useEffect(() => {
     load()
-  }, [])
+  }, [load])
 
   const filtered = useMemo(() => {
     return groups.filter((g) => {
@@ -50,8 +64,7 @@ export function Groups() {
           variant="secondary"
           className="gap-2 shrink-0"
           onClick={() => {
-            load()
-            toast.info('Lista atualizada.')
+            load({ syncNow: true })
           }}
           disabled={loading}
         >
@@ -59,6 +72,32 @@ export function Groups() {
           Atualizar lista
         </Button>
       </div>
+
+      {sync && (
+        <Card className="border-brand-700/70 bg-brand-900/60">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium text-stone-100">
+                Sincronização de grupos: {sync.status === 'READY' ? 'pronta' : sync.status === 'RATE_LIMITED' ? 'em espera' : sync.status?.toLowerCase?.() || 'pendente'}
+              </p>
+              <p className="mt-1 text-xs text-stone-400">
+                {sync.message || 'O Vesto usa cache local para evitar excesso de chamadas à Evolution.'}
+              </p>
+              {sync.retryAfter && (
+                <p className="mt-1 text-xs text-amber-300">
+                  Próxima tentativa recomendada: {new Date(sync.retryAfter).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
+            </div>
+            <div className="min-w-40">
+              <div className="h-2 overflow-hidden rounded-full bg-brand-800">
+                <div className="h-full rounded-full bg-accent-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, sync.progress || 0))}%` }} />
+              </div>
+              <p className="mt-1 text-right text-xs text-stone-500">{sync.groupsCount || groups.length} grupos em cache</p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
         <div className="flex gap-2">
@@ -90,6 +129,15 @@ export function Groups() {
             <Skeleton key={i} className="h-40" />
           ))}
         </div>
+      ) : filtered.length === 0 ? (
+        <Card>
+          <div className="py-10 text-center">
+            <p className="font-medium text-stone-200">Nenhum grupo encontrado ainda.</p>
+            <p className="mt-2 text-sm text-stone-400">
+              Se o WhatsApp acabou de conectar, aguarde a sincronização estabilizar e clique em Atualizar lista uma vez.
+            </p>
+          </div>
+        </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {filtered.map((g) => (

@@ -29,6 +29,7 @@ model User {
   updatedAt          DateTime            @updatedAt
   subscriptions      Subscription[]
   whatsappConnection WhatsAppConnection?
+  whatsappGroups      WhatsAppGroup[]
 }
 
 model Plan {
@@ -74,17 +75,70 @@ model TrackedLinkEvent {
 }
 
 model WhatsAppConnection {
-  id           String    @id @default(cuid())
-  userId       String    @unique
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  instanceName String    @unique
-  status       String    @default("DISCONNECTED")
-  connected    Boolean   @default(false)
-  qrCode       String?
-  phone        String?
-  lastSync     DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                  String    @id @default(cuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instanceName        String    @unique
+  status              String    @default("DISCONNECTED")
+  connected           Boolean   @default(false)
+  qrCode              String?
+  phone               String?
+  lastSync            DateTime?
+  groupSyncStatus     String    @default("IDLE")
+  groupSyncProgress   Int       @default(0)
+  groupSyncMessage    String?
+  groupSyncError      String?
+  groupsLastSync      DateTime?
+  groupSyncRetryAfter DateTime?
+  groupSyncStartedAt  DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   @@index([instanceName])
+}
+
+model WhatsAppGroup {
+  id                   String                     @id @default(cuid())
+  userId               String
+  user                 User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instanceName         String
+  groupJid             String
+  name                 String
+  memberCount          Int                        @default(0)
+  status               String                     @default("ativo")
+  lastMessage          String?
+  lastMessageAt        DateTime?
+  image                String?
+  description          String?
+  announce             Boolean                    @default(false)
+  restrict             Boolean                    @default(false)
+  owner                String?
+  raw                  Json?
+  lastSyncedAt         DateTime                   @default(now())
+  participantsSyncedAt DateTime?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  participants         WhatsAppGroupParticipant[]
+
+  @@unique([userId, groupJid])
+  @@index([userId])
+  @@index([instanceName])
+}
+
+model WhatsAppGroupParticipant {
+  id             String        @id @default(cuid())
+  groupId        String
+  group          WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  participantJid String
+  name           String?
+  phone          String?
+  role           String        @default("membro")
+  status         String        @default("ativo")
+  raw            Json?
+  lastSyncedAt   DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([groupId, participantJid])
+  @@index([participantJid])
 }

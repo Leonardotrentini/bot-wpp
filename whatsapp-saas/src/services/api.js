@@ -125,8 +125,8 @@ export function logout() {
   localStorage.removeItem('vg_auth_token')
 }
 
-export async function getGroups() {
-  if (resolveUseRealApi()) return apiClient.get('/groups')
+export async function getGroups({ sync = false } = {}) {
+  if (resolveUseRealApi()) return apiClient.get('/groups', { params: sync ? { sync: 'true' } : undefined })
   return mockResponse({ groups: mockGroups })
 }
 
