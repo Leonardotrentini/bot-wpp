@@ -125,9 +125,14 @@ export function logout() {
   localStorage.removeItem('vg_auth_token')
 }
 
-export async function getGroups({ sync = false } = {}) {
-  if (resolveUseRealApi()) return apiClient.get('/groups', { params: sync ? { sync: 'true' } : undefined })
+export async function getGroups() {
+  if (resolveUseRealApi()) return apiClient.get('/groups')
   return mockResponse({ groups: mockGroups })
+}
+
+export async function syncGroups() {
+  if (resolveUseRealApi()) return apiClient.post('/groups/sync')
+  return mockResponse({ groups: mockGroups, sync: { status: 'READY', progress: 100, groupsCount: mockGroups.length } })
 }
 
 export async function getGroupDetails(id) {

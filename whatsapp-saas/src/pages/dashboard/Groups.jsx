@@ -6,7 +6,7 @@ import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { getGroups } from '../../services/api.js'
+import { getGroups, syncGroups } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 export function Groups() {
@@ -16,18 +16,14 @@ export function Groups() {
   const [filter, setFilter] = useState('todos')
   const [q, setQ] = useState('')
   const [sync, setSync] = useState(null)
+  const [nowMs, setNowMs] = useState(0)
 
-  const load = useCallback(async ({ syncNow = false } = {}) => {
-    setLoading(true)
+  const load = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true)
     try {
-      const { data } = await getGroups({ sync: syncNow })
+      const { data } = await getGroups()
       setGroups(data.groups || [])
       setSync(data.sync || null)
-      if (syncNow) {
-        const msg = data.sync?.message || 'Lista atualizada.'
-        if (data.sync?.status === 'RATE_LIMITED') toast.info(msg)
-        else toast.success(msg)
-      }
     } catch (e) {
       const msg =
         e?.response?.data?.message ||
@@ -36,6 +32,25 @@ export function Groups() {
         'Não foi possível carregar os grupos.'
       toast.error(typeof msg === 'string' ? msg : 'Não foi possível carregar os grupos.')
     } finally {
+      if (!silent) setLoading(false)
+    }
+  }, [toast])
+
+  const startSync = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data } = await syncGroups()
+      setGroups(data.groups || [])
+      setSync(data.sync || null)
+      toast.info(data.sync?.message || 'Sincronização de grupos iniciada.')
+    } catch (e) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        'Não foi possível iniciar a sincronização.'
+      toast.error(typeof msg === 'string' ? msg : 'Não foi possível iniciar a sincronização.')
+    } finally {
       setLoading(false)
     }
   }, [toast])
@@ -43,6 +58,25 @@ export function Groups() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    setNowMs(Date.now())
+    if (!sync?.retryAfter) return undefined
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30000)
+    return () => window.clearInterval(timer)
+  }, [sync?.retryAfter])
+
+  const syncActive = ['QUEUED', 'FETCHING_GROUPS', 'SAVING_GROUPS', 'SYNCING_GROUPS'].includes(sync?.status)
+  const retryAtMs = sync?.retryAfter ? new Date(sync.retryAfter).getTime() : 0
+  const inCooldown = sync?.status === 'RATE_LIMITED' && retryAtMs > nowMs
+
+  useEffect(() => {
+    if (!syncActive) return undefined
+    const timer = window.setInterval(() => {
+      load({ silent: true })
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [load, syncActive])
 
   const filtered = useMemo(() => {
     return groups.filter((g) => {
@@ -63,13 +97,11 @@ export function Groups() {
         <Button
           variant="secondary"
           className="gap-2 shrink-0"
-          onClick={() => {
-            load({ syncNow: true })
-          }}
-          disabled={loading}
+          onClick={startSync}
+          disabled={loading || syncActive || inCooldown}
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Atualizar lista
+          {syncActive ? 'Sincronizando...' : inCooldown ? 'Aguardando cooldown' : 'Sincronizar grupos'}
         </Button>
       </div>
 
@@ -86,6 +118,11 @@ export function Groups() {
               {sync.retryAfter && (
                 <p className="mt-1 text-xs text-amber-300">
                   Próxima tentativa recomendada: {new Date(sync.retryAfter).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
+              {syncActive && (
+                <p className="mt-1 text-xs text-emerald-300">
+                  Os grupos aparecerão abaixo conforme forem salvos no cache.
                 </p>
               )}
             </div>
@@ -134,7 +171,7 @@ export function Groups() {
           <div className="py-10 text-center">
             <p className="font-medium text-stone-200">Nenhum grupo encontrado ainda.</p>
             <p className="mt-2 text-sm text-stone-400">
-              Se o WhatsApp acabou de conectar, aguarde a sincronização estabilizar e clique em Atualizar lista uma vez.
+              Se o WhatsApp acabou de conectar, aguarde a sincronização estabilizar e clique em Sincronizar grupos uma vez.
             </p>
           </div>
         </Card>
