@@ -167,6 +167,8 @@ function normalizeEvolutionGroups(payload) {
   if (Array.isArray(payload?.groups)) return payload.groups
   if (Array.isArray(payload?.data)) return payload.data
   if (Array.isArray(payload?.response)) return payload.response
+  if (payload?.data && typeof payload.data === "object") return normalizeEvolutionGroups(payload.data)
+  if (payload?.id || payload?.jid || payload?.groupJid || payload?.remoteJid || payload?.subject) return [payload]
   return []
 }
 
@@ -301,7 +303,35 @@ async function updateConnectionSync(userId, data) {
   })
 }
 
-async function syncGroupsFromEvolution(conn, { force = false } = {}) {
+function getGroupCreateData(userId, group, status = "pendente") {
+  return {
+    userId,
+    ...group,
+    status,
+  }
+}
+
+function getGroupUpdateData(group, extra = {}) {
+  const { status: _status, ...data } = group
+  return { ...data, ...extra }
+}
+
+async function upsertDiscoveredGroup(userId, group, status = "pendente") {
+  const now = new Date()
+  return prisma.whatsAppGroup.upsert({
+    where: { userId_groupJid: { userId, groupJid: group.groupJid } },
+    create: {
+      ...getGroupCreateData(userId, group, status),
+      lastSyncedAt: now,
+    },
+    update: {
+      ...getGroupUpdateData(group, status === "ativo" ? { status } : {}),
+      lastSyncedAt: now,
+    },
+  })
+}
+
+async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
   const now = new Date()
   const cachedCount = await prisma.whatsAppGroup.count({ where: { userId: conn.userId } })
 
@@ -315,19 +345,27 @@ async function syncGroupsFromEvolution(conn, { force = false } = {}) {
   }
 
   if (!force && conn.groupsLastSync && now.getTime() - conn.groupsLastSync.getTime() < GROUP_SYNC_MIN_INTERVAL_MS) {
+    const updatedConn = await updateConnectionSync(conn.userId, {
+      groupSyncStatus: cachedCount ? "GROUPS_FOUND" : "IDLE",
+      groupSyncProgress: cachedCount ? 100 : 0,
+      groupSyncMessage: cachedCount
+        ? `${cachedCount} grupos já foram encontrados recentemente. Clique em Sincronizar ${cachedCount} grupos.`
+        : "Nenhum grupo encontrado no cache recente.",
+      groupSyncError: null,
+    })
     return {
       skipped: true,
       reason: "fresh-cache",
-      conn,
+      conn: updatedConn,
       message: "Usando cache recente de grupos para evitar rate-limit.",
     }
   }
 
   let updatedConn = await updateConnectionSync(conn.userId, {
-    groupSyncStatus: "FETCHING_GROUPS",
-    groupSyncProgress: cachedCount ? 50 : 25,
+    groupSyncStatus: "DISCOVERING_GROUPS",
+    groupSyncProgress: cachedCount ? 40 : 15,
     groupSyncStartedAt: now,
-    groupSyncMessage: cachedCount ? "Atualizando a lista de grupos do WhatsApp..." : "Buscando a lista leve de grupos no WhatsApp...",
+    groupSyncMessage: "Procurando a lista leve de grupos no WhatsApp, sem participantes e sem mensagens antigas.",
     groupSyncError: null,
   })
 
@@ -338,34 +376,23 @@ async function syncGroupsFromEvolution(conn, { force = false } = {}) {
       .filter((g) => g.groupJid)
 
     updatedConn = await updateConnectionSync(conn.userId, {
-      groupSyncStatus: "SAVING_GROUPS",
-      groupSyncProgress: realGroups.length ? 55 : 100,
+      groupSyncStatus: "DISCOVERING_GROUPS",
+      groupSyncProgress: realGroups.length ? 65 : 100,
       groupSyncMessage: realGroups.length
-        ? `0 de ${realGroups.length} grupos salvos. Você já pode ver os grupos conforme eles aparecem.`
+        ? `${realGroups.length} grupos encontrados. Preparando para sincronizar em etapas.`
         : "Nenhum grupo foi retornado pelo WhatsApp.",
       groupSyncError: null,
     })
 
     for (const [index, group] of realGroups.entries()) {
-      await prisma.whatsAppGroup.upsert({
-        where: { userId_groupJid: { userId: conn.userId, groupJid: group.groupJid } },
-        create: {
-          userId: conn.userId,
-          ...group,
-          lastSyncedAt: now,
-        },
-        update: {
-          ...group,
-          lastSyncedAt: now,
-        },
-      })
+      await upsertDiscoveredGroup(conn.userId, group, "pendente")
 
       const done = index + 1
-      const progress = Math.min(98, Math.round(55 + (done / Math.max(1, realGroups.length)) * 43))
+      const progress = Math.min(98, Math.round(65 + (done / Math.max(1, realGroups.length)) * 33))
       updatedConn = await updateConnectionSync(conn.userId, {
-        groupSyncStatus: "SAVING_GROUPS",
+        groupSyncStatus: "DISCOVERING_GROUPS",
         groupSyncProgress: progress,
-        groupSyncMessage: `${done} de ${realGroups.length} grupos carregados.`,
+        groupSyncMessage: `${done} de ${realGroups.length} grupos identificados.`,
       })
 
       if (GROUP_SYNC_ITEM_DELAY_MS > 0 && done < realGroups.length) {
@@ -381,9 +408,11 @@ async function syncGroupsFromEvolution(conn, { force = false } = {}) {
     }
 
     updatedConn = await updateConnectionSync(conn.userId, {
-      groupSyncStatus: "READY",
+      groupSyncStatus: realGroups.length ? "GROUPS_FOUND" : "READY",
       groupSyncProgress: 100,
-      groupSyncMessage: `${realGroups.length} grupos sincronizados.`,
+      groupSyncMessage: realGroups.length
+        ? `${realGroups.length} grupos encontrados. Clique em Sincronizar ${realGroups.length} grupos para ativar o cache local.`
+        : "Nenhum grupo encontrado nessa conta do WhatsApp.",
       groupSyncError: null,
       groupSyncRetryAfter: null,
       groupsLastSync: now,
@@ -395,8 +424,8 @@ async function syncGroupsFromEvolution(conn, { force = false } = {}) {
       const retryAfter = new Date(Date.now() + GROUP_SYNC_RATE_LIMIT_BACKOFF_MS)
       updatedConn = await updateConnectionSync(conn.userId, {
         groupSyncStatus: "RATE_LIMITED",
-        groupSyncProgress: cachedCount ? 90 : 55,
-        groupSyncMessage: "WhatsApp limitou consultas de grupos. O Vesto vai usar cache e tentar depois.",
+        groupSyncProgress: cachedCount ? 90 : 45,
+        groupSyncMessage: "WhatsApp limitou a busca de grupos. O Vesto vai usar cache e tentar depois.",
         groupSyncError: err?.message || "rate-overlimit",
         groupSyncRetryAfter: retryAfter,
       })
@@ -405,21 +434,83 @@ async function syncGroupsFromEvolution(conn, { force = false } = {}) {
     updatedConn = await updateConnectionSync(conn.userId, {
       groupSyncStatus: "ERROR",
       groupSyncProgress: cachedCount ? 90 : 45,
-      groupSyncMessage: "Não foi possível sincronizar grupos agora.",
-      groupSyncError: err?.message || "Erro ao sincronizar grupos",
+      groupSyncMessage: "Não foi possível procurar grupos agora.",
+      groupSyncError: err?.message || "Erro ao procurar grupos",
     })
     throw err
   }
 }
 
-async function runGroupSyncInBackground(userId, { force = false } = {}) {
+async function syncCachedGroups(conn) {
+  const now = new Date()
+  const rows = await prisma.whatsAppGroup.findMany({
+    where: { userId: conn.userId, status: { not: "inativo" } },
+    orderBy: [{ status: "desc" }, { name: "asc" }],
+  })
+  const total = rows.length
+
+  if (!total) {
+    const updatedConn = await updateConnectionSync(conn.userId, {
+      groupSyncStatus: "IDLE",
+      groupSyncProgress: 0,
+      groupSyncMessage: "Primeiro clique em Procurar grupos para descobrir quantos grupos existem.",
+      groupSyncError: null,
+    })
+    return { skipped: true, reason: "empty-cache", conn: updatedConn, count: 0 }
+  }
+
+  let updatedConn = await updateConnectionSync(conn.userId, {
+    groupSyncStatus: "SYNCING_GROUPS",
+    groupSyncProgress: 1,
+    groupSyncStartedAt: now,
+    groupSyncMessage: `Sincronizando 0 de ${total} grupos do cache local, devagar para evitar rate-limit.`,
+    groupSyncError: null,
+  })
+
+  for (const [index, group] of rows.entries()) {
+    await prisma.whatsAppGroup.update({
+      where: { id: group.id },
+      data: {
+        status: "ativo",
+        lastSyncedAt: new Date(),
+      },
+    })
+
+    const done = index + 1
+    updatedConn = await updateConnectionSync(conn.userId, {
+      groupSyncStatus: "SYNCING_GROUPS",
+      groupSyncProgress: Math.min(99, Math.round((done / total) * 99)),
+      groupSyncMessage: `${done} de ${total} grupos sincronizados no cache local.`,
+    })
+
+    if (GROUP_SYNC_ITEM_DELAY_MS > 0 && done < total) {
+      await wait(GROUP_SYNC_ITEM_DELAY_MS)
+    }
+  }
+
+  updatedConn = await updateConnectionSync(conn.userId, {
+    groupSyncStatus: "READY",
+    groupSyncProgress: 100,
+    groupSyncMessage: `${total} grupos sincronizados. Participantes serão buscados só ao abrir detalhes.`,
+    groupSyncError: null,
+    groupSyncRetryAfter: null,
+  })
+
+  return { skipped: false, conn: updatedConn, count: total }
+}
+
+async function runGroupJobInBackground(userId, job) {
   if (activeGroupSyncs.has(userId)) return
   activeGroupSyncs.add(userId)
   try {
     const conn = await getUserWhatsAppConnection(userId)
-    await syncGroupsFromEvolution(conn, { force })
+    if (job === "discover") {
+      await discoverGroupsFromEvolution(conn)
+    } else {
+      await syncCachedGroups(conn)
+    }
   } catch (err) {
-    console.error("[groups-sync] background:", err?.message || err)
+    console.error(`[groups-${job}] background:`, err?.message || err)
   } finally {
     activeGroupSyncs.delete(userId)
   }
@@ -443,7 +534,7 @@ app.get("/api/groups", authMiddleware, async (req, res) => {
   }
 })
 
-app.post("/api/groups/sync", authMiddleware, async (req, res) => {
+app.post("/api/groups/discover", authMiddleware, async (req, res) => {
   try {
     const conn = await getUserWhatsAppConnection(req.user.sub)
     const cachedGroups = await readCachedGroups(req.user.sub)
@@ -452,7 +543,7 @@ app.post("/api/groups/sync", authMiddleware, async (req, res) => {
     if (!conn.connected) {
       return res.status(409).json({
         error: "WHATSAPP_NOT_CONNECTED",
-        message: "Conecte o WhatsApp antes de sincronizar grupos.",
+        message: "Conecte o WhatsApp antes de procurar grupos.",
         groups: cachedGroups,
         sync: getSyncPayload(conn, cachedGroups.length),
       })
@@ -471,19 +562,78 @@ app.post("/api/groups/sync", authMiddleware, async (req, res) => {
         sync: {
           ...getSyncPayload(conn, cachedGroups.length),
           status: conn.groupSyncStatus || "QUEUED",
-          message: conn.groupSyncMessage || "Sincronização de grupos já está em andamento.",
+          message: conn.groupSyncMessage || "Já existe uma operação de grupos em andamento.",
         },
       })
     }
 
     const queuedConn = await updateConnectionSync(req.user.sub, {
       groupSyncStatus: "QUEUED",
-      groupSyncProgress: cachedGroups.length ? 45 : 10,
-      groupSyncMessage: "Sincronização de grupos agendada. Carregaremos em etapas para evitar rate-limit.",
+      groupSyncProgress: cachedGroups.length ? 35 : 5,
+      groupSyncMessage: "Busca de grupos agendada. Vamos pedir só a lista leve para a Evolution.",
       groupSyncError: null,
     })
 
-    void runGroupSyncInBackground(req.user.sub, { force: true })
+    void runGroupJobInBackground(req.user.sub, "discover")
+
+    return res.status(202).json({
+      groups: cachedGroups,
+      sync: getSyncPayload(queuedConn, cachedGroups.length),
+    })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message, groups: [] })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.post("/api/groups/sync", authMiddleware, async (req, res) => {
+  try {
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    const cachedGroups = await readCachedGroups(req.user.sub)
+
+    if (!conn.connected) {
+      return res.status(409).json({
+        error: "WHATSAPP_NOT_CONNECTED",
+        message: "Conecte o WhatsApp antes de sincronizar grupos.",
+        groups: cachedGroups,
+        sync: getSyncPayload(conn, cachedGroups.length),
+      })
+    }
+
+    if (activeGroupSyncs.has(req.user.sub)) {
+      return res.status(202).json({
+        groups: cachedGroups,
+        sync: {
+          ...getSyncPayload(conn, cachedGroups.length),
+          status: conn.groupSyncStatus || "QUEUED",
+          message: conn.groupSyncMessage || "Já existe uma operação de grupos em andamento.",
+        },
+      })
+    }
+
+    if (!cachedGroups.length) {
+      const waitingConn = await updateConnectionSync(req.user.sub, {
+        groupSyncStatus: "IDLE",
+        groupSyncProgress: 0,
+        groupSyncMessage: "Primeiro clique em Procurar grupos para descobrir quantos grupos existem.",
+        groupSyncError: null,
+      })
+      return res.status(202).json({
+        groups: cachedGroups,
+        sync: getSyncPayload(waitingConn, cachedGroups.length),
+      })
+    }
+
+    const queuedConn = await updateConnectionSync(req.user.sub, {
+      groupSyncStatus: "QUEUED",
+      groupSyncProgress: 1,
+      groupSyncMessage: `Sincronização de ${cachedGroups.length} grupos agendada. Vamos processar em etapas no cache local.`,
+      groupSyncError: null,
+    })
+
+    void runGroupJobInBackground(req.user.sub, "sync")
 
     return res.status(202).json({
       groups: cachedGroups,
@@ -659,6 +809,101 @@ function formatConnectionPayload(conn, groupsCount = 0) {
   }
 }
 
+function buildEvolutionWebhookUrl() {
+  const explicit = process.env.EVOLUTION_WEBHOOK_URL?.trim()
+  if (explicit) return explicit
+
+  const publicUrl = process.env.BACKEND_PUBLIC_URL?.trim()?.replace(/\/+$/, "")
+  if (!publicUrl) return undefined
+
+  const base = `${publicUrl}/api/evolution/webhook`
+  const secret = process.env.EVOLUTION_WEBHOOK_SECRET?.trim()
+  return secret ? `${base}?secret=${encodeURIComponent(secret)}` : base
+}
+
+function isValidEvolutionWebhook(req) {
+  const expected = process.env.EVOLUTION_WEBHOOK_SECRET?.trim()
+  if (!expected) return true
+  const received =
+    req.query.secret ||
+    req.get("x-evolution-secret") ||
+    req.get("x-webhook-secret") ||
+    req.get("authorization")?.replace(/^Bearer\s+/i, "")
+  return received === expected
+}
+
+function getWebhookEvent(body) {
+  return (body?.event || body?.type || body?.data?.event || "").toString().toUpperCase()
+}
+
+function getWebhookInstanceName(body) {
+  const candidate =
+    body?.data?.instanceName ||
+    body?.data?.instance?.instanceName ||
+    body?.data?.instance?.name ||
+    body?.instanceName ||
+    body?.instance ||
+    null
+  return typeof candidate === "string" ? candidate : null
+}
+
+function getWebhookPayload(body) {
+  return body?.data || body
+}
+
+async function updateConnectionFromWebhook(instanceName, body) {
+  const existing = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
+  if (!existing) return null
+
+  const payload = getWebhookPayload(body)
+  const connected = pickConnected(payload) || pickConnected(body)
+  const qr = (await resolveQrForStorage(payload)) || (await resolveQrForStorage(body)) || existing.qrCode
+  const nextStatus = pickStatus(payload) || pickStatus(body)
+  const status = nextStatus && nextStatus !== "unknown" ? nextStatus.toUpperCase() : existing.status
+  const phone = pickPhone(payload) || pickPhone(body)
+
+  const conn = await prisma.whatsAppConnection.update({
+    where: { instanceName },
+    data: {
+      connected,
+      status,
+      qrCode: connected ? null : qr,
+      phone: phone ? String(phone) : existing.phone,
+      lastSync: new Date(),
+    },
+  })
+
+  io.emit("whatsapp:status", formatConnectionPayload(conn))
+  if (conn.qrCode) io.emit("whatsapp:qr", { qr: conn.qrCode })
+  return conn
+}
+
+async function updateGroupsFromWebhook(instanceName, body) {
+  const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
+  if (!conn) return 0
+
+  const eventGroups = normalizeEvolutionGroups(getWebhookPayload(body))
+    .map((g) => mapEvolutionGroup(g, instanceName))
+    .filter((g) => g.groupJid)
+
+  for (const group of eventGroups) {
+    await upsertDiscoveredGroup(conn.userId, group, "ativo")
+  }
+
+  if (eventGroups.length) {
+    const groupsCount = await prisma.whatsAppGroup.count({ where: { userId: conn.userId } })
+    const updatedConn = await updateConnectionSync(conn.userId, {
+      groupSyncStatus: "READY",
+      groupSyncProgress: 100,
+      groupSyncMessage: `${groupsCount} grupos atualizados por eventos do WhatsApp.`,
+      groupSyncError: null,
+    })
+    io.emit("whatsapp:status", formatConnectionPayload(updatedConn, groupsCount))
+  }
+
+  return eventGroups.length
+}
+
 async function upsertConnectionFromEvolution({ userId, instanceName, stateData, qrData }) {
   const connected = pickConnected(stateData)
   let qr =
@@ -720,6 +965,29 @@ function handleEvolutionError(res, err) {
   })
 }
 
+app.post("/api/evolution/webhook", async (req, res) => {
+  try {
+    if (!isValidEvolutionWebhook(req)) {
+      return res.status(401).json({ error: "INVALID_WEBHOOK_SECRET" })
+    }
+
+    const event = getWebhookEvent(req.body)
+    const instanceName = getWebhookInstanceName(req.body)
+    if (!instanceName) return res.json({ ok: true, ignored: "missing-instance" })
+
+    if (event === "CONNECTION_UPDATE" || event === "QRCODE_UPDATED") {
+      await updateConnectionFromWebhook(instanceName, req.body)
+    } else if (["GROUPS_UPSERT", "GROUP_UPDATE", "GROUP_PARTICIPANTS_UPDATE"].includes(event)) {
+      await updateGroupsFromWebhook(instanceName, req.body)
+    }
+
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error("[evolution-webhook]", err?.message || err)
+    return res.status(200).json({ ok: false })
+  }
+})
+
 app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.sub
@@ -746,7 +1014,7 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.sub
     const instanceName = toInstanceName(userId)
-    const webhook = process.env.EVOLUTION_WEBHOOK_URL || undefined
+    const webhook = buildEvolutionWebhookUrl()
 
     try {
       await createInstance(instanceName, webhook)

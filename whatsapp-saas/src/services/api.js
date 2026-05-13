@@ -130,6 +130,14 @@ export async function getGroups() {
   return mockResponse({ groups: mockGroups })
 }
 
+export async function discoverGroups() {
+  if (resolveUseRealApi()) return apiClient.post('/groups/discover')
+  return mockResponse({
+    groups: mockGroups.map((group) => ({ ...group, status: 'pendente' })),
+    sync: { status: 'GROUPS_FOUND', progress: 100, groupsCount: mockGroups.length },
+  })
+}
+
 export async function syncGroups() {
   if (resolveUseRealApi()) return apiClient.post('/groups/sync')
   return mockResponse({ groups: mockGroups, sync: { status: 'READY', progress: 100, groupsCount: mockGroups.length } })

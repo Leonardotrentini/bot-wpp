@@ -33,7 +33,14 @@ function normalizeWebhook(input) {
   if (!/^https?:\/\//i.test(url)) return undefined
   return {
     url,
-    events: ["CONNECTION_UPDATE", "QRCODE_UPDATED"],
+    events: [
+      "CONNECTION_UPDATE",
+      "QRCODE_UPDATED",
+      "GROUPS_UPSERT",
+      "GROUP_UPDATE",
+      "GROUP_PARTICIPANTS_UPDATE",
+      "MESSAGES_UPSERT",
+    ],
   }
 }
 

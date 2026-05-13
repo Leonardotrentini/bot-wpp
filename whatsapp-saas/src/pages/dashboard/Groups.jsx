@@ -6,7 +6,7 @@ import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { getGroups, syncGroups } from '../../services/api.js'
+import { discoverGroups, getGroups, syncGroups } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 export function Groups() {
@@ -17,6 +17,7 @@ export function Groups() {
   const [q, setQ] = useState('')
   const [sync, setSync] = useState(null)
   const [nowMs, setNowMs] = useState(0)
+  const [actionLoading, setActionLoading] = useState(false)
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
@@ -36,8 +37,27 @@ export function Groups() {
     }
   }, [toast])
 
+  const startDiscover = useCallback(async () => {
+    setActionLoading(true)
+    try {
+      const { data } = await discoverGroups()
+      setGroups(data.groups || [])
+      setSync(data.sync || null)
+      toast.info(data.sync?.message || 'Busca de grupos iniciada.')
+    } catch (e) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        'Não foi possível procurar grupos.'
+      toast.error(typeof msg === 'string' ? msg : 'Não foi possível procurar grupos.')
+    } finally {
+      setActionLoading(false)
+    }
+  }, [toast])
+
   const startSync = useCallback(async () => {
-    setLoading(true)
+    setActionLoading(true)
     try {
       const { data } = await syncGroups()
       setGroups(data.groups || [])
@@ -51,7 +71,7 @@ export function Groups() {
         'Não foi possível iniciar a sincronização.'
       toast.error(typeof msg === 'string' ? msg : 'Não foi possível iniciar a sincronização.')
     } finally {
-      setLoading(false)
+      setActionLoading(false)
     }
   }, [toast])
 
@@ -66,9 +86,12 @@ export function Groups() {
     return () => window.clearInterval(timer)
   }, [sync?.retryAfter])
 
-  const syncActive = ['QUEUED', 'FETCHING_GROUPS', 'SAVING_GROUPS', 'SYNCING_GROUPS'].includes(sync?.status)
+  const discoverActive = ['QUEUED', 'DISCOVERING_GROUPS', 'FETCHING_GROUPS'].includes(sync?.status)
+  const cacheSyncActive = ['SAVING_GROUPS', 'SYNCING_GROUPS'].includes(sync?.status)
+  const syncActive = discoverActive || cacheSyncActive
   const retryAtMs = sync?.retryAfter ? new Date(sync.retryAfter).getTime() : 0
   const inCooldown = sync?.status === 'RATE_LIMITED' && retryAtMs > nowMs
+  const discoveredCount = sync?.groupsCount || groups.length
 
   useEffect(() => {
     if (!syncActive) return undefined
@@ -94,15 +117,25 @@ export function Groups() {
           <h2 className="text-xl font-semibold text-stone-50">Seus grupos</h2>
           <p className="text-sm text-stone-400 mt-1">Gerencie comunidades e acompanhe a última atividade.</p>
         </div>
-        <Button
-          variant="secondary"
-          className="gap-2 shrink-0"
-          onClick={startSync}
-          disabled={loading || syncActive || inCooldown}
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          {syncActive ? 'Sincronizando...' : inCooldown ? 'Aguardando cooldown' : 'Sincronizar grupos'}
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button
+            variant="secondary"
+            className="gap-2 shrink-0"
+            onClick={startDiscover}
+            disabled={loading || actionLoading || syncActive || inCooldown}
+          >
+            <RefreshCw className={`h-4 w-4 ${discoverActive || actionLoading ? 'animate-spin' : ''}`} />
+            {discoverActive ? 'Procurando...' : inCooldown ? 'Aguardando cooldown' : 'Procurar grupos'}
+          </Button>
+          <Button
+            className="gap-2 shrink-0"
+            onClick={startSync}
+            disabled={loading || actionLoading || syncActive || !discoveredCount}
+          >
+            <RefreshCw className={`h-4 w-4 ${cacheSyncActive ? 'animate-spin' : ''}`} />
+            {cacheSyncActive ? 'Sincronizando...' : `Sincronizar ${discoveredCount || 0} grupos`}
+          </Button>
+        </div>
       </div>
 
       {sync && (
@@ -110,7 +143,7 @@ export function Groups() {
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-stone-100">
-                Sincronização de grupos: {sync.status === 'READY' ? 'pronta' : sync.status === 'RATE_LIMITED' ? 'em espera' : sync.status?.toLowerCase?.() || 'pendente'}
+                Grupos: {sync.status === 'GROUPS_FOUND' ? 'encontrados' : sync.status === 'READY' ? 'sincronizados' : sync.status === 'RATE_LIMITED' ? 'em espera' : sync.status?.toLowerCase?.() || 'pendente'}
               </p>
               <p className="mt-1 text-xs text-stone-400">
                 {sync.message || 'O Vesto usa cache local para evitar excesso de chamadas à Evolution.'}
@@ -125,6 +158,9 @@ export function Groups() {
                   Os grupos aparecerão abaixo conforme forem salvos no cache.
                 </p>
               )}
+              <p className="mt-1 text-xs text-stone-500">
+                Não puxamos histórico antigo. Mensagens novas ficam para eventos/webhook a partir da conexão.
+              </p>
             </div>
             <div className="min-w-40">
               <div className="h-2 overflow-hidden rounded-full bg-brand-800">
@@ -171,7 +207,7 @@ export function Groups() {
           <div className="py-10 text-center">
             <p className="font-medium text-stone-200">Nenhum grupo encontrado ainda.</p>
             <p className="mt-2 text-sm text-stone-400">
-              Se o WhatsApp acabou de conectar, aguarde a sincronização estabilizar e clique em Sincronizar grupos uma vez.
+              Se o WhatsApp acabou de conectar, clique em Procurar grupos. Depois o Vesto libera Sincronizar X grupos.
             </p>
           </div>
         </Card>
@@ -184,7 +220,7 @@ export function Groups() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-semibold text-stone-50 truncate">{g.name}</h3>
-                    <Badge variant={g.status === 'ativo' ? 'success' : 'muted'}>{g.status}</Badge>
+                    <Badge variant={g.status === 'ativo' ? 'success' : g.status === 'pendente' ? 'warning' : 'muted'}>{g.status}</Badge>
                   </div>
                   <p className="text-xs text-stone-500 mt-1">{g.memberCount} membros</p>
                   <p className="text-sm text-stone-400 mt-2 line-clamp-2">&ldquo;{g.lastMessage}&rdquo;</p>
