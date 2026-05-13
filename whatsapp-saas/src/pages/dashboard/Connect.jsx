@@ -42,11 +42,16 @@ export function Connect() {
   async function onReconnect() {
     setActionLoading(true)
     try {
-      await connectWhatsApp()
+      const { data } = await connectWhatsApp()
+      setStatus(data)
       toast.success('QR gerado. Escaneie no seu WhatsApp.')
-      await refresh()
-    } catch {
-      toast.error('Falha ao reconectar.')
+    } catch (e) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        'Falha ao reconectar.'
+      toast.error(typeof msg === 'string' ? msg : 'Falha ao reconectar.')
     } finally {
       setActionLoading(false)
     }

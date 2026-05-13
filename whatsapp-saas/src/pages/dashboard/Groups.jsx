@@ -104,12 +104,12 @@ export function Groups() {
                   <p className="text-xs text-stone-500 mt-1">{g.memberCount} membros</p>
                   <p className="text-sm text-stone-400 mt-2 line-clamp-2">&ldquo;{g.lastMessage}&rdquo;</p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Link to={`/dashboard/groups/${g.id}`}>
+                    <Link to={`/dashboard/groups/${encodeURIComponent(g.id)}`}>
                       <Button size="sm" variant="secondary">
                         Ver detalhes
                       </Button>
                     </Link>
-                    <Link to={`/dashboard/groups/${g.id}?tab=config`}>
+                    <Link to={`/dashboard/groups/${encodeURIComponent(g.id)}?tab=config`}>
                       <Button size="sm" variant="ghost" className="gap-1 border border-brand-700">
                         <Settings2 className="h-3.5 w-3.5" /> Configurar
                       </Button>

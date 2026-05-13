@@ -18,12 +18,12 @@ import { resolveApiBaseURL, resolveUseRealApi } from '../lib/runtimeEnv.js'
 const delay = (ms = 400) => new Promise((r) => setTimeout(r, ms))
 
 export const apiClient = axios.create({
-  baseURL: resolveApiBaseURL(),
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })
 
 apiClient.interceptors.request.use((config) => {
+  config.baseURL = resolveApiBaseURL()
   const token = localStorage.getItem('vg_auth_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
@@ -131,6 +131,7 @@ export async function getGroups() {
 }
 
 export async function getGroupDetails(id) {
+  if (resolveUseRealApi()) return apiClient.get(`/groups/${encodeURIComponent(id)}`)
   await delay()
   const group = mockGroups.find((g) => g.id === id)
   if (!group) throw new Error('Grupo não encontrado')

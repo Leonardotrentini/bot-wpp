@@ -5,18 +5,18 @@ export function getRuntimeVestoEnv() {
 }
 
 export function resolveApiBaseURL() {
+  const rt = getRuntimeVestoEnv()
+  const fromInject = rt && typeof rt.apiBase === 'string' && rt.apiBase.trim()
+  if (fromInject) return fromInject.replace(/\/+$/, '')
   const v = import.meta.env.VITE_API_URL
   if (v) return String(v).replace(/\/+$/, '')
-  const rt = getRuntimeVestoEnv()?.apiBase
-  if (rt) return String(rt).replace(/\/+$/, '')
   return 'http://localhost:4000/api'
 }
 
 export function resolveUseRealApi() {
+  const rt = getRuntimeVestoEnv()
+  if (rt && typeof rt.useRealApi === 'boolean') return rt.useRealApi
   if (import.meta.env.VITE_USE_REAL_API === 'true') return true
   if (import.meta.env.VITE_USE_REAL_API === 'false') return false
-  const rt = getRuntimeVestoEnv()
-  if (rt?.useRealApi === true) return true
-  if (rt?.useRealApi === false) return false
   return false
 }

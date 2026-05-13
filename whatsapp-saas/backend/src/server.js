@@ -1,5 +1,13 @@
 require("dotenv").config()
 
+const jwtSecret = process.env.JWT_SECRET
+if (!jwtSecret || typeof jwtSecret !== "string" || jwtSecret.trim().length < 8) {
+  console.error(
+    "[fatal] JWT_SECRET em falta ou demasiado curto. No Railway, adicione JWT_SECRET (ex.: 32+ caracteres aleatórios). Sem isto, login/registo falham com 500 ao gerar o token.",
+  )
+  process.exit(1)
+}
+
 const express = require("express")
 const cors = require("cors")
 const bcrypt = require("bcryptjs")
@@ -14,8 +22,10 @@ const {
   createInstance,
   connectInstance,
   getConnectionState,
+  fetchAllGroups,
+  fetchGroupParticipants,
   logoutInstance,
-  pickQr,
+  resolveQrForStorage,
   pickConnected,
   pickStatus,
   pickPhone,
@@ -135,8 +145,134 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
   })
 })
 
-app.get("/api/groups", authMiddleware, (_req, res) => {
-  res.json({ groups })
+function fallbackGroupImage(seed) {
+  return `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(seed || "WhatsApp")}`
+}
+
+function toIsoFromEvolutionTimestamp(value) {
+  if (!value) return null
+  const n = Number(value)
+  if (!Number.isFinite(n)) return null
+  return new Date(n < 10_000_000_000 ? n * 1000 : n).toISOString()
+}
+
+function normalizeEvolutionGroups(payload) {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.groups)) return payload.groups
+  if (Array.isArray(payload?.data)) return payload.data
+  if (Array.isArray(payload?.response)) return payload.response
+  return []
+}
+
+function mapEvolutionGroup(group) {
+  const id = group?.id || group?.jid || group?.groupJid || group?.remoteJid
+  const name = group?.subject || group?.name || id || "Grupo sem nome"
+  const memberCount = Number(group?.size || group?.participants?.length || 0)
+  const lastMessageAt = toIsoFromEvolutionTimestamp(group?.subjectTime || group?.creation) || new Date().toISOString()
+
+  return {
+    id,
+    name,
+    memberCount,
+    status: "ativo",
+    lastMessage: group?.desc || "Grupo sincronizado do WhatsApp.",
+    lastMessageAt,
+    image: group?.pictureUrl || fallbackGroupImage(name),
+    messagesPerDay: 0,
+    activeMembers: memberCount,
+    peakHour: "—",
+    description: group?.desc || "",
+    announce: Boolean(group?.announce),
+    restrict: Boolean(group?.restrict),
+    owner: group?.owner || null,
+    raw: group,
+  }
+}
+
+function normalizeEvolutionParticipants(payload, group) {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.participants)) return payload.participants
+  if (Array.isArray(payload?.data?.participants)) return payload.data.participants
+  if (Array.isArray(group?.participants)) return group.participants
+  return []
+}
+
+function mapEvolutionParticipant(participant, groupName) {
+  const id = participant?.id || participant?.jid || participant?.number || participant
+  const phone = String(id || "").split("@")[0]
+  const role = participant?.admin ? "admin" : "membro"
+  const name = participant?.name || participant?.pushName || participant?.notify || phone || "Participante"
+
+  return {
+    id: String(id || phone),
+    name,
+    phone: phone ? `+${phone}` : "—",
+    role,
+    status: "ativo",
+    tags: role === "admin" ? ["admin"] : [],
+    groups: groupName ? [groupName] : [],
+    lastActivity: new Date().toISOString(),
+    avatar: fallbackGroupImage(name),
+  }
+}
+
+async function getUserWhatsAppConnection(userId) {
+  const existing = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+  if (!existing?.instanceName) {
+    const err = new Error("Conecte o WhatsApp antes de sincronizar grupos.")
+    err.code = "WHATSAPP_NOT_CONNECTED"
+    throw err
+  }
+  return existing
+}
+
+app.get("/api/groups", authMiddleware, async (req, res) => {
+  try {
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    const payload = await fetchAllGroups(conn.instanceName, { getParticipants: false })
+    const realGroups = normalizeEvolutionGroups(payload).map(mapEvolutionGroup).filter((g) => g.id)
+    res.json({ groups: realGroups })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message, groups: [] })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.get("/api/groups/:id", authMiddleware, async (req, res) => {
+  try {
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    const groupJid = decodeURIComponent(req.params.id)
+    const groupsPayload = await fetchAllGroups(conn.instanceName, { getParticipants: false })
+    const groupRaw = normalizeEvolutionGroups(groupsPayload).find((g) => {
+      const id = g?.id || g?.jid || g?.groupJid || g?.remoteJid
+      return id === groupJid
+    })
+    if (!groupRaw) return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado na Evolution." })
+
+    const participantsPayload = await fetchGroupParticipants(conn.instanceName, groupJid)
+    const group = mapEvolutionGroup(groupRaw)
+    const members = normalizeEvolutionParticipants(participantsPayload, groupRaw).map((p) =>
+      mapEvolutionParticipant(p, group.name),
+    )
+    const activity = [
+      { day: "Seg", count: 0 },
+      { day: "Ter", count: 0 },
+      { day: "Qua", count: 0 },
+      { day: "Qui", count: 0 },
+      { day: "Sex", count: 0 },
+      { day: "Sáb", count: 0 },
+      { day: "Dom", count: 0 },
+    ]
+
+    res.json({ group, members, activity, settings: null })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
+    }
+    return handleEvolutionError(res, err)
+  }
 })
 
 app.get("/api/analytics", authMiddleware, (req, res) => {
@@ -219,9 +355,18 @@ function formatConnectionPayload(conn) {
 
 async function upsertConnectionFromEvolution({ userId, instanceName, stateData, qrData }) {
   const connected = pickConnected(stateData)
-  const qr = pickQr(qrData)
+  let qr =
+    (await resolveQrForStorage(qrData)) || (await resolveQrForStorage(stateData))
   const status = pickStatus(stateData).toUpperCase()
   const phone = pickPhone(stateData)
+
+  if (!connected && !qr) {
+    const existing = await prisma.whatsAppConnection.findUnique({
+      where: { userId },
+      select: { qrCode: true },
+    })
+    qr = existing?.qrCode || null
+  }
 
   const conn = await prisma.whatsAppConnection.upsert({
     where: { userId },
@@ -254,11 +399,11 @@ function handleEvolutionError(res, err) {
       message: "Defina EVOLUTION_BASE_URL e EVOLUTION_API_KEY no backend.",
     })
   }
-  console.error("Evolution error:", err)
+  console.error("Evolution error:", err?.message || err, err?.details || err?.rawPreview || "")
   return res.status(502).json({
     error: "EVOLUTION_ERROR",
-    message: "Falha ao comunicar com a Evolution API.",
-    details: err?.details || null,
+    message: err?.message || "Falha ao comunicar com a Evolution API.",
+    details: err?.details || (err?.rawPreview ? { rawPreview: err.rawPreview } : null),
   })
 }
 
