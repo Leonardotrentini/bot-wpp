@@ -20,6 +20,7 @@ const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
 const {
   createInstance,
+  setInstanceWebhook,
   connectInstance,
   getConnectionState,
   fetchAllGroups,
@@ -1020,6 +1021,11 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
       await createInstance(instanceName, webhook)
     } catch (err) {
       if (!isInstanceAlreadyExistsError(err)) throw err
+    }
+    if (webhook) {
+      await setInstanceWebhook(instanceName, webhook).catch((err) => {
+        console.warn("[evolution] Não foi possível atualizar webhook da instância:", err?.message || err)
+      })
     }
     const qrData = await connectInstance(instanceName)
     const stateData = await getConnectionState(instanceName)

@@ -175,6 +175,26 @@ async function createInstance(instanceName, webhookInput) {
   return requestEvolution("/instance/create", { method: "POST", body })
 }
 
+async function setInstanceWebhook(instanceName, webhookInput) {
+  const webhook = normalizeWebhook(webhookInput)
+  if (!webhook) return null
+
+  const body = {
+    webhook: {
+      enabled: true,
+      url: webhook.url,
+      byEvents: false,
+      base64: false,
+      events: webhook.events,
+    },
+  }
+
+  return firstSuccess([
+    () => requestEvolution(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/webhook/set/${encodeURIComponent(instanceName)}`, { method: "POST", body: body.webhook }),
+  ])
+}
+
 function isInstanceAlreadyExistsError(err) {
   const message = (err?.details?.message || err?.message || "").toString().toLowerCase()
   return message.includes("already") || message.includes("exist") || message.includes("in use")
@@ -221,6 +241,7 @@ async function logoutInstance(instanceName) {
 
 module.exports = {
   createInstance,
+  setInstanceWebhook,
   connectInstance,
   getConnectionState,
   fetchAllGroups,
