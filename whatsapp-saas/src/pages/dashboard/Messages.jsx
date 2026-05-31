@@ -87,6 +87,10 @@ function emptyAutomationForm() {
   }
 }
 
+function emptyCadStep() {
+  return { name: '', source: 'template', templateId: '', body: '', groupIds: [], frequency: 'daily', scheduledAt: '', timeOfDay: '09:00', weekday: 1 }
+}
+
 function fmtDate(iso) {
   if (!iso) return '—'
   try {
@@ -175,8 +179,12 @@ export function Messages({ defaultTab = 'criar' }) {
   const [cadenceModal, setCadenceModal] = useState(false)
   const [cadenceForm, setCadenceForm] = useState({ id: null, name: '' })
   const [confirmCad, setConfirmCad] = useState(null)
-  const [manageCad, setManageCad] = useState(null)
-  const [manageSel, setManageSel] = useState([])
+  const [cadView, setCadView] = useState('list')
+  const [activeCadence, setActiveCadence] = useState(null)
+  const [cadNameDraft, setCadNameDraft] = useState('')
+  const [addMode, setAddMode] = useState('new')
+  const [existingSel, setExistingSel] = useState([])
+  const [cadStep, setCadStep] = useState(emptyCadStep)
 
   const refreshTemplates = useCallback(() => getTemplates().then((r) => setTemplates(r.data.templates || [])), [])
   const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
@@ -522,11 +530,17 @@ export function Messages({ defaultTab = 'criar' }) {
   async function saveCadence() {
     if (!cadenceForm.name.trim()) return toast.error('Dê um nome para a cadência.')
     try {
-      if (cadenceForm.id) await renameCadence(cadenceForm.id, cadenceForm.name.trim())
-      else await createCadence(cadenceForm.name.trim())
-      toast.success('Cadência salva.')
-      setCadenceModal(false)
-      refreshCadences()
+      if (cadenceForm.id) {
+        await renameCadence(cadenceForm.id, cadenceForm.name.trim())
+        toast.success('Cadência salva.')
+        setCadenceModal(false)
+        refreshCadences()
+      } else {
+        const res = await createCadence(cadenceForm.name.trim())
+        setCadenceModal(false)
+        await refreshCadences()
+        if (res?.data?.cadence) openCadenceEditor(res.data.cadence)
+      }
     } catch {
       toast.error('Falha ao salvar a cadência.')
     }
@@ -546,24 +560,91 @@ export function Messages({ defaultTab = 'criar' }) {
     }
   }
 
-  function openManage(c) {
-    setManageCad(c)
-    setManageSel(automations.filter((a) => a.cadenceId === c.id).map((a) => a.id))
+  function openCadenceEditor(c) {
+    setActiveCadence(c)
+    setCadNameDraft(c.name)
+    setCadStep(emptyCadStep())
+    setExistingSel([])
+    setAddMode('new')
+    setCadView('editor')
   }
 
-  function toggleManage(id) {
-    setManageSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+  function closeCadenceEditor() {
+    setCadView('list')
+    setActiveCadence(null)
+    refreshCadences()
+    refreshAutomations()
   }
 
-  async function saveManage() {
-    if (!manageCad) return
+  async function saveCadName() {
+    if (!cadNameDraft.trim() || !activeCadence) return
     try {
-      const res = await setCadenceAutomations(manageCad.id, manageSel)
-      setAutomations(res.data.automations || [])
-      toast.success('Automações da cadência atualizadas.')
-      setManageCad(null)
+      await renameCadence(activeCadence.id, cadNameDraft.trim())
+      setActiveCadence((c) => ({ ...c, name: cadNameDraft.trim() }))
+      refreshCadences()
+      toast.success('Nome salvo.')
     } catch {
-      toast.error('Falha ao atualizar.')
+      toast.error('Falha ao renomear.')
+    }
+  }
+
+  function validateStep() {
+    const f = cadStep
+    if (!f.groupIds.length) return 'Selecione ao menos um grupo.'
+    if (f.source === 'template' && !f.templateId) return 'Selecione uma mensagem da biblioteca.'
+    if (f.source === 'inline' && !f.body.trim()) return 'Escreva o texto da mensagem.'
+    if (f.frequency === 'once' && !f.scheduledAt) return 'Informe a data e hora.'
+    return null
+  }
+
+  function buildStepPayload() {
+    const f = cadStep
+    const base = f.source === 'template' ? templates.find((t) => t.id === f.templateId)?.name || 'Disparo' : f.body.trim().slice(0, 24) || 'Disparo'
+    const timeLabel = f.frequency === 'once' ? (f.scheduledAt ? f.scheduledAt.replace('T', ' ') : '') : f.timeOfDay
+    const name = f.name.trim() || `${base}${timeLabel ? ` • ${timeLabel}` : ''}`
+    const payload = { name, cadenceId: activeCadence.id, groupIds: f.groupIds, frequency: f.frequency }
+    if (f.source === 'template') payload.templateId = f.templateId
+    else payload.body = f.body
+    if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
+    if (f.frequency === 'daily' || f.frequency === 'weekly') payload.timeOfDay = f.timeOfDay
+    if (f.frequency === 'weekly') payload.weekday = Number(f.weekday)
+    return payload
+  }
+
+  async function addStepToCadence() {
+    const err = validateStep()
+    if (err) return toast.error(err)
+    try {
+      await createAutomation(buildStepPayload())
+      await refreshAutomations()
+      setCadStep((s) => ({ ...emptyCadStep(), groupIds: s.groupIds, frequency: s.frequency, weekday: s.weekday, timeOfDay: s.timeOfDay }))
+      toast.success('Disparo adicionado à cadência.')
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Falha ao adicionar.')
+    }
+  }
+
+  async function addExistingToCadence() {
+    if (!existingSel.length || !activeCadence) return
+    const memberIds = automations.filter((a) => a.cadenceId === activeCadence.id).map((a) => a.id)
+    try {
+      const res = await setCadenceAutomations(activeCadence.id, [...new Set([...memberIds, ...existingSel])])
+      setAutomations(res.data.automations || [])
+      setExistingSel([])
+      toast.success('Automações adicionadas.')
+    } catch {
+      toast.error('Falha ao adicionar.')
+    }
+  }
+
+  async function removeFromCadence(a) {
+    if (!activeCadence) return
+    const memberIds = automations.filter((x) => x.cadenceId === activeCadence.id && x.id !== a.id).map((x) => x.id)
+    try {
+      const res = await setCadenceAutomations(activeCadence.id, memberIds)
+      setAutomations(res.data.automations || [])
+    } catch {
+      toast.error('Falha ao remover.')
     }
   }
 
@@ -908,7 +989,7 @@ export function Messages({ defaultTab = 'criar' }) {
         </div>
       )}
 
-      {tab === 'cadencia' && (
+      {tab === 'cadencia' && cadView === 'list' && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-stone-400">Agrupe automações em cadências (ex.: “Segunda-feira”) e ative ou pause todas de uma vez.</p>
@@ -988,8 +1069,8 @@ export function Messages({ defaultTab = 'criar' }) {
                       )}
                     </div>
 
-                    <button type="button" className="mt-3 inline-flex items-center gap-1 text-xs text-accent-400 hover:underline" onClick={() => openManage(c)}>
-                      <ListChecks className="h-4 w-4" /> Gerenciar automações
+                    <button type="button" className="mt-3 inline-flex items-center gap-1 text-xs text-accent-400 hover:underline" onClick={() => openCadenceEditor(c)}>
+                      <ListChecks className="h-4 w-4" /> Abrir e montar fluxo
                     </button>
                   </Card>
                 )
@@ -1011,9 +1092,184 @@ export function Messages({ defaultTab = 'criar' }) {
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-xs text-stone-500">Use “Gerenciar automações” dentro de uma cadência para incluí-las.</p>
+              <p className="mt-2 text-xs text-stone-500">Abra uma cadência e use “Adicionar existente” para incluí-las.</p>
             </Card>
           )}
+        </div>
+      )}
+
+      {tab === 'cadencia' && cadView === 'editor' && activeCadence && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="space-y-4">
+            <button type="button" onClick={closeCadenceEditor} className="text-sm text-stone-400 hover:text-stone-100">← Voltar para cadências</button>
+            <Card className="space-y-4">
+              <div>
+                <p className="mb-1.5 text-sm font-medium text-stone-300">Nome da cadência</p>
+                <div className="flex gap-2">
+                  <Input value={cadNameDraft} onChange={(e) => setCadNameDraft(e.target.value)} />
+                  <Button variant="secondary" onClick={saveCadName}>Salvar</Button>
+                </div>
+              </div>
+
+              <div className="flex gap-2 rounded-xl border border-brand-800 p-1">
+                <button type="button" onClick={() => setAddMode('new')} className={`flex-1 rounded-lg px-3 py-2 text-sm ${addMode === 'new' ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 hover:bg-white/5'}`}>
+                  Criar novo disparo
+                </button>
+                <button type="button" onClick={() => setAddMode('existing')} className={`flex-1 rounded-lg px-3 py-2 text-sm ${addMode === 'existing' ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 hover:bg-white/5'}`}>
+                  Adicionar existente
+                </button>
+              </div>
+
+              {addMode === 'new' ? (
+                <div className="space-y-3">
+                  <Input label="Nome (opcional)" value={cadStep.name} onChange={(e) => setCadStep((f) => ({ ...f, name: e.target.value }))} placeholder="Gerado automaticamente se vazio" />
+                  <Select label="Mensagem" value={cadStep.source} onChange={(e) => setCadStep((f) => ({ ...f, source: e.target.value }))}>
+                    <option value="template">Selecionar da biblioteca</option>
+                    <option value="inline">Escrever texto rápido</option>
+                  </Select>
+                  {cadStep.source === 'template' ? (
+                    templates.length === 0 ? (
+                      <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">Crie uma mensagem na aba “Criar mensagem”.</p>
+                    ) : (
+                      <Select label="Escolha a mensagem" value={cadStep.templateId} onChange={(e) => setCadStep((f) => ({ ...f, templateId: e.target.value }))}>
+                        <option value="">— selecione —</option>
+                        {templates.map((t) => (
+                          <option key={t.id} value={t.id}>{t.name} {t.mediaType !== 'none' ? `(${t.mediaType})` : ''}</option>
+                        ))}
+                      </Select>
+                    )
+                  ) : (
+                    <Textarea label="Texto" rows={3} value={cadStep.body} onChange={(e) => setCadStep((f) => ({ ...f, body: e.target.value }))} />
+                  )}
+
+                  <div>
+                    <p className="mb-1.5 text-sm font-medium text-stone-300">Grupos ({cadStep.groupIds.length})</p>
+                    <div className="max-h-32 space-y-2 overflow-y-auto rounded-xl border border-brand-800 p-2">
+                      {groups.length === 0 && <p className="px-1 text-xs text-stone-400">Nenhum grupo ativo.</p>}
+                      {groups.map((g) => (
+                        <label key={g.id} className="flex cursor-pointer items-center gap-2 text-sm text-stone-300">
+                          <input
+                            type="checkbox"
+                            checked={cadStep.groupIds.includes(g.id)}
+                            onChange={() => setCadStep((f) => ({ ...f, groupIds: f.groupIds.includes(g.id) ? f.groupIds.filter((x) => x !== g.id) : [...f.groupIds, g.id] }))}
+                            className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30"
+                          />
+                          {g.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <Select label="Frequência" value={cadStep.frequency} onChange={(e) => setCadStep((f) => ({ ...f, frequency: e.target.value }))}>
+                    <option value="daily">Diariamente</option>
+                    <option value="weekly">Semanalmente</option>
+                    <option value="once">Uma vez (data/hora)</option>
+                  </Select>
+                  {cadStep.frequency === 'once' && (
+                    <Input label="Data e hora" type="datetime-local" value={cadStep.scheduledAt} onChange={(e) => setCadStep((f) => ({ ...f, scheduledAt: e.target.value }))} />
+                  )}
+                  {cadStep.frequency === 'daily' && (
+                    <Input label="Horário" type="time" value={cadStep.timeOfDay} onChange={(e) => setCadStep((f) => ({ ...f, timeOfDay: e.target.value }))} />
+                  )}
+                  {cadStep.frequency === 'weekly' && (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Select label="Dia" value={cadStep.weekday} onChange={(e) => setCadStep((f) => ({ ...f, weekday: e.target.value }))}>
+                        {WEEKDAYS.map((d, i) => (
+                          <option key={d} value={i}>{d}</option>
+                        ))}
+                      </Select>
+                      <Input label="Horário" type="time" value={cadStep.timeOfDay} onChange={(e) => setCadStep((f) => ({ ...f, timeOfDay: e.target.value }))} />
+                    </div>
+                  )}
+                  <Button className="w-full gap-2" onClick={addStepToCadence}>
+                    <Plus className="h-4 w-4" /> Adicionar à cadência
+                  </Button>
+                  <p className="text-xs text-stone-500">Você pode adicionar vários disparos seguidos. Horário no fuso de São Paulo (UTC-3).</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {automations.filter((a) => a.cadenceId !== activeCadence.id).length === 0 ? (
+                    <p className="text-sm text-stone-400">Nenhuma automação fora desta cadência. Crie um disparo novo ao lado.</p>
+                  ) : (
+                    <>
+                      <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-brand-800 p-2">
+                        {automations
+                          .filter((a) => a.cadenceId !== activeCadence.id)
+                          .map((a) => {
+                            const otherName = a.cadenceId ? cadences.find((c) => c.id === a.cadenceId)?.name : null
+                            return (
+                              <label key={a.id} className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm text-stone-200 hover:bg-white/5">
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <input type="checkbox" checked={existingSel.includes(a.id)} onChange={() => setExistingSel((s) => (s.includes(a.id) ? s.filter((x) => x !== a.id) : [...s, a.id]))} className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30" />
+                                  <span className="truncate">{a.name}</span>
+                                  <span className="text-xs text-stone-500">{frequencyLabel(a)}</span>
+                                </span>
+                                {otherName && <span className="shrink-0 text-xs text-amber-400/80">em “{otherName}”</span>}
+                              </label>
+                            )
+                          })}
+                      </div>
+                      <Button className="w-full" onClick={addExistingToCadence} disabled={!existingSel.length}>
+                        Adicionar {existingSel.length || ''} à cadência
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+            </Card>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-semibold text-stone-50 inline-flex items-center gap-2">
+                <Layers className="h-5 w-5 text-accent-400" /> {activeCadence.name}
+              </h3>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(activeCadence, 'ativa')}>
+                  <PlayCircle className="h-3.5 w-3.5" /> Ativar todas
+                </Button>
+                <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(activeCadence, 'pausada')}>
+                  <PauseCircle className="h-3.5 w-3.5" /> Pausar todas
+                </Button>
+              </div>
+            </div>
+
+            {automations.filter((a) => a.cadenceId === activeCadence.id).length === 0 ? (
+              <Card>
+                <p className="text-sm text-stone-400">Ainda sem disparos. Use o painel ao lado para empilhar mensagens nesta cadência.</p>
+              </Card>
+            ) : (
+              <div className="space-y-2">
+                {automations
+                  .filter((a) => a.cadenceId === activeCadence.id)
+                  .map((a, idx) => (
+                    <Card key={a.id} padding={false} className="p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 gap-2">
+                          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-800 text-xs text-stone-300">{idx + 1}</span>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-stone-50">{a.name}</p>
+                            <p className="text-xs text-stone-500">{frequencyLabel(a)} • {a.groupNames?.length || 0} grupo(s)</p>
+                            {a.body && <p className="mt-0.5 truncate text-xs text-stone-400">“{a.body}”</p>}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Badge variant={a.status === 'ativa' ? 'success' : a.status === 'concluida' ? 'default' : 'muted'}>{a.status}</Badge>
+                          {a.frequency !== 'now' && a.status !== 'concluida' && (
+                            <button type="button" onClick={() => toggleAutomation(a)} className="text-stone-300 hover:text-stone-100" title={a.status === 'pausada' ? 'Retomar' : 'Pausar'}>
+                              {a.status === 'pausada' ? <PlayCircle className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
+                            </button>
+                          )}
+                          <button type="button" onClick={() => removeFromCadence(a)} className="text-stone-500 hover:text-red-300" title="Remover da cadência" aria-label="Remover da cadência">
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1101,47 +1357,6 @@ export function Messages({ defaultTab = 'criar' }) {
         }
       >
         <Input label="Nome da cadência" value={cadenceForm.name} onChange={(e) => setCadenceForm((f) => ({ ...f, name: e.target.value }))} placeholder="Ex: Segunda-feira" />
-      </Modal>
-
-      {/* Gerenciar automações da cadência */}
-      <Modal
-        isOpen={!!manageCad}
-        onClose={() => setManageCad(null)}
-        title={manageCad ? `Automações de “${manageCad.name}”` : 'Automações'}
-        size="lg"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setManageCad(null)}>Cancelar</Button>
-            <Button onClick={saveManage}>Salvar</Button>
-          </>
-        }
-      >
-        <div className="space-y-2">
-          {automations.length === 0 ? (
-            <p className="text-sm text-stone-400">Você ainda não tem automações. Crie na aba “Automações”.</p>
-          ) : (
-            <>
-              <p className="text-xs text-stone-500">Marque as automações que fazem parte desta cadência.</p>
-              <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-brand-800 p-2">
-                {automations.map((a) => {
-                  const otherCad = a.cadenceId && manageCad && a.cadenceId !== manageCad.id
-                  const otherName = otherCad ? cadences.find((c) => c.id === a.cadenceId)?.name : null
-                  return (
-                    <label key={a.id} className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm text-stone-200 hover:bg-white/5">
-                      <span className="flex items-center gap-2 min-w-0">
-                        <input type="checkbox" checked={manageSel.includes(a.id)} onChange={() => toggleManage(a.id)} className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30" />
-                        <span className="truncate">{a.name}</span>
-                        <span className="text-xs text-stone-500">{frequencyLabel(a)}</span>
-                      </span>
-                      {otherName && <span className="shrink-0 text-xs text-amber-400/80">em “{otherName}”</span>}
-                    </label>
-                  )
-                })}
-              </div>
-              <p className="text-xs text-stone-500">Uma automação pertence a uma cadência por vez — marcá-la aqui a move para esta.</p>
-            </>
-          )}
-        </div>
       </Modal>
 
       <ConfirmModal isOpen={!!confirmTpl} onClose={() => setConfirmTpl(null)} onConfirm={removeTemplate} title="Excluir mensagem" message="Tem certeza que deseja excluir esta mensagem da biblioteca?" />

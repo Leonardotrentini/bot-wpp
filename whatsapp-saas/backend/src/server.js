@@ -1470,6 +1470,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
       scheduledAt: z.string().optional().nullable(),
       timeOfDay: z.string().optional().nullable(),
       weekday: z.number().int().min(0).max(6).optional().nullable(),
+      cadenceId: z.string().optional().nullable(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
@@ -1478,6 +1479,12 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
     const content = await resolveContentFromBody(req.user.sub, parsed.data)
     const invalid = validateContent(content)
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+
+    let cadenceId = null
+    if (parsed.data.cadenceId) {
+      const cad = await prisma.cadence.findFirst({ where: { id: parsed.data.cadenceId, userId: req.user.sub }, select: { id: true } })
+      cadenceId = cad?.id || null
+    }
 
     const groupNames = []
     for (const jid of parsed.data.groupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
@@ -1497,6 +1504,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
       const created = await prisma.automation.create({
         data: {
           userId: req.user.sub,
+          cadenceId,
           name: parsed.data.name,
           status: "concluida",
           groupJids: parsed.data.groupIds,
@@ -1531,6 +1539,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
     const created = await prisma.automation.create({
       data: {
         userId: req.user.sub,
+        cadenceId,
         name: parsed.data.name,
         status: "ativa",
         groupJids: parsed.data.groupIds,
