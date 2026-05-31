@@ -154,6 +154,14 @@ export async function selectGroups(groupIds = []) {
   })
 }
 
+export async function setGroupsStatus(groupIds = [], status = 'ativo') {
+  if (resolveUseRealApi()) return apiClient.post('/groups/status', { groupIds, status })
+  const sel = new Set(groupIds)
+  return mockResponse({
+    groups: mockGroups.map((g) => (sel.has(g.id) ? { ...g, status, monitoringEnabled: status === 'ativo' } : g)),
+  })
+}
+
 export async function syncGroups() {
   if (resolveUseRealApi()) return apiClient.post('/groups/sync')
   return mockResponse({ groups: mockGroups, import: { status: 'READY', total: mockGroups.length, done: mockGroups.length, backfillDays: 2 } })

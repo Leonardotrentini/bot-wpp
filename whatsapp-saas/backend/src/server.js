@@ -806,6 +806,45 @@ app.post("/api/groups/select", authMiddleware, async (req, res) => {
   }
 })
 
+app.post("/api/groups/status", authMiddleware, async (req, res) => {
+  try {
+    const schema = z.object({
+      groupIds: z.array(z.string()).min(1),
+      status: z.enum(["ativo", "inativo", "pendente"]),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione grupos e um status válido." })
+    }
+
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    const { groupIds, status } = parsed.data
+    const data =
+      status === "ativo"
+        ? { status: "ativo", monitoringEnabled: true }
+        : status === "inativo"
+          ? { status: "inativo", monitoringEnabled: false }
+          : { status: "pendente", monitoringEnabled: false }
+
+    await prisma.whatsAppGroup.updateMany({
+      where: { userId: req.user.sub, groupJid: { in: groupIds } },
+      data,
+    })
+
+    const cachedGroups = await readCachedGroups(req.user.sub)
+    return res.json({
+      groups: cachedGroups,
+      sync: getSyncPayload(conn, cachedGroups.length),
+      import: getImportPayload(conn),
+    })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
 app.get("/api/groups/:id/messages", authMiddleware, async (req, res) => {
   try {
     const groupJid = decodeURIComponent(req.params.id)

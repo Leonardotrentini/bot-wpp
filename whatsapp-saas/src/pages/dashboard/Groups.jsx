@@ -6,7 +6,7 @@ import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { discoverGroups, getGroups, selectGroups } from '../../services/api.js'
+import { discoverGroups, getGroups, selectGroups, setGroupsStatus } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 const MESSAGE_SYNC_LABELS = {
@@ -84,6 +84,26 @@ export function Groups() {
     } catch (e) {
       const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível iniciar a importação.'
       toast.error(typeof msg === 'string' ? msg : 'Não foi possível iniciar a importação.')
+    } finally {
+      setActionLoading(false)
+    }
+  }, [applyData, selected, toast])
+
+  const changeStatus = useCallback(async (status) => {
+    const groupIds = Array.from(selected)
+    if (!groupIds.length) {
+      toast.info('Selecione ao menos um grupo.')
+      return
+    }
+    setActionLoading(true)
+    try {
+      const { data } = await setGroupsStatus(groupIds, status)
+      applyData(data)
+      setSelected(new Set())
+      toast.success(`${groupIds.length} grupo(s) marcado(s) como ${status}.`)
+    } catch (e) {
+      const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível atualizar o status.'
+      toast.error(typeof msg === 'string' ? msg : 'Não foi possível atualizar o status.')
     } finally {
       setActionLoading(false)
     }
@@ -245,6 +265,16 @@ export function Groups() {
           <span>{selected.size} selecionado(s)</span>
           <button type="button" className="text-accent-400 hover:underline" onClick={selectAll}>Selecionar todos</button>
           <button type="button" className="text-stone-400 hover:underline" onClick={clearAll}>Limpar</button>
+          {selected.size > 0 && (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="secondary" disabled={actionLoading} onClick={() => changeStatus('ativo')}>
+                Marcar ativo
+              </Button>
+              <Button size="sm" variant="ghost" className="border border-brand-700" disabled={actionLoading} onClick={() => changeStatus('inativo')}>
+                Marcar inativo
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
