@@ -133,14 +133,35 @@ export async function getGroups() {
 export async function discoverGroups() {
   if (resolveUseRealApi()) return apiClient.post('/groups/discover')
   return mockResponse({
-    groups: mockGroups.map((group) => ({ ...group, status: 'pendente' })),
+    groups: mockGroups.map((group) => ({ ...group, status: 'pendente', monitoringEnabled: false, messageSyncStatus: 'IDLE' })),
     sync: { status: 'GROUPS_FOUND', progress: 100, groupsCount: mockGroups.length },
+    import: { status: 'IDLE', total: 0, done: 0, backfillDays: 2 },
+  })
+}
+
+export async function selectGroups(groupIds = []) {
+  if (resolveUseRealApi()) return apiClient.post('/groups/select', { groupIds })
+  const selected = new Set(groupIds)
+  return mockResponse({
+    groups: mockGroups.map((group) => ({
+      ...group,
+      monitoringEnabled: selected.has(group.id),
+      messageSyncStatus: selected.has(group.id) ? 'READY' : 'IDLE',
+      messagesSyncedCount: selected.has(group.id) ? 42 : 0,
+      status: selected.has(group.id) ? 'ativo' : group.status,
+    })),
+    import: { status: 'READY', total: groupIds.length, done: groupIds.length, backfillDays: 2 },
   })
 }
 
 export async function syncGroups() {
   if (resolveUseRealApi()) return apiClient.post('/groups/sync')
-  return mockResponse({ groups: mockGroups, sync: { status: 'READY', progress: 100, groupsCount: mockGroups.length } })
+  return mockResponse({ groups: mockGroups, import: { status: 'READY', total: mockGroups.length, done: mockGroups.length, backfillDays: 2 } })
+}
+
+export async function getGroupMessages(id, limit = 100) {
+  if (resolveUseRealApi()) return apiClient.get(`/groups/${encodeURIComponent(id)}/messages`, { params: { limit } })
+  return mockResponse({ groupName: 'Grupo', messages: [] })
 }
 
 export async function getGroupDetails(id) {

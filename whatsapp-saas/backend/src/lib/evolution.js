@@ -232,6 +232,22 @@ async function fetchGroupParticipants(instanceName, groupJid) {
   )
 }
 
+/**
+ * Busca mensagens de um grupo (Evolution v2 `POST /chat/findMessages/{instance}`).
+ * Ordena por timestamp desc; paginado para limitar o volume por chamada.
+ */
+async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50 } = {}) {
+  const body = {
+    where: { key: { remoteJid: groupJid } },
+    page,
+    offset: pageSize,
+  }
+  return firstSuccess([
+    () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+  ])
+}
+
 async function logoutInstance(instanceName) {
   return firstSuccess([
     () => requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
@@ -246,6 +262,7 @@ module.exports = {
   getConnectionState,
   fetchAllGroups,
   fetchGroupParticipants,
+  fetchGroupMessages,
   logoutInstance,
   pickQrSync,
   resolveQrForStorage,

@@ -29,7 +29,7 @@ model User {
   updatedAt          DateTime            @updatedAt
   subscriptions      Subscription[]
   whatsappConnection WhatsAppConnection?
-  whatsappGroups      WhatsAppGroup[]
+  whatsappGroups     WhatsAppGroup[]
 }
 
 model Plan {
@@ -91,6 +91,13 @@ model WhatsAppConnection {
   groupsLastSync      DateTime?
   groupSyncRetryAfter DateTime?
   groupSyncStartedAt  DateTime?
+  msgImportStatus     String    @default("IDLE")
+  msgImportTotal      Int       @default(0)
+  msgImportDone       Int       @default(0)
+  msgImportMessage    String?
+  msgImportError      String?
+  msgImportRetryAfter DateTime?
+  msgImportStartedAt  DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
@@ -116,13 +123,40 @@ model WhatsAppGroup {
   raw                  Json?
   lastSyncedAt         DateTime                   @default(now())
   participantsSyncedAt DateTime?
+  monitoringEnabled    Boolean                    @default(false)
+  messageSyncStatus    String                     @default("IDLE")
+  messageSyncProgress  Int                        @default(0)
+  messagesSyncedCount  Int                        @default(0)
+  messagesLastSyncAt   DateTime?
   createdAt            DateTime                   @default(now())
   updatedAt            DateTime                   @updatedAt
   participants         WhatsAppGroupParticipant[]
+  messages             WhatsAppMessage[]
 
   @@unique([userId, groupJid])
   @@index([userId])
   @@index([instanceName])
+}
+
+model WhatsAppMessage {
+  id         String        @id @default(cuid())
+  userId     String
+  groupId    String
+  group      WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  messageId  String
+  fromMe     Boolean       @default(false)
+  senderJid  String?
+  senderName String?
+  type       String        @default("text")
+  body       String?
+  timestamp  DateTime
+  raw        Json?
+  createdAt  DateTime      @default(now())
+
+  @@unique([groupId, messageId])
+  @@index([userId])
+  @@index([groupId])
+  @@index([timestamp])
 }
 
 model WhatsAppGroupParticipant {
