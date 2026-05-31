@@ -235,6 +235,36 @@ export async function getSendJob(id) {
   return mockResponse({ job: { id, status: 'done', total: 1, done: 1, sent: 1, failed: 0 } })
 }
 
+export async function getCadences() {
+  if (resolveUseRealApi()) return apiClient.get('/cadences')
+  return mockResponse({ cadences: [] })
+}
+
+export async function createCadence(name) {
+  if (resolveUseRealApi()) return apiClient.post('/cadences', { name })
+  return mockResponse({ cadence: { id: `cad-${Date.now()}`, name } })
+}
+
+export async function renameCadence(id, name) {
+  if (resolveUseRealApi()) return apiClient.patch(`/cadences/${encodeURIComponent(id)}`, { name })
+  return mockResponse({ cadence: { id, name } })
+}
+
+export async function deleteCadence(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/cadences/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function setCadenceAutomations(id, automationIds) {
+  if (resolveUseRealApi()) return apiClient.post(`/cadences/${encodeURIComponent(id)}/automations`, { automationIds })
+  return mockResponse({ automations: [] })
+}
+
+export async function setCadenceStatus(id, status) {
+  if (resolveUseRealApi()) return apiClient.post(`/cadences/${encodeURIComponent(id)}/status`, { status })
+  return mockResponse({ automations: [] })
+}
+
 export async function getMessageHistory(params = {}) {
   if (resolveUseRealApi()) return apiClient.get('/messages/history', { params })
   return mockResponse({ items: mockMessageHistory, total: mockMessageHistory.length, limit: 50, offset: 0 })

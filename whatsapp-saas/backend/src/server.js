@@ -1278,6 +1278,7 @@ function computeNextRun(a, from = new Date()) {
 function getAutomationPayload(a) {
   return {
     id: a.id,
+    cadenceId: a.cadenceId || null,
     name: a.name,
     status: a.status,
     groupJids: a.groupJids,
@@ -1648,6 +1649,84 @@ app.delete("/api/automations/:id", authMiddleware, async (req, res) => {
   if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Automação não encontrada." })
   await prisma.automation.delete({ where: { id: existing.id } })
   res.json({ ok: true })
+})
+
+// ===================== Cadências (agrupam automações) =====================
+
+function getCadencePayload(c) {
+  return { id: c.id, name: c.name }
+}
+
+app.get("/api/cadences", authMiddleware, async (req, res) => {
+  const rows = await prisma.cadence.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "asc" } })
+  res.json({ cadences: rows.map(getCadencePayload) })
+})
+
+app.post("/api/cadences", authMiddleware, async (req, res) => {
+  const schema = z.object({ name: z.string().min(1) })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um nome para a cadência." })
+  const c = await prisma.cadence.create({ data: { userId: req.user.sub, name: parsed.data.name.trim() } })
+  res.status(201).json({ cadence: getCadencePayload(c) })
+})
+
+app.patch("/api/cadences/:id", authMiddleware, async (req, res) => {
+  const existing = await prisma.cadence.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Cadência não encontrada." })
+  const schema = z.object({ name: z.string().min(1) })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um nome válido." })
+  const c = await prisma.cadence.update({ where: { id: existing.id }, data: { name: parsed.data.name.trim() } })
+  res.json({ cadence: getCadencePayload(c) })
+})
+
+app.delete("/api/cadences/:id", authMiddleware, async (req, res) => {
+  const existing = await prisma.cadence.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Cadência não encontrada." })
+  await prisma.automation.updateMany({ where: { userId: req.user.sub, cadenceId: existing.id }, data: { cadenceId: null } })
+  await prisma.cadence.delete({ where: { id: existing.id } })
+  res.json({ ok: true })
+})
+
+app.post("/api/cadences/:id/automations", authMiddleware, async (req, res) => {
+  const existing = await prisma.cadence.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Cadência não encontrada." })
+  const schema = z.object({ automationIds: z.array(z.string()) })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Lista de automações inválida." })
+
+  // Remove as que não estão mais na lista e adiciona as novas (somente do próprio usuário)
+  await prisma.automation.updateMany({
+    where: { userId: req.user.sub, cadenceId: existing.id, id: { notIn: parsed.data.automationIds } },
+    data: { cadenceId: null },
+  })
+  if (parsed.data.automationIds.length) {
+    await prisma.automation.updateMany({
+      where: { userId: req.user.sub, id: { in: parsed.data.automationIds } },
+      data: { cadenceId: existing.id },
+    })
+  }
+  const automations = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
+  res.json({ automations: automations.map(getAutomationPayload) })
+})
+
+app.post("/api/cadences/:id/status", authMiddleware, async (req, res) => {
+  const existing = await prisma.cadence.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Cadência não encontrada." })
+  const schema = z.object({ status: z.enum(["ativa", "pausada"]) })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Status inválido." })
+
+  const members = await prisma.automation.findMany({
+    where: { userId: req.user.sub, cadenceId: existing.id, frequency: { not: "now" }, status: { not: "concluida" } },
+  })
+  for (const a of members) {
+    const data = { status: parsed.data.status }
+    if (parsed.data.status === "ativa" && a.frequency !== "once") data.nextRunAt = computeNextRun(a)
+    await prisma.automation.update({ where: { id: a.id }, data })
+  }
+  const automations = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
+  res.json({ automations: automations.map(getAutomationPayload) })
 })
 
 async function processDueAutomations() {

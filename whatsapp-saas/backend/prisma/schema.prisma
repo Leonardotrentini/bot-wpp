@@ -174,9 +174,20 @@ model MessageTemplate {
   @@index([userId])
 }
 
+model Cadence {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
 model Automation {
   id          String    @id @default(cuid())
   userId      String
+  cadenceId   String?
   name        String
   status      String    @default("ativa") // ativa | pausada | concluida
   groupJids   String[]
@@ -200,6 +211,7 @@ model Automation {
   @@index([userId])
   @@index([status])
   @@index([nextRunAt])
+  @@index([cadenceId])
 }
 
 model OutboundMessage {

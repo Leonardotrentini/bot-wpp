@@ -16,6 +16,8 @@ import {
   Copy,
   CheckCheck,
   AlertTriangle,
+  Layers,
+  ListChecks,
 } from 'lucide-react'
 import { Tabs } from '../../components/common/Tabs.jsx'
 import { Card } from '../../components/common/Card.jsx'
@@ -38,6 +40,12 @@ import {
   deleteAutomation,
   getMessageHistory,
   getSendJob,
+  getCadences,
+  createCadence,
+  renameCadence,
+  deleteCadence,
+  setCadenceAutomations,
+  setCadenceStatus,
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
@@ -163,8 +171,16 @@ export function Messages({ defaultTab = 'criar' }) {
   const [sendJob, setSendJob] = useState(null)
   const formRef = useRef(null)
 
+  const [cadences, setCadences] = useState([])
+  const [cadenceModal, setCadenceModal] = useState(false)
+  const [cadenceForm, setCadenceForm] = useState({ id: null, name: '' })
+  const [confirmCad, setConfirmCad] = useState(null)
+  const [manageCad, setManageCad] = useState(null)
+  const [manageSel, setManageSel] = useState([])
+
   const refreshTemplates = useCallback(() => getTemplates().then((r) => setTemplates(r.data.templates || [])), [])
   const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
+  const refreshCadences = useCallback(() => getCadences().then((r) => setCadences(r.data.cadences || [])), [])
 
   const refreshHistory = useCallback(
     (offset = 0) => {
@@ -189,6 +205,7 @@ export function Messages({ defaultTab = 'criar' }) {
       getGroups().then((r) => setGroups((r.data.groups || []).filter((g) => g.status === 'ativo'))),
       refreshTemplates(),
       refreshAutomations(),
+      refreshCadences(),
       refreshHistory(0),
     ]).finally(() => setLoadingInit(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -491,7 +508,77 @@ export function Messages({ defaultTab = 'criar' }) {
     }
   }
 
+  // ---------- Cadências ----------
+  function openNewCadence() {
+    setCadenceForm({ id: null, name: '' })
+    setCadenceModal(true)
+  }
+
+  function openRenameCadence(c) {
+    setCadenceForm({ id: c.id, name: c.name })
+    setCadenceModal(true)
+  }
+
+  async function saveCadence() {
+    if (!cadenceForm.name.trim()) return toast.error('Dê um nome para a cadência.')
+    try {
+      if (cadenceForm.id) await renameCadence(cadenceForm.id, cadenceForm.name.trim())
+      else await createCadence(cadenceForm.name.trim())
+      toast.success('Cadência salva.')
+      setCadenceModal(false)
+      refreshCadences()
+    } catch {
+      toast.error('Falha ao salvar a cadência.')
+    }
+  }
+
+  async function removeCadence() {
+    if (!confirmCad) return
+    try {
+      await deleteCadence(confirmCad)
+      toast.success('Cadência removida.')
+      refreshCadences()
+      refreshAutomations()
+    } catch {
+      toast.error('Falha ao remover.')
+    } finally {
+      setConfirmCad(null)
+    }
+  }
+
+  function openManage(c) {
+    setManageCad(c)
+    setManageSel(automations.filter((a) => a.cadenceId === c.id).map((a) => a.id))
+  }
+
+  function toggleManage(id) {
+    setManageSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+  }
+
+  async function saveManage() {
+    if (!manageCad) return
+    try {
+      const res = await setCadenceAutomations(manageCad.id, manageSel)
+      setAutomations(res.data.automations || [])
+      toast.success('Automações da cadência atualizadas.')
+      setManageCad(null)
+    } catch {
+      toast.error('Falha ao atualizar.')
+    }
+  }
+
+  async function cadenceBulkStatus(c, status) {
+    try {
+      const res = await setCadenceStatus(c.id, status)
+      setAutomations(res.data.automations || [])
+      toast.success(status === 'ativa' ? 'Automações ativadas.' : 'Automações pausadas.')
+    } catch {
+      toast.error('Falha ao atualizar a cadência.')
+    }
+  }
+
   const activeCount = automations.filter((a) => a.status === 'ativa').length
+  const orphanAutomations = automations.filter((a) => !a.cadenceId)
   const previewContent = currentAutoContent()
   const histPages = Math.ceil(histTotal / HIST_PAGE_SIZE) || 1
   const histPage = Math.floor(histOffset / HIST_PAGE_SIZE) + 1
@@ -513,6 +600,7 @@ export function Messages({ defaultTab = 'criar' }) {
         tabs={[
           { id: 'criar', label: 'Criar mensagem' },
           { id: 'automacoes', label: 'Automações' },
+          { id: 'cadencia', label: 'Cadência' },
         ]}
         active={tab}
         onChange={setTab}
@@ -820,6 +908,115 @@ export function Messages({ defaultTab = 'criar' }) {
         </div>
       )}
 
+      {tab === 'cadencia' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-stone-400">Agrupe automações em cadências (ex.: “Segunda-feira”) e ative ou pause todas de uma vez.</p>
+            <Button className="gap-2" onClick={openNewCadence}>
+              <Plus className="h-4 w-4" /> Nova cadência
+            </Button>
+          </div>
+
+          {loadingInit ? (
+            <div className="space-y-2">
+              {[0, 1].map((i) => (
+                <div key={i} className="h-24 animate-pulse rounded-xl bg-brand-800/50" />
+              ))}
+            </div>
+          ) : cadences.length === 0 ? (
+            <Card>
+              <p className="text-sm text-stone-400">Nenhuma cadência ainda. Crie uma para organizar suas automações por dia, campanha, etc.</p>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {cadences.map((c) => {
+                const members = automations.filter((a) => a.cadenceId === c.id)
+                const active = members.filter((m) => m.status === 'ativa').length
+                const inactive = members.length - active
+                return (
+                  <Card key={c.id}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex gap-3 min-w-0">
+                        <div className="h-fit rounded-xl bg-accent-500/15 p-2 text-accent-400">
+                          <Layers className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="truncate font-semibold text-stone-50">{c.name}</h3>
+                          <p className="mt-1 text-xs text-stone-500">
+                            {members.length} automação(ões) • <span className="text-emerald-400">{active} ativa(s)</span> • <span className="text-stone-400">{inactive} inativa(s)</span>
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(c, 'ativa')}>
+                          <PlayCircle className="h-3.5 w-3.5" /> Ativar todas
+                        </Button>
+                        <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(c, 'pausada')}>
+                          <PauseCircle className="h-3.5 w-3.5" /> Pausar todas
+                        </Button>
+                        <button type="button" className="p-2 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Renomear" title="Renomear" onClick={() => openRenameCadence(c)}>
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button type="button" className="p-2 rounded-lg text-stone-400 hover:bg-red-500/10 hover:text-red-300" aria-label="Excluir" title="Excluir" onClick={() => setConfirmCad(c.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 space-y-2">
+                      {members.length === 0 ? (
+                        <p className="rounded-lg border border-dashed border-brand-800 px-3 py-3 text-xs text-stone-500">
+                          Nenhuma automação nesta cadência. Clique em “Gerenciar automações” para adicionar.
+                        </p>
+                      ) : (
+                        members.map((a) => (
+                          <div key={a.id} className="flex items-center justify-between gap-2 rounded-lg border border-brand-800 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm text-stone-100">{a.name}</p>
+                              <p className="text-xs text-stone-500">{frequencyLabel(a)}</p>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Badge variant={a.status === 'ativa' ? 'success' : a.status === 'concluida' ? 'default' : 'muted'}>{a.status}</Badge>
+                              {a.frequency !== 'now' && a.status !== 'concluida' && (
+                                <button type="button" onClick={() => toggleAutomation(a)} className="text-xs text-stone-300 hover:underline" title={a.status === 'pausada' ? 'Retomar' : 'Pausar'}>
+                                  {a.status === 'pausada' ? <PlayCircle className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    <button type="button" className="mt-3 inline-flex items-center gap-1 text-xs text-accent-400 hover:underline" onClick={() => openManage(c)}>
+                      <ListChecks className="h-4 w-4" /> Gerenciar automações
+                    </button>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+
+          {orphanAutomations.length > 0 && (
+            <Card>
+              <h3 className="mb-2 text-sm font-semibold text-stone-300">Sem cadência ({orphanAutomations.length})</h3>
+              <div className="space-y-2">
+                {orphanAutomations.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between gap-2 rounded-lg border border-brand-800 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-stone-100">{a.name}</p>
+                      <p className="text-xs text-stone-500">{frequencyLabel(a)}</p>
+                    </div>
+                    <Badge variant={a.status === 'ativa' ? 'success' : a.status === 'concluida' ? 'default' : 'muted'}>{a.status}</Badge>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-stone-500">Use “Gerenciar automações” dentro de uma cadência para incluí-las.</p>
+            </Card>
+          )}
+        </div>
+      )}
+
       {/* Editor de mensagem (biblioteca) */}
       <Modal
         isOpen={tplModal}
@@ -891,8 +1088,65 @@ export function Messages({ defaultTab = 'criar' }) {
         </div>
       </Modal>
 
+      {/* Criar / renomear cadência */}
+      <Modal
+        isOpen={cadenceModal}
+        onClose={() => setCadenceModal(false)}
+        title={cadenceForm.id ? 'Renomear cadência' : 'Nova cadência'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCadenceModal(false)}>Cancelar</Button>
+            <Button onClick={saveCadence}>Salvar</Button>
+          </>
+        }
+      >
+        <Input label="Nome da cadência" value={cadenceForm.name} onChange={(e) => setCadenceForm((f) => ({ ...f, name: e.target.value }))} placeholder="Ex: Segunda-feira" />
+      </Modal>
+
+      {/* Gerenciar automações da cadência */}
+      <Modal
+        isOpen={!!manageCad}
+        onClose={() => setManageCad(null)}
+        title={manageCad ? `Automações de “${manageCad.name}”` : 'Automações'}
+        size="lg"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setManageCad(null)}>Cancelar</Button>
+            <Button onClick={saveManage}>Salvar</Button>
+          </>
+        }
+      >
+        <div className="space-y-2">
+          {automations.length === 0 ? (
+            <p className="text-sm text-stone-400">Você ainda não tem automações. Crie na aba “Automações”.</p>
+          ) : (
+            <>
+              <p className="text-xs text-stone-500">Marque as automações que fazem parte desta cadência.</p>
+              <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-brand-800 p-2">
+                {automations.map((a) => {
+                  const otherCad = a.cadenceId && manageCad && a.cadenceId !== manageCad.id
+                  const otherName = otherCad ? cadences.find((c) => c.id === a.cadenceId)?.name : null
+                  return (
+                    <label key={a.id} className="flex cursor-pointer items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm text-stone-200 hover:bg-white/5">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <input type="checkbox" checked={manageSel.includes(a.id)} onChange={() => toggleManage(a.id)} className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30" />
+                        <span className="truncate">{a.name}</span>
+                        <span className="text-xs text-stone-500">{frequencyLabel(a)}</span>
+                      </span>
+                      {otherName && <span className="shrink-0 text-xs text-amber-400/80">em “{otherName}”</span>}
+                    </label>
+                  )
+                })}
+              </div>
+              <p className="text-xs text-stone-500">Uma automação pertence a uma cadência por vez — marcá-la aqui a move para esta.</p>
+            </>
+          )}
+        </div>
+      </Modal>
+
       <ConfirmModal isOpen={!!confirmTpl} onClose={() => setConfirmTpl(null)} onConfirm={removeTemplate} title="Excluir mensagem" message="Tem certeza que deseja excluir esta mensagem da biblioteca?" />
       <ConfirmModal isOpen={!!confirmAuto} onClose={() => setConfirmAuto(null)} onConfirm={removeAutomation} title="Excluir automação" message="Tem certeza que deseja excluir esta automação? Ela deixará de disparar." />
+      <ConfirmModal isOpen={!!confirmCad} onClose={() => setConfirmCad(null)} onConfirm={removeCadence} title="Excluir cadência" message="Excluir a cadência? As automações dela não serão apagadas, apenas ficarão sem cadência." />
     </div>
   )
 }
