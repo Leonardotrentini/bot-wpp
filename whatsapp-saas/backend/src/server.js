@@ -1471,6 +1471,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
       timeOfDay: z.string().optional().nullable(),
       weekday: z.number().int().min(0).max(6).optional().nullable(),
       cadenceId: z.string().optional().nullable(),
+      status: z.enum(["ativa", "pausada"]).optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
@@ -1541,7 +1542,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
         userId: req.user.sub,
         cadenceId,
         name: parsed.data.name,
-        status: "ativa",
+        status: parsed.data.status === "pausada" ? "pausada" : "ativa",
         groupJids: parsed.data.groupIds,
         groupNames,
         templateId: parsed.data.templateId || null,
@@ -1602,6 +1603,7 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
       scheduledAt: z.string().optional().nullable(),
       timeOfDay: z.string().optional().nullable(),
       weekday: z.number().int().min(0).max(6).optional().nullable(),
+      status: z.enum(["ativa", "pausada"]).optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
@@ -1632,7 +1634,7 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
       where: { id: existing.id },
       data: {
         name: parsed.data.name,
-        status: "ativa",
+        status: parsed.data.status === "pausada" ? "pausada" : "ativa",
         groupJids: parsed.data.groupIds,
         groupNames,
         templateId: parsed.data.templateId || null,

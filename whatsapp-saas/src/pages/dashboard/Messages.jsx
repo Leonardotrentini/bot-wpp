@@ -84,11 +84,12 @@ function emptyAutomationForm() {
     scheduledAt: '',
     timeOfDay: '09:00',
     weekday: 1,
+    status: 'ativa',
   }
 }
 
 function emptyCadStep() {
-  return { name: '', source: 'template', templateId: '', body: '', groupIds: [], frequency: 'daily', scheduledAt: '', timeOfDay: '09:00', weekday: 1 }
+  return { name: '', source: 'template', templateId: '', body: '', groupIds: [], frequency: 'daily', scheduledAt: '', timeOfDay: '09:00', weekday: 1, status: 'ativa' }
 }
 
 function fmtDate(iso) {
@@ -415,6 +416,7 @@ export function Messages({ defaultTab = 'criar' }) {
       scheduledAt: toLocalInput(a.scheduledAt),
       timeOfDay: a.timeOfDay || '09:00',
       weekday: a.weekday ?? 1,
+      status: a.status === 'pausada' ? 'pausada' : 'ativa',
     })
     if (tab !== 'automacoes') setTab('automacoes')
     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -438,6 +440,7 @@ export function Messages({ defaultTab = 'criar' }) {
     if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
     if (f.frequency === 'daily' || f.frequency === 'weekly') payload.timeOfDay = f.timeOfDay
     if (f.frequency === 'weekly') payload.weekday = Number(f.weekday)
+    if (f.frequency !== 'now') payload.status = f.status
     return payload
   }
 
@@ -602,7 +605,7 @@ export function Messages({ defaultTab = 'criar' }) {
     const base = f.source === 'template' ? templates.find((t) => t.id === f.templateId)?.name || 'Disparo' : f.body.trim().slice(0, 24) || 'Disparo'
     const timeLabel = f.frequency === 'once' ? (f.scheduledAt ? f.scheduledAt.replace('T', ' ') : '') : f.timeOfDay
     const name = f.name.trim() || `${base}${timeLabel ? ` • ${timeLabel}` : ''}`
-    const payload = { name, cadenceId: activeCadence.id, groupIds: f.groupIds, frequency: f.frequency }
+    const payload = { name, cadenceId: activeCadence.id, groupIds: f.groupIds, frequency: f.frequency, status: f.status }
     if (f.source === 'template') payload.templateId = f.templateId
     else payload.body = f.body
     if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
@@ -617,7 +620,7 @@ export function Messages({ defaultTab = 'criar' }) {
     try {
       await createAutomation(buildStepPayload())
       await refreshAutomations()
-      setCadStep((s) => ({ ...emptyCadStep(), groupIds: s.groupIds, frequency: s.frequency, weekday: s.weekday, timeOfDay: s.timeOfDay }))
+      setCadStep((s) => ({ ...emptyCadStep(), groupIds: s.groupIds, frequency: s.frequency, weekday: s.weekday, timeOfDay: s.timeOfDay, status: s.status }))
       toast.success('Disparo adicionado à cadência.')
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Falha ao adicionar.')
@@ -865,6 +868,13 @@ export function Messages({ defaultTab = 'criar' }) {
                 </Select>
                 <Input label="Horário" type="time" value={autoForm.timeOfDay} onChange={(e) => setAutoForm((f) => ({ ...f, timeOfDay: e.target.value }))} />
               </div>
+            )}
+
+            {autoForm.frequency !== 'now' && (
+              <Select label="Status" value={autoForm.status} onChange={(e) => setAutoForm((f) => ({ ...f, status: e.target.value }))}>
+                <option value="ativa">Ativo (vai disparar)</option>
+                <option value="pausada">Inativo (pausado)</option>
+              </Select>
             )}
 
             <div>
@@ -1181,6 +1191,10 @@ export function Messages({ defaultTab = 'criar' }) {
                       <Input label="Horário" type="time" value={cadStep.timeOfDay} onChange={(e) => setCadStep((f) => ({ ...f, timeOfDay: e.target.value }))} />
                     </div>
                   )}
+                  <Select label="Status" value={cadStep.status} onChange={(e) => setCadStep((f) => ({ ...f, status: e.target.value }))}>
+                    <option value="ativa">Ativo (vai disparar)</option>
+                    <option value="pausada">Inativo (pausado)</option>
+                  </Select>
                   <Button className="w-full gap-2" onClick={addStepToCadence}>
                     <Plus className="h-4 w-4" /> Adicionar à cadência
                   </Button>
