@@ -1,4 +1,5 @@
 const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_TIMEOUT_MS || 25000)
+const GROUPS_TIMEOUT_MS = Number(process.env.EVOLUTION_GROUPS_TIMEOUT_MS || 120000)
 const QRCode = require("qrcode")
 
 function ensureConfig() {
@@ -44,10 +45,10 @@ function normalizeWebhook(input) {
   }
 }
 
-async function requestEvolution(path, { method = "GET", body } = {}) {
+async function requestEvolution(path, { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   ensureConfig()
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
     const res = await fetch(`${normalizeBaseUrl(process.env.EVOLUTION_BASE_URL)}${path}`, {
@@ -75,6 +76,14 @@ async function requestEvolution(path, { method = "GET", body } = {}) {
       throw err
     }
     return data
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      const e = new Error(`A Evolution não respondeu a tempo (timeout ${Math.round(timeoutMs / 1000)}s). A primeira busca após conectar costuma ser lenta; tente de novo em alguns segundos.`)
+      e.code = "EVOLUTION_TIMEOUT"
+      e.retryable = true
+      throw e
+    }
+    throw err
   } finally {
     clearTimeout(timer)
   }
@@ -221,7 +230,7 @@ async function getConnectionState(instanceName) {
 async function fetchAllGroups(instanceName, { getParticipants = false } = {}) {
   return requestEvolution(
     `/group/fetchAllGroups/${encodeURIComponent(instanceName)}?getParticipants=${getParticipants ? "true" : "false"}`,
-    { method: "GET" },
+    { method: "GET", timeoutMs: GROUPS_TIMEOUT_MS },
   )
 }
 

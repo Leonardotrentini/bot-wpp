@@ -444,7 +444,22 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
   })
 
   try {
-    const payload = await fetchAllGroups(conn.instanceName, { getParticipants: false })
+    const maxAttempts = Number(process.env.GROUP_DISCOVER_MAX_ATTEMPTS || 3)
+    let payload
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        payload = await fetchAllGroups(conn.instanceName, { getParticipants: false })
+        break
+      } catch (err) {
+        const retryable = err?.code === "EVOLUTION_TIMEOUT" || err?.retryable
+        if (!retryable || attempt >= maxAttempts) throw err
+        await updateConnectionSync(conn.userId, {
+          groupSyncStatus: "DISCOVERING_GROUPS",
+          groupSyncMessage: `A Evolution está demorando (tentativa ${attempt}/${maxAttempts}). A primeira busca após conectar é mais lenta; aguardando para tentar de novo…`,
+        })
+        await wait(5000)
+      }
+    }
     const realGroups = normalizeEvolutionGroups(payload)
       .map((g) => mapEvolutionGroup(g, conn.instanceName))
       .filter((g) => g.groupJid)
