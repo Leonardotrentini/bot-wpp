@@ -174,7 +174,8 @@ export function Groups() {
                 Mapeamento: {sync.status === 'GROUPS_FOUND' ? 'grupos encontrados' : sync.status === 'RATE_LIMITED' ? 'em espera' : sync.status?.toLowerCase?.() || 'pendente'}
               </p>
               <p className="mt-1 text-xs text-stone-400">{sync.message || 'Clique em Procurar grupos para mapear sua conta sem baixar mensagens.'}</p>
-              {sync.retryAfter && (
+              {sync.error && <p className="mt-1 break-words text-xs text-red-400">Detalhe do erro: {sync.error}</p>}
+              {sync.status === 'RATE_LIMITED' && sync.retryAfter && (
                 <p className="mt-1 text-xs text-amber-300">
                   Próxima tentativa: {new Date(sync.retryAfter).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                 </p>
@@ -198,6 +199,7 @@ export function Groups() {
                 Importando mensagens — {imp.done}/{imp.total} grupos {importActive ? 'carregando…' : ''}
               </p>
               <p className="mt-1 text-xs text-stone-400">{imp.message || `Baixando os últimos ${imp.backfillDays || 2} dias, um grupo por vez.`}</p>
+              {imp.error && <p className="mt-1 break-words text-xs text-red-400">Detalhe do erro: {imp.error}</p>}
               {imp.retryAfter && imp.status === 'RATE_LIMITED' && (
                 <p className="mt-1 text-xs text-amber-300">
                   Pausado por limite do WhatsApp. Retomar após {new Date(imp.retryAfter).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}

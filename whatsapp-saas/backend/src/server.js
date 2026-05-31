@@ -409,7 +409,7 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
   const now = new Date()
   const cachedCount = await prisma.whatsAppGroup.count({ where: { userId: conn.userId } })
 
-  if (conn.groupSyncRetryAfter && conn.groupSyncRetryAfter > now) {
+  if (conn.groupSyncStatus === "RATE_LIMITED" && conn.groupSyncRetryAfter && conn.groupSyncRetryAfter > now) {
     return {
       skipped: true,
       reason: "backoff",
@@ -510,6 +510,7 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
       groupSyncProgress: cachedCount ? 90 : 45,
       groupSyncMessage: "Não foi possível procurar grupos agora.",
       groupSyncError: err?.message || "Erro ao procurar grupos",
+      groupSyncRetryAfter: null,
     })
     throw err
   }
@@ -825,7 +826,7 @@ app.post("/api/groups/discover", authMiddleware, async (req, res) => {
       })
     }
 
-    if (conn.groupSyncRetryAfter && conn.groupSyncRetryAfter > now) {
+    if (conn.groupSyncStatus === "RATE_LIMITED" && conn.groupSyncRetryAfter && conn.groupSyncRetryAfter > now) {
       return res.status(202).json({
         groups: cachedGroups,
         sync: getSyncPayload(conn, cachedGroups.length),
