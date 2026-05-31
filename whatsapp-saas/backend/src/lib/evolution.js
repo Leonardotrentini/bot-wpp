@@ -41,6 +41,7 @@ function normalizeWebhook(input) {
       "GROUP_UPDATE",
       "GROUP_PARTICIPANTS_UPDATE",
       "MESSAGES_UPSERT",
+      "MESSAGES_UPDATE",
     ],
   }
 }

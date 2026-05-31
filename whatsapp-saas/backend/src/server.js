@@ -1075,11 +1075,23 @@ app.get("/api/analytics", authMiddleware, (req, res) => {
 
 // ===================== Mensagens reais + biblioteca + automações =====================
 
-const MESSAGE_SEND_GROUP_DELAY_MS = Number(process.env.MESSAGE_SEND_GROUP_DELAY_MS || 1500)
+const MESSAGE_SEND_GROUP_DELAY_MS = Number(process.env.MESSAGE_SEND_GROUP_DELAY_MS || 3000)
+const MESSAGE_SEND_JITTER_MS = Number(process.env.MESSAGE_SEND_JITTER_MS || 4000)
+const MESSAGE_SEND_RETRIES = Number(process.env.MESSAGE_SEND_RETRIES || 1)
+const MESSAGE_SEND_RETRY_DELAY_MS = Number(process.env.MESSAGE_SEND_RETRY_DELAY_MS || 4000)
 const MEDIA_MAX_BASE64_LEN = Number(process.env.MEDIA_MAX_BASE64_LEN || 24_000_000) // ~16MB binário
 const ENABLE_SCHEDULER = process.env.ENABLE_SCHEDULER !== "false"
+const SCHEDULER_CATCHUP_HOURS = Number(process.env.SCHEDULER_CATCHUP_HOURS || 6)
 const SP_OFFSET = "-03:00" // America/Sao_Paulo (sem horário de verão)
 const schedulerLock = new Set()
+
+function sendDelayWithJitter() {
+  return MESSAGE_SEND_GROUP_DELAY_MS + Math.floor(Math.random() * Math.max(0, MESSAGE_SEND_JITTER_MS))
+}
+
+function extractProviderId(resp) {
+  return resp?.key?.id || resp?.message?.key?.id || resp?.id || null
+}
 
 function stripDataUrlPrefix(b64) {
   if (!b64) return b64
@@ -1130,28 +1142,58 @@ async function resolveGroupName(userId, groupJid) {
 
 async function deliverToGroup(instanceName, groupJid, content) {
   if (content.mediaType === "image" || content.mediaType === "video") {
-    await sendMedia(instanceName, groupJid, {
+    return sendMedia(instanceName, groupJid, {
       mediatype: content.mediaType,
       media: stripDataUrlPrefix(content.mediaBase64),
       mimetype: content.mediaMime || undefined,
       caption: content.body || undefined,
       fileName: content.mediaName || undefined,
     })
-  } else {
-    await sendText(instanceName, groupJid, content.body)
+  }
+  return sendText(instanceName, groupJid, content.body)
+}
+
+function isRetryableSendError(err) {
+  if (err?.code === "EVOLUTION_RATE_LIMIT") return false // não insistir em rate-limit
+  if (err?.code === "VALIDATION_ERROR") return false
+  return true
+}
+
+async function deliverWithRetry(instanceName, groupJid, content) {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await deliverToGroup(instanceName, groupJid, content)
+    } catch (err) {
+      if (attempt >= MESSAGE_SEND_RETRIES || !isRetryableSendError(err)) throw err
+      attempt += 1
+      await wait(MESSAGE_SEND_RETRY_DELAY_MS)
+    }
   }
 }
 
-async function dispatchMessage({ userId, instanceName, groupJids, content, automationId = null }) {
+async function dispatchMessage({ userId, instanceName, groupJids, content, automationId = null, onProgress = null }) {
   const results = []
+  let sent = 0
+  let failed = 0
   for (const [index, groupJid] of groupJids.entries()) {
     const groupName = await resolveGroupName(userId, groupJid)
     try {
-      await deliverToGroup(instanceName, groupJid, content)
+      const resp = await deliverWithRetry(instanceName, groupJid, content)
       await prisma.outboundMessage.create({
-        data: { userId, automationId, groupJid, groupName, body: content.body || null, mediaType: content.mediaType, status: "entregue" },
+        data: {
+          userId,
+          automationId,
+          groupJid,
+          groupName,
+          body: content.body || null,
+          mediaType: content.mediaType,
+          status: "enviado",
+          providerMessageId: extractProviderId(resp),
+        },
       })
-      results.push({ groupJid, groupName, status: "entregue" })
+      sent += 1
+      results.push({ groupJid, groupName, status: "enviado" })
     } catch (err) {
       await prisma.outboundMessage.create({
         data: {
@@ -1165,11 +1207,33 @@ async function dispatchMessage({ userId, instanceName, groupJids, content, autom
           error: (err?.message || "erro").slice(0, 300),
         },
       })
+      failed += 1
       results.push({ groupJid, groupName, status: "falhou", error: err?.message || "erro" })
     }
-    if (index < groupJids.length - 1) await wait(MESSAGE_SEND_GROUP_DELAY_MS)
+    if (onProgress) await onProgress({ done: index + 1, sent, failed })
+    if (index < groupJids.length - 1) await wait(sendDelayWithJitter())
   }
   return results
+}
+
+async function runSendJob(jobId, { userId, instanceName, groupJids, content, automationId = null }) {
+  try {
+    await dispatchMessage({
+      userId,
+      instanceName,
+      groupJids,
+      content,
+      automationId,
+      onProgress: async ({ done, sent, failed }) => {
+        await prisma.sendJob.update({ where: { id: jobId }, data: { done, sent, failed } }).catch(() => {})
+      },
+    })
+    await prisma.sendJob.update({ where: { id: jobId }, data: { status: "done" } }).catch(() => {})
+  } catch (err) {
+    await prisma.sendJob
+      .update({ where: { id: jobId }, data: { status: "error", error: (err?.message || "erro").slice(0, 300) } })
+      .catch(() => {})
+  }
 }
 
 function spParts(date) {
@@ -1244,6 +1308,19 @@ function getTemplatePayload(t) {
   }
 }
 
+function getJobPayload(j) {
+  return {
+    id: j.id,
+    label: j.label,
+    total: j.total,
+    done: j.done,
+    sent: j.sent,
+    failed: j.failed,
+    status: j.status,
+    error: j.error,
+  }
+}
+
 const templateBodySchema = z.object({
   name: z.string().min(1),
   body: z.string().optional(),
@@ -1315,14 +1392,16 @@ app.post("/api/messages/send", authMiddleware, async (req, res) => {
     const invalid = validateContent(content)
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
 
-    const results = await dispatchMessage({
+    const job = await prisma.sendJob.create({
+      data: { userId: req.user.sub, label: "Envio imediato", total: parsed.data.groupIds.length },
+    })
+    void runSendJob(job.id, {
       userId: req.user.sub,
       instanceName: conn.instanceName,
       groupJids: parsed.data.groupIds,
       content,
     })
-    const sent = results.filter((r) => r.status === "entregue").length
-    return res.status(201).json({ results, sent, failed: results.length - sent })
+    return res.status(202).json({ job: getJobPayload(job) })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
@@ -1334,19 +1413,36 @@ app.post("/api/messages/send", authMiddleware, async (req, res) => {
   }
 })
 
+app.get("/api/messages/jobs/:id", authMiddleware, async (req, res) => {
+  const job = await prisma.sendJob.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!job) return res.status(404).json({ error: "NOT_FOUND", message: "Job não encontrado." })
+  res.json({ job: getJobPayload(job) })
+})
+
 app.get("/api/messages/history", authMiddleware, async (req, res) => {
-  const rows = await prisma.outboundMessage.findMany({
-    where: { userId: req.user.sub },
-    orderBy: { sentAt: "desc" },
-    take: 100,
-  })
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50))
+  const offset = Math.max(0, Number(req.query.offset) || 0)
+  const where = { userId: req.user.sub }
+  if (req.query.status && ["enviado", "entregue", "lido", "falhou"].includes(req.query.status)) {
+    where.status = req.query.status
+  }
+  if (req.query.group) {
+    where.groupName = { contains: String(req.query.group), mode: "insensitive" }
+  }
+  const [rows, total] = await Promise.all([
+    prisma.outboundMessage.findMany({ where, orderBy: { sentAt: "desc" }, take: limit, skip: offset }),
+    prisma.outboundMessage.count({ where }),
+  ])
   res.json({
+    total,
+    limit,
+    offset,
     items: rows.map((m) => ({
       id: m.id,
       group: m.groupName,
       body: m.body,
       mediaType: m.mediaType,
-      status: m.status === "entregue" ? "entregue" : "falhou",
+      status: m.status,
       error: m.error,
       sentAt: m.sentAt.toISOString(),
     })),
@@ -1410,15 +1506,17 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
           lastRunAt: new Date(),
         },
       })
-      const results = await dispatchMessage({
+      const job = await prisma.sendJob.create({
+        data: { userId: req.user.sub, label: parsed.data.name, total: parsed.data.groupIds.length },
+      })
+      void runSendJob(job.id, {
         userId: req.user.sub,
         instanceName: conn.instanceName,
         groupJids: parsed.data.groupIds,
         content,
         automationId: created.id,
       })
-      const sent = results.filter((r) => r.status === "entregue").length
-      return res.status(201).json({ automation: getAutomationPayload(created), results, sent, failed: results.length - sent })
+      return res.status(202).json({ automation: getAutomationPayload(created), job: getJobPayload(job) })
     }
 
     const draft = {
@@ -1476,6 +1574,75 @@ app.patch("/api/automations/:id", authMiddleware, async (req, res) => {
   res.json({ automation: getAutomationPayload(updated) })
 })
 
+app.put("/api/automations/:id", authMiddleware, async (req, res) => {
+  try {
+    const existing = await prisma.automation.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+    if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Automação não encontrada." })
+
+    const schema = z.object({
+      name: z.string().min(1),
+      groupIds: z.array(z.string()).min(1),
+      templateId: z.string().optional(),
+      body: z.string().optional(),
+      mediaType: z.enum(["none", "image", "video"]).optional(),
+      mediaBase64: z.string().optional().nullable(),
+      mediaMime: z.string().optional().nullable(),
+      mediaName: z.string().optional().nullable(),
+      frequency: z.enum(["once", "daily", "weekly"]),
+      scheduledAt: z.string().optional().nullable(),
+      timeOfDay: z.string().optional().nullable(),
+      weekday: z.number().int().min(0).max(6).optional().nullable(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
+
+    const content = await resolveContentFromBody(req.user.sub, parsed.data)
+    const invalid = validateContent(content)
+    if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+
+    const groupNames = []
+    for (const jid of parsed.data.groupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
+
+    const scheduledAt = parsed.data.frequency === "once" ? parseScheduledAt(parsed.data.scheduledAt) : null
+    if (parsed.data.frequency === "once" && !scheduledAt) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe data e hora válidas para o agendamento único." })
+    }
+    if ((parsed.data.frequency === "daily" || parsed.data.frequency === "weekly") && !parsed.data.timeOfDay) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe o horário do disparo." })
+    }
+
+    const draft = {
+      frequency: parsed.data.frequency,
+      scheduledAt,
+      timeOfDay: parsed.data.timeOfDay || null,
+      weekday: Number.isInteger(parsed.data.weekday) ? parsed.data.weekday : null,
+    }
+
+    const updated = await prisma.automation.update({
+      where: { id: existing.id },
+      data: {
+        name: parsed.data.name,
+        status: "ativa",
+        groupJids: parsed.data.groupIds,
+        groupNames,
+        templateId: parsed.data.templateId || null,
+        ...content,
+        frequency: parsed.data.frequency,
+        scheduledAt,
+        timeOfDay: draft.timeOfDay,
+        weekday: draft.weekday,
+        nextRunAt: computeNextRun(draft),
+      },
+    })
+    return res.json({ automation: getAutomationPayload(updated) })
+  } catch (err) {
+    if (err?.code === "TEMPLATE_NOT_FOUND") {
+      return res.status(404).json({ error: "TEMPLATE_NOT_FOUND", message: err.message })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
 app.delete("/api/automations/:id", authMiddleware, async (req, res) => {
   const existing = await prisma.automation.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
   if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Automação não encontrada." })
@@ -1490,6 +1657,8 @@ async function processDueAutomations() {
     take: 20,
   })
 
+  const catchupMs = SCHEDULER_CATCHUP_HOURS * 3600 * 1000
+
   for (const a of due) {
     if (schedulerLock.has(a.id)) continue
     schedulerLock.add(a.id)
@@ -1501,6 +1670,12 @@ async function processDueAutomations() {
         data: { nextRunAt: next, lastRunAt: now, status: newStatus },
       })
       if (claim.count === 0) continue
+
+      // Catch-up: ignora disparos muito atrasados (ex.: servidor ficou offline)
+      if (a.nextRunAt && now.getTime() - new Date(a.nextRunAt).getTime() > catchupMs) {
+        console.warn("[scheduler] pulando disparo atrasado:", a.id)
+        continue
+      }
 
       const conn = await prisma.whatsAppConnection.findUnique({ where: { userId: a.userId } })
       if (!conn?.instanceName || !conn.connected) continue
@@ -1746,6 +1921,33 @@ function handleEvolutionError(res, err) {
   })
 }
 
+/** Atualiza status de entrega (ack) das mensagens enviadas, por messageId. */
+async function updateOutboundAckFromWebhook(instanceName, body) {
+  const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName }, select: { userId: true } })
+  if (!conn) return
+  const raw = body?.data ?? body
+  const updates = Array.isArray(raw) ? raw : [raw]
+  for (const u of updates) {
+    const messageId = u?.keyId || u?.key?.id || u?.id || u?.update?.key?.id
+    const statusRaw = String(u?.status || u?.update?.status || "").toUpperCase()
+    if (!messageId || !statusRaw) continue
+    let status = null
+    if (statusRaw.includes("READ") || statusRaw === "4") status = "lido"
+    else if (statusRaw.includes("DELIVERY") || statusRaw === "3") status = "entregue"
+    else if (statusRaw.includes("ERROR") || statusRaw.includes("FAIL")) status = "falhou"
+    if (!status) continue
+    // Não rebaixa um status já mais avançado (lido > entregue > enviado)
+    const rank = { enviado: 1, entregue: 2, lido: 3, falhou: 1 }
+    const current = await prisma.outboundMessage.findFirst({
+      where: { userId: conn.userId, providerMessageId: messageId },
+      select: { id: true, status: true },
+    })
+    if (!current) continue
+    if ((rank[status] || 0) <= (rank[current.status] || 0) && status !== "falhou") continue
+    await prisma.outboundMessage.update({ where: { id: current.id }, data: { status } }).catch(() => {})
+  }
+}
+
 app.post("/api/evolution/webhook", async (req, res) => {
   try {
     if (!isValidEvolutionWebhook(req)) {
@@ -1762,6 +1964,8 @@ app.post("/api/evolution/webhook", async (req, res) => {
       await updateGroupsFromWebhook(instanceName, req.body)
     } else if (event === "MESSAGES_UPSERT") {
       await storeIncomingMessages(instanceName, req.body)
+    } else if (event === "MESSAGES_UPDATE") {
+      await updateOutboundAckFromWebhook(instanceName, req.body)
     }
 
     return res.json({ ok: true })

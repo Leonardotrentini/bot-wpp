@@ -1,5 +1,22 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Film, Image as ImageIcon, FileText, Pencil, Plus, Send, Trash2, X, Clock, PauseCircle, PlayCircle, Zap } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Film,
+  Image as ImageIcon,
+  FileText,
+  Pencil,
+  Plus,
+  Send,
+  Trash2,
+  X,
+  Clock,
+  PauseCircle,
+  PlayCircle,
+  Zap,
+  Search,
+  Copy,
+  CheckCheck,
+  AlertTriangle,
+} from 'lucide-react'
 import { Tabs } from '../../components/common/Tabs.jsx'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -16,15 +33,18 @@ import {
   deleteTemplate,
   getAutomations,
   createAutomation,
+  putAutomation,
   updateAutomation,
   deleteAutomation,
   getMessageHistory,
+  getSendJob,
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 const IMAGE_MAX = 5 * 1024 * 1024
 const VIDEO_MAX = 16 * 1024 * 1024
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+const HIST_PAGE_SIZE = 20
 
 function fileKind(file) {
   if (file.type.startsWith('image/')) return 'image'
@@ -68,12 +88,49 @@ function fmtDate(iso) {
   }
 }
 
+function toLocalInput(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const sp = new Date(d.getTime() - 3 * 3600 * 1000)
+  return sp.toISOString().slice(0, 16)
+}
+
 function frequencyLabel(a) {
   if (a.frequency === 'now') return 'Envio imediato'
   if (a.frequency === 'once') return `Uma vez • ${fmtDate(a.scheduledAt)}`
   if (a.frequency === 'daily') return `Diariamente • ${a.timeOfDay}`
   if (a.frequency === 'weekly') return `Toda ${WEEKDAYS[a.weekday ?? 0]} • ${a.timeOfDay}`
   return a.frequency
+}
+
+function statusBadge(status) {
+  if (status === 'lido') return { variant: 'success', label: 'lido' }
+  if (status === 'entregue') return { variant: 'success', label: 'entregue' }
+  if (status === 'falhou') return { variant: 'warning', label: 'falhou' }
+  return { variant: 'muted', label: status || 'enviado' }
+}
+
+function PreviewBubble({ content }) {
+  const hasMedia = content.mediaType === 'image' || content.mediaType === 'video'
+  if (!hasMedia && !content.body?.trim()) {
+    return <p className="text-sm text-stone-500">A prévia da mensagem aparece aqui.</p>
+  }
+  return (
+    <div className="max-w-xs rounded-2xl rounded-tl-sm bg-[#075E54]/30 border border-[#128C7E]/30 p-2.5">
+      {content.mediaType === 'image' && content.mediaBase64 && (
+        <img src={content.mediaBase64} alt="" className="mb-2 max-h-44 w-full rounded-lg object-cover" />
+      )}
+      {content.mediaType === 'video' && content.mediaBase64 && (
+        <video src={content.mediaBase64} controls className="mb-2 max-h-44 w-full rounded-lg" />
+      )}
+      {content.body?.trim() ? (
+        <p className="whitespace-pre-wrap text-sm text-stone-100">{content.body}</p>
+      ) : (
+        <p className="text-xs italic text-stone-400">(sem legenda)</p>
+      )}
+    </div>
+  )
 }
 
 export function Messages({ defaultTab = 'criar' }) {
@@ -83,30 +140,102 @@ export function Messages({ defaultTab = 'criar' }) {
   const [templates, setTemplates] = useState([])
   const [automations, setAutomations] = useState([])
   const [history, setHistory] = useState([])
+  const [histTotal, setHistTotal] = useState(0)
+  const [histOffset, setHistOffset] = useState(0)
+  const [histFilter, setHistFilter] = useState({ status: '', group: '' })
+  const [loadingInit, setLoadingInit] = useState(true)
 
   const [tplModal, setTplModal] = useState(false)
   const [tplForm, setTplForm] = useState(emptyTemplateForm)
   const [tplSaving, setTplSaving] = useState(false)
   const [confirmTpl, setConfirmTpl] = useState(null)
+  const [tplSearch, setTplSearch] = useState('')
+  const [tplTypeFilter, setTplTypeFilter] = useState('all')
 
   const [autoForm, setAutoForm] = useState(emptyAutomationForm)
   const [autoSaving, setAutoSaving] = useState(false)
+  const [editingAutoId, setEditingAutoId] = useState(null)
   const [confirmAuto, setConfirmAuto] = useState(null)
+  const [groupSearch, setGroupSearch] = useState('')
+  const [sendConfirm, setSendConfirm] = useState(false)
+
+  const [sendJobId, setSendJobId] = useState(null)
+  const [sendJob, setSendJob] = useState(null)
+  const formRef = useRef(null)
+
+  const refreshTemplates = useCallback(() => getTemplates().then((r) => setTemplates(r.data.templates || [])), [])
+  const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
+
+  const refreshHistory = useCallback(
+    (offset = 0) => {
+      const params = { limit: HIST_PAGE_SIZE, offset }
+      if (histFilter.status) params.status = histFilter.status
+      if (histFilter.group) params.group = histFilter.group
+      return getMessageHistory(params).then((r) => {
+        setHistory(r.data.items || [])
+        setHistTotal(r.data.total || 0)
+        setHistOffset(offset)
+      })
+    },
+    [histFilter],
+  )
 
   useEffect(() => {
     setTab(defaultTab)
   }, [defaultTab])
 
-  const refreshTemplates = useCallback(() => getTemplates().then((r) => setTemplates(r.data.templates || [])), [])
-  const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
-  const refreshHistory = useCallback(() => getMessageHistory().then((r) => setHistory(r.data.items || [])), [])
+  useEffect(() => {
+    Promise.all([
+      getGroups().then((r) => setGroups((r.data.groups || []).filter((g) => g.status === 'ativo'))),
+      refreshTemplates(),
+      refreshAutomations(),
+      refreshHistory(0),
+    ]).finally(() => setLoadingInit(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
-    getGroups().then((r) => setGroups((r.data.groups || []).filter((g) => g.status === 'ativo')))
-    refreshTemplates()
-    refreshAutomations()
-    refreshHistory()
-  }, [refreshTemplates, refreshAutomations, refreshHistory])
+    refreshHistory(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [histFilter])
+
+  // Polling do job de envio
+  useEffect(() => {
+    if (!sendJobId) return undefined
+    let active = true
+    const tick = async () => {
+      try {
+        const r = await getSendJob(sendJobId)
+        if (!active) return
+        setSendJob(r.data.job)
+        if (r.data.job.status !== 'running') {
+          active = false
+          clearInterval(iv)
+          if (r.data.job.status === 'done') {
+            if (r.data.job.failed > 0) toast.error(`Envio concluído: ${r.data.job.sent} ok, ${r.data.job.failed} falha(s).`)
+            else toast.success(`Mensagem enviada para ${r.data.job.sent} grupo(s).`)
+          } else {
+            toast.error('Falha no envio.')
+          }
+          refreshHistory(0)
+          refreshAutomations()
+          setTimeout(() => {
+            setSendJobId(null)
+            setSendJob(null)
+          }, 5000)
+        }
+      } catch {
+        /* ignore polling errors */
+      }
+    }
+    const iv = setInterval(tick, 1500)
+    tick()
+    return () => {
+      active = false
+      clearInterval(iv)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendJobId])
 
   // ---------- Criar mensagem (biblioteca) ----------
   function openNewTemplate() {
@@ -150,14 +279,8 @@ export function Messages({ defaultTab = 'criar' }) {
   }
 
   async function saveTemplate() {
-    if (!tplForm.name.trim()) {
-      toast.error('Dê um nome para a mensagem.')
-      return
-    }
-    if (tplForm.mediaType === 'none' && !tplForm.body.trim()) {
-      toast.error('Escreva um texto ou anexe uma mídia.')
-      return
-    }
+    if (!tplForm.name.trim()) return toast.error('Dê um nome para a mensagem.')
+    if (tplForm.mediaType === 'none' && !tplForm.body.trim()) return toast.error('Escreva um texto ou anexe uma mídia.')
     setTplSaving(true)
     try {
       const payload = {
@@ -180,6 +303,23 @@ export function Messages({ defaultTab = 'criar' }) {
     }
   }
 
+  async function duplicateTemplate(t) {
+    try {
+      await createTemplate({
+        name: `${t.name} (cópia)`,
+        body: t.body,
+        mediaType: t.mediaType,
+        mediaBase64: t.mediaBase64,
+        mediaMime: t.mediaMime,
+        mediaName: t.mediaName,
+      })
+      toast.success('Mensagem duplicada.')
+      refreshTemplates()
+    } catch {
+      toast.error('Falha ao duplicar.')
+    }
+  }
+
   async function removeTemplate() {
     if (!confirmTpl) return
     try {
@@ -193,7 +333,30 @@ export function Messages({ defaultTab = 'criar' }) {
     }
   }
 
+  const filteredTemplates = templates.filter((t) => {
+    if (tplTypeFilter !== 'all') {
+      if (tplTypeFilter === 'text' && t.mediaType !== 'none') return false
+      if (tplTypeFilter !== 'text' && t.mediaType !== tplTypeFilter) return false
+    }
+    if (tplSearch.trim()) {
+      const q = tplSearch.toLowerCase()
+      return t.name.toLowerCase().includes(q) || (t.body || '').toLowerCase().includes(q)
+    }
+    return true
+  })
+
   // ---------- Automações ----------
+  function currentAutoContent() {
+    if (autoForm.source === 'template') {
+      const t = templates.find((x) => x.id === autoForm.templateId)
+      if (!t) return { body: '', mediaType: 'none', mediaBase64: null }
+      return { body: t.body, mediaType: t.mediaType, mediaBase64: t.mediaBase64 }
+    }
+    return { body: autoForm.body, mediaType: 'none', mediaBase64: null }
+  }
+
+  const filteredGroups = groups.filter((g) => (groupSearch.trim() ? g.name.toLowerCase().includes(groupSearch.toLowerCase()) : true))
+
   function toggleAutoGroup(id) {
     setAutoForm((f) => ({
       ...f,
@@ -201,41 +364,104 @@ export function Messages({ defaultTab = 'criar' }) {
     }))
   }
 
-  async function saveAutomation() {
-    const f = autoForm
-    if (!f.name.trim()) return toast.error('Dê um nome para a automação.')
-    if (!f.groupIds.length) return toast.error('Selecione ao menos um grupo.')
-    if (f.source === 'template' && !f.templateId) return toast.error('Selecione uma mensagem da biblioteca.')
-    if (f.source === 'inline' && !f.body.trim()) return toast.error('Escreva o texto da mensagem.')
-    if (f.frequency === 'once' && !f.scheduledAt) return toast.error('Informe a data e hora do agendamento.')
+  function selectAllGroups() {
+    setAutoForm((f) => ({ ...f, groupIds: [...new Set([...f.groupIds, ...filteredGroups.map((g) => g.id)])] }))
+  }
 
+  function clearGroups() {
+    setAutoForm((f) => ({ ...f, groupIds: [] }))
+  }
+
+  function resetAutoForm() {
+    setAutoForm(emptyAutomationForm())
+    setEditingAutoId(null)
+    setGroupSearch('')
+  }
+
+  function openEditAuto(a) {
+    setEditingAutoId(a.id)
+    setAutoForm({
+      name: a.name,
+      source: a.templateId ? 'template' : 'inline',
+      templateId: a.templateId || '',
+      body: a.body || '',
+      groupIds: a.groupJids || [],
+      frequency: a.frequency === 'now' ? 'once' : a.frequency,
+      scheduledAt: toLocalInput(a.scheduledAt),
+      timeOfDay: a.timeOfDay || '09:00',
+      weekday: a.weekday ?? 1,
+    })
+    if (tab !== 'automacoes') setTab('automacoes')
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function validateAutoForm() {
+    const f = autoForm
+    if (!f.name.trim()) return 'Dê um nome para a automação.'
+    if (!f.groupIds.length) return 'Selecione ao menos um grupo.'
+    if (f.source === 'template' && !f.templateId) return 'Selecione uma mensagem da biblioteca.'
+    if (f.source === 'inline' && !f.body.trim()) return 'Escreva o texto da mensagem.'
+    if (f.frequency === 'once' && !f.scheduledAt) return 'Informe a data e hora do agendamento.'
+    return null
+  }
+
+  function buildAutoPayload() {
+    const f = autoForm
+    const payload = { name: f.name.trim(), groupIds: f.groupIds, frequency: f.frequency }
+    if (f.source === 'template') payload.templateId = f.templateId
+    else payload.body = f.body
+    if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
+    if (f.frequency === 'daily' || f.frequency === 'weekly') payload.timeOfDay = f.timeOfDay
+    if (f.frequency === 'weekly') payload.weekday = Number(f.weekday)
+    return payload
+  }
+
+  function onSubmitAuto() {
+    const err = validateAutoForm()
+    if (err) return toast.error(err)
+    if (autoForm.frequency === 'now') {
+      setSendConfirm(true)
+      return
+    }
+    saveScheduledAutomation()
+  }
+
+  async function saveScheduledAutomation() {
     setAutoSaving(true)
     try {
-      const payload = {
-        name: f.name.trim(),
-        groupIds: f.groupIds,
-        frequency: f.frequency,
-      }
-      if (f.source === 'template') payload.templateId = f.templateId
-      else payload.body = f.body
-      if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
-      if (f.frequency === 'daily' || f.frequency === 'weekly') payload.timeOfDay = f.timeOfDay
-      if (f.frequency === 'weekly') payload.weekday = Number(f.weekday)
-
-      const res = await createAutomation(payload)
-      if (f.frequency === 'now') {
-        const sent = res?.data?.sent ?? 0
-        const failed = res?.data?.failed ?? 0
-        if (failed > 0) toast.error(`Enviado para ${sent} grupo(s), ${failed} falharam.`)
-        else toast.success(`Mensagem enviada para ${sent} grupo(s).`)
+      const payload = buildAutoPayload()
+      if (editingAutoId) {
+        await putAutomation(editingAutoId, payload)
+        toast.success('Automação atualizada.')
       } else {
+        await createAutomation(payload)
         toast.success('Automação criada e agendada.')
       }
-      setAutoForm(emptyAutomationForm())
+      resetAutoForm()
       refreshAutomations()
-      refreshHistory()
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao criar a automação.')
+      toast.error(err?.response?.data?.message || 'Falha ao salvar a automação.')
+    } finally {
+      setAutoSaving(false)
+    }
+  }
+
+  async function confirmSendNow() {
+    setSendConfirm(false)
+    setAutoSaving(true)
+    try {
+      const res = await createAutomation(buildAutoPayload())
+      const jobId = res?.data?.job?.id
+      resetAutoForm()
+      if (jobId) {
+        setSendJob(res.data.job)
+        setSendJobId(jobId)
+      } else {
+        toast.success('Envio iniciado.')
+        refreshHistory(0)
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao enviar.')
     } finally {
       setAutoSaving(false)
     }
@@ -256,6 +482,7 @@ export function Messages({ defaultTab = 'criar' }) {
     try {
       await deleteAutomation(confirmAuto)
       toast.success('Automação removida.')
+      if (editingAutoId === confirmAuto) resetAutoForm()
       refreshAutomations()
     } catch {
       toast.error('Falha ao remover.')
@@ -264,13 +491,22 @@ export function Messages({ defaultTab = 'criar' }) {
     }
   }
 
-  const sendableTemplates = templates
+  const activeCount = automations.filter((a) => a.status === 'ativa').length
+  const previewContent = currentAutoContent()
+  const histPages = Math.ceil(histTotal / HIST_PAGE_SIZE) || 1
+  const histPage = Math.floor(histOffset / HIST_PAGE_SIZE) + 1
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-stone-50">Mensagens</h2>
-        <p className="text-sm text-stone-400 mt-1">Crie mensagens reutilizáveis e dispare em grupos com horário e frequência.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-semibold text-stone-50">Mensagens</h2>
+          <p className="text-sm text-stone-400 mt-1">Crie mensagens reutilizáveis e dispare em grupos com horário e frequência.</p>
+        </div>
+        <div className="flex gap-2 text-xs">
+          <span className="rounded-lg border border-brand-800 px-3 py-1.5 text-stone-300">{templates.length} mensagens</span>
+          <span className="rounded-lg border border-brand-800 px-3 py-1.5 text-stone-300">{activeCount} automações ativas</span>
+        </div>
       </div>
 
       <Tabs
@@ -282,49 +518,92 @@ export function Messages({ defaultTab = 'criar' }) {
         onChange={setTab}
       />
 
+      {/* Barra de progresso de envio */}
+      {sendJob && (
+        <Card className="border-accent-500/30">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-stone-100 inline-flex items-center gap-2">
+              <Send className="h-4 w-4 text-accent-400" />
+              {sendJob.label || 'Enviando'} — {sendJob.done}/{sendJob.total} grupos
+              {sendJob.failed > 0 && <span className="text-red-300">({sendJob.failed} falha)</span>}
+            </p>
+            <Badge variant={sendJob.status === 'running' ? 'warning' : sendJob.status === 'done' ? 'success' : 'muted'}>
+              {sendJob.status === 'running' ? 'enviando…' : sendJob.status === 'done' ? 'concluído' : 'erro'}
+            </Badge>
+          </div>
+          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-brand-800">
+            <div
+              className="h-full rounded-full bg-accent-500 transition-all"
+              style={{ width: `${sendJob.total ? Math.round((sendJob.done / sendJob.total) * 100) : 0}%` }}
+            />
+          </div>
+        </Card>
+      )}
+
       {tab === 'criar' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-stone-400">Sua biblioteca de mensagens (texto, imagem ou vídeo) para reutilizar nas automações.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-1 flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
+                <Input className="pl-9" placeholder="Buscar mensagem" value={tplSearch} onChange={(e) => setTplSearch(e.target.value)} />
+              </div>
+              <Select value={tplTypeFilter} onChange={(e) => setTplTypeFilter(e.target.value)} className="w-auto">
+                <option value="all">Todos os tipos</option>
+                <option value="text">Texto</option>
+                <option value="image">Imagem</option>
+                <option value="video">Vídeo</option>
+              </Select>
+            </div>
             <Button className="gap-2" onClick={openNewTemplate}>
               <Plus className="h-4 w-4" /> Nova mensagem
             </Button>
           </div>
 
-          {templates.length === 0 ? (
+          {loadingInit ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {[0, 1].map((i) => (
+                <Card key={i} className="animate-pulse">
+                  <div className="h-4 w-1/3 rounded bg-brand-800" />
+                  <div className="mt-3 h-20 w-full rounded bg-brand-800/60" />
+                </Card>
+              ))}
+            </div>
+          ) : filteredTemplates.length === 0 ? (
             <Card>
-              <p className="text-sm text-stone-400">Nenhuma mensagem ainda. Clique em "Nova mensagem" para criar a primeira.</p>
+              <p className="text-sm text-stone-400">
+                {templates.length === 0 ? 'Nenhuma mensagem ainda. Clique em "Nova mensagem" para criar a primeira.' : 'Nenhuma mensagem encontrada com esse filtro.'}
+              </p>
             </Card>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {templates.map((t) => (
+              {filteredTemplates.map((t) => (
                 <Card key={t.id} className="flex flex-col gap-3">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       {t.mediaType === 'image' ? (
-                        <ImageIcon className="h-4 w-4 text-accent-400" />
+                        <ImageIcon className="h-4 w-4 shrink-0 text-accent-400" />
                       ) : t.mediaType === 'video' ? (
-                        <Film className="h-4 w-4 text-accent-400" />
+                        <Film className="h-4 w-4 shrink-0 text-accent-400" />
                       ) : (
-                        <FileText className="h-4 w-4 text-accent-400" />
+                        <FileText className="h-4 w-4 shrink-0 text-accent-400" />
                       )}
-                      <h3 className="font-semibold text-stone-50">{t.name}</h3>
+                      <h3 className="truncate font-semibold text-stone-50">{t.name}</h3>
                     </div>
-                    <div className="flex gap-1">
-                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Editar" onClick={() => openEditTemplate(t)}>
+                    <div className="flex gap-1 shrink-0">
+                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Editar" title="Editar" onClick={() => openEditTemplate(t)}>
                         <Pencil className="h-4 w-4" />
                       </button>
-                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-red-500/10 hover:text-red-300" aria-label="Excluir" onClick={() => setConfirmTpl(t.id)}>
+                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Duplicar" title="Duplicar" onClick={() => duplicateTemplate(t)}>
+                        <Copy className="h-4 w-4" />
+                      </button>
+                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-red-500/10 hover:text-red-300" aria-label="Excluir" title="Excluir" onClick={() => setConfirmTpl(t.id)}>
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
-                  {t.mediaType === 'image' && t.mediaBase64 && (
-                    <img src={t.mediaBase64} alt="" className="h-28 w-full rounded-lg object-cover border border-brand-800" />
-                  )}
-                  {t.mediaType === 'video' && t.mediaBase64 && (
-                    <video src={t.mediaBase64} controls className="h-28 w-full rounded-lg border border-brand-800" />
-                  )}
+                  {t.mediaType === 'image' && t.mediaBase64 && <img src={t.mediaBase64} alt="" className="h-28 w-full rounded-lg object-cover border border-brand-800" />}
+                  {t.mediaType === 'video' && t.mediaBase64 && <video src={t.mediaBase64} controls className="h-28 w-full rounded-lg border border-brand-800" />}
                   {t.body && <p className="text-sm text-stone-400 whitespace-pre-wrap line-clamp-4">{t.body}</p>}
                 </Card>
               ))}
@@ -335,8 +614,16 @@ export function Messages({ defaultTab = 'criar' }) {
 
       {tab === 'automacoes' && (
         <div className="grid gap-6 lg:grid-cols-2">
+          <div ref={formRef}>
           <Card className="space-y-4">
-            <h3 className="font-semibold text-stone-50">Nova automação</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-stone-50">{editingAutoId ? 'Editar automação' : 'Nova automação'}</h3>
+              {editingAutoId && (
+                <button type="button" className="text-xs text-stone-400 hover:underline" onClick={resetAutoForm}>
+                  Cancelar edição
+                </button>
+              )}
+            </div>
 
             <Input label="Nome" value={autoForm.name} onChange={(e) => setAutoForm((f) => ({ ...f, name: e.target.value }))} placeholder="Ex: Lembrete da live" />
 
@@ -346,14 +633,12 @@ export function Messages({ defaultTab = 'criar' }) {
             </Select>
 
             {autoForm.source === 'template' ? (
-              sendableTemplates.length === 0 ? (
-                <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">
-                  Você ainda não tem mensagens. Crie uma na aba "Criar mensagem".
-                </p>
+              templates.length === 0 ? (
+                <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">Você ainda não tem mensagens. Crie uma na aba "Criar mensagem".</p>
               ) : (
                 <Select label="Escolha a mensagem" value={autoForm.templateId} onChange={(e) => setAutoForm((f) => ({ ...f, templateId: e.target.value }))}>
                   <option value="">— selecione —</option>
-                  {sendableTemplates.map((t) => (
+                  {templates.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name} {t.mediaType !== 'none' ? `(${t.mediaType})` : ''}
                     </option>
@@ -365,12 +650,22 @@ export function Messages({ defaultTab = 'criar' }) {
             )}
 
             <div>
-              <p className="text-sm font-medium text-stone-300 mb-2">Grupos alvo (ativos)</p>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-medium text-stone-300">Grupos alvo ({autoForm.groupIds.length} selecionados)</p>
+                <div className="flex gap-2 text-xs">
+                  <button type="button" className="text-accent-400 hover:underline" onClick={selectAllGroups}>Selecionar todos</button>
+                  <button type="button" className="text-stone-400 hover:underline" onClick={clearGroups}>Limpar</button>
+                </div>
+              </div>
+              {groups.length > 6 && (
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
+                  <Input className="pl-9" placeholder="Buscar grupo" value={groupSearch} onChange={(e) => setGroupSearch(e.target.value)} />
+                </div>
+              )}
               <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-brand-800 p-2">
-                {groups.length === 0 && (
-                  <p className="px-1 py-1 text-xs text-stone-400">Nenhum grupo ativo. Vá em Grupos e marque como ativo.</p>
-                )}
-                {groups.map((g) => (
+                {groups.length === 0 && <p className="px-1 py-1 text-xs text-stone-400">Nenhum grupo ativo. Vá em Grupos e marque como ativo.</p>}
+                {filteredGroups.map((g) => (
                   <label key={g.id} className="flex cursor-pointer items-center gap-2 text-sm text-stone-300">
                     <input type="checkbox" checked={autoForm.groupIds.includes(g.id)} onChange={() => toggleAutoGroup(g.id)} className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30" />
                     {g.name}
@@ -380,7 +675,7 @@ export function Messages({ defaultTab = 'criar' }) {
             </div>
 
             <Select label="Quando disparar" value={autoForm.frequency} onChange={(e) => setAutoForm((f) => ({ ...f, frequency: e.target.value }))}>
-              <option value="now">Enviar agora</option>
+              {!editingAutoId && <option value="now">Enviar agora</option>}
               <option value="once">Agendar (uma vez)</option>
               <option value="daily">Diariamente</option>
               <option value="weekly">Semanalmente</option>
@@ -403,48 +698,62 @@ export function Messages({ defaultTab = 'criar' }) {
               </div>
             )}
 
-            <Button className="gap-2" onClick={saveAutomation} disabled={autoSaving}>
+            <div>
+              <p className="mb-1 text-xs font-medium text-stone-400">Prévia</p>
+              <PreviewBubble content={previewContent} />
+            </div>
+
+            <Button className="gap-2" onClick={onSubmitAuto} disabled={autoSaving}>
               {autoForm.frequency === 'now' ? <Send className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
-              {autoSaving ? 'Processando…' : autoForm.frequency === 'now' ? 'Enviar agora' : 'Salvar automação'}
+              {autoSaving ? 'Processando…' : editingAutoId ? 'Salvar alterações' : autoForm.frequency === 'now' ? 'Enviar agora' : 'Salvar automação'}
             </Button>
-            {autoForm.frequency === 'daily' || autoForm.frequency === 'weekly' || autoForm.frequency === 'once' ? (
-              <p className="text-xs text-stone-500">Horário no fuso de São Paulo (UTC-3).</p>
-            ) : null}
+            {autoForm.frequency !== 'now' && <p className="text-xs text-stone-500">Horário no fuso de São Paulo (UTC-3).</p>}
           </Card>
+          </div>
 
           <div className="space-y-4">
             <Card>
-              <h3 className="font-semibold text-stone-50 mb-3">Automações salvas</h3>
-              {automations.length === 0 ? (
+              <h3 className="mb-3 font-semibold text-stone-50">Automações salvas</h3>
+              {loadingInit ? (
+                <div className="space-y-2">
+                  {[0, 1].map((i) => (
+                    <div key={i} className="h-16 animate-pulse rounded-xl bg-brand-800/50" />
+                  ))}
+                </div>
+              ) : automations.length === 0 ? (
                 <p className="text-sm text-stone-400">Nenhuma automação ainda.</p>
               ) : (
                 <div className="space-y-3">
                   {automations.map((a) => (
                     <div key={a.id} className="rounded-xl border border-brand-800 p-3">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex gap-2">
-                          <div className="rounded-lg bg-accent-500/15 p-1.5 text-accent-400 h-fit">
+                        <div className="flex gap-2 min-w-0">
+                          <div className="h-fit rounded-lg bg-accent-500/15 p-1.5 text-accent-400">
                             <Zap className="h-4 w-4" />
                           </div>
-                          <div>
-                            <p className="font-medium text-stone-50">{a.name}</p>
-                            <p className="text-xs text-stone-500 mt-0.5">{frequencyLabel(a)}</p>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-stone-50">{a.name}</p>
+                            <p className="mt-0.5 text-xs text-stone-500">{frequencyLabel(a)}</p>
                             <p className="text-xs text-stone-500">{a.groupNames?.length || 0} grupo(s)</p>
-                            {a.nextRunAt && a.status === 'ativa' && (
-                              <p className="text-xs text-accent-400/80 mt-0.5">Próximo: {fmtDate(a.nextRunAt)}</p>
-                            )}
+                            {a.body && <p className="mt-0.5 truncate text-xs text-stone-400">“{a.body}”</p>}
+                            {a.nextRunAt && a.status === 'ativa' && <p className="mt-0.5 text-xs text-accent-400/80">Próximo: {fmtDate(a.nextRunAt)}</p>}
                           </div>
                         </div>
                         <Badge variant={a.status === 'ativa' ? 'success' : a.status === 'concluida' ? 'default' : 'muted'}>{a.status}</Badge>
                       </div>
                       <div className="mt-2 flex items-center gap-3">
                         {a.frequency !== 'now' && a.status !== 'concluida' && (
-                          <button type="button" onClick={() => toggleAutomation(a)} className="text-xs text-stone-300 hover:underline inline-flex items-center gap-1">
-                            {a.status === 'pausada' ? <PlayCircle className="h-3.5 w-3.5" /> : <PauseCircle className="h-3.5 w-3.5" />}
-                            {a.status === 'pausada' ? 'Retomar' : 'Pausar'}
-                          </button>
+                          <>
+                            <button type="button" onClick={() => openEditAuto(a)} className="inline-flex items-center gap-1 text-xs text-accent-400 hover:underline">
+                              <Pencil className="h-3.5 w-3.5" /> Editar
+                            </button>
+                            <button type="button" onClick={() => toggleAutomation(a)} className="inline-flex items-center gap-1 text-xs text-stone-300 hover:underline">
+                              {a.status === 'pausada' ? <PlayCircle className="h-3.5 w-3.5" /> : <PauseCircle className="h-3.5 w-3.5" />}
+                              {a.status === 'pausada' ? 'Retomar' : 'Pausar'}
+                            </button>
+                          </>
                         )}
-                        <button type="button" onClick={() => setConfirmAuto(a.id)} className="text-xs text-red-300 hover:underline inline-flex items-center gap-1">
+                        <button type="button" onClick={() => setConfirmAuto(a.id)} className="inline-flex items-center gap-1 text-xs text-red-300 hover:underline">
                           <Trash2 className="h-3.5 w-3.5" /> Excluir
                         </button>
                       </div>
@@ -455,25 +764,56 @@ export function Messages({ defaultTab = 'criar' }) {
             </Card>
 
             <Card>
-              <h3 className="font-semibold text-stone-50 mb-3">Histórico de envios</h3>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-semibold text-stone-50">Histórico de envios</h3>
+                <div className="flex gap-2">
+                  <Input className="h-9 w-32 text-sm" placeholder="Grupo" value={histFilter.group} onChange={(e) => setHistFilter((f) => ({ ...f, group: e.target.value }))} />
+                  <Select className="h-9 w-auto text-sm" value={histFilter.status} onChange={(e) => setHistFilter((f) => ({ ...f, status: e.target.value }))}>
+                    <option value="">Todos</option>
+                    <option value="enviado">Enviado</option>
+                    <option value="entregue">Entregue</option>
+                    <option value="lido">Lido</option>
+                    <option value="falhou">Falhou</option>
+                  </Select>
+                </div>
+              </div>
               {history.length === 0 ? (
-                <p className="text-sm text-stone-400">Nenhum envio ainda.</p>
+                <p className="text-sm text-stone-400">Nenhum envio encontrado.</p>
               ) : (
-                <ul className="divide-y divide-brand-800 max-h-72 overflow-y-auto">
-                  {history.map((h) => (
-                    <li key={h.id} className="py-3 flex flex-wrap justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-stone-50 font-medium text-sm">{h.group}</p>
-                        {h.body && <p className="text-xs text-stone-400 mt-0.5 line-clamp-2">{h.body}</p>}
-                        {h.error && <p className="text-xs text-red-300 mt-0.5">{h.error}</p>}
-                      </div>
-                      <div className="text-right text-xs text-stone-500 shrink-0">
-                        <p>{fmtDate(h.sentAt)}</p>
-                        <Badge variant={h.status === 'entregue' ? 'success' : 'warning'} className="mt-1">{h.status}</Badge>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="divide-y divide-brand-800">
+                    {history.map((h) => {
+                      const sb = statusBadge(h.status)
+                      return (
+                        <li key={h.id} className="flex flex-wrap justify-between gap-2 py-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-stone-50">{h.group}</p>
+                            {h.body && <p className="mt-0.5 line-clamp-2 text-xs text-stone-400">{h.body}</p>}
+                            {h.error && <p className="mt-0.5 text-xs text-red-300">{h.error}</p>}
+                          </div>
+                          <div className="shrink-0 text-right text-xs text-stone-500">
+                            <p>{fmtDate(h.sentAt)}</p>
+                            <Badge variant={sb.variant} className="mt-1 inline-flex items-center gap-1">
+                              {h.status === 'lido' && <CheckCheck className="h-3 w-3" />}
+                              {sb.label}
+                            </Badge>
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {histPages > 1 && (
+                    <div className="mt-3 flex items-center justify-between text-xs text-stone-400">
+                      <button type="button" disabled={histOffset === 0} onClick={() => refreshHistory(Math.max(0, histOffset - HIST_PAGE_SIZE))} className="rounded-lg border border-brand-800 px-3 py-1 disabled:opacity-40 hover:bg-white/5">
+                        Anterior
+                      </button>
+                      <span>Página {histPage} de {histPages}</span>
+                      <button type="button" disabled={histPage >= histPages} onClick={() => refreshHistory(histOffset + HIST_PAGE_SIZE)} className="rounded-lg border border-brand-800 px-3 py-1 disabled:opacity-40 hover:bg-white/5">
+                        Próxima
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </Card>
           </div>
@@ -506,15 +846,17 @@ export function Messages({ defaultTab = 'criar' }) {
             ) : (
               <div className="rounded-lg border border-brand-800 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs text-stone-300 truncate inline-flex items-center gap-2">
+                  <p className="inline-flex items-center gap-2 truncate text-xs text-stone-300">
                     {tplForm.mediaType === 'image' ? <ImageIcon className="h-4 w-4" /> : <Film className="h-4 w-4" />}
                     {tplForm.mediaName || tplForm.mediaType}
                   </p>
-                  <button type="button" onClick={clearMedia} className="text-stone-500 hover:text-red-300"><X className="h-4 w-4" /></button>
+                  <button type="button" onClick={clearMedia} className="text-stone-500 hover:text-red-300" aria-label="Remover mídia">
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
                 <div className="mt-2">
                   {tplForm.mediaType === 'image' ? (
-                    <img src={tplForm.mediaBase64} alt="" className="h-28 rounded object-cover border border-brand-700" />
+                    <img src={tplForm.mediaBase64} alt="" className="h-28 rounded border border-brand-700 object-cover" />
                   ) : (
                     <video src={tplForm.mediaBase64} controls className="h-28 rounded border border-brand-700" />
                   )}
@@ -525,20 +867,32 @@ export function Messages({ defaultTab = 'criar' }) {
         </div>
       </Modal>
 
-      <ConfirmModal
-        isOpen={!!confirmTpl}
-        onClose={() => setConfirmTpl(null)}
-        onConfirm={removeTemplate}
-        title="Excluir mensagem"
-        message="Tem certeza que deseja excluir esta mensagem da biblioteca?"
-      />
-      <ConfirmModal
-        isOpen={!!confirmAuto}
-        onClose={() => setConfirmAuto(null)}
-        onConfirm={removeAutomation}
-        title="Excluir automação"
-        message="Tem certeza que deseja excluir esta automação? Ela deixará de disparar."
-      />
+      {/* Confirmação de envio imediato */}
+      <Modal
+        isOpen={sendConfirm}
+        onClose={() => setSendConfirm(false)}
+        title="Confirmar envio agora"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setSendConfirm(false)}>Cancelar</Button>
+            <Button onClick={confirmSendNow} disabled={autoSaving}>{autoSaving ? 'Enviando…' : 'Enviar agora'}</Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <p>Você vai enviar esta mensagem para <strong>{autoForm.groupIds.length} grupo(s)</strong> agora. Isso não pode ser desfeito.</p>
+          </div>
+          <div>
+            <p className="mb-1 text-xs font-medium text-stone-400">Prévia</p>
+            <PreviewBubble content={previewContent} />
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmModal isOpen={!!confirmTpl} onClose={() => setConfirmTpl(null)} onConfirm={removeTemplate} title="Excluir mensagem" message="Tem certeza que deseja excluir esta mensagem da biblioteca?" />
+      <ConfirmModal isOpen={!!confirmAuto} onClose={() => setConfirmAuto(null)} onConfirm={removeAutomation} title="Excluir automação" message="Tem certeza que deseja excluir esta automação? Ela deixará de disparar." />
     </div>
   )
 }

@@ -5,7 +5,6 @@ import {
   mockGroupMembersByGroup,
   mockMembersGlobal,
   mockDashboardMetrics,
-  mockScheduledMessages,
   mockMessageHistory,
   mockAnalytics,
   mockIntegrations,
@@ -226,28 +225,19 @@ export async function deleteAutomation(id) {
   return mockResponse({ ok: true })
 }
 
-export async function scheduleMessage({ groupIds, body, scheduledAt, recurrence, timezone, retryPolicy }) {
-  if (resolveUseRealApi()) {
-    return apiClient.post('/messages/schedule', { groupIds, body, scheduledAt, recurrence, timezone, retryPolicy })
-  }
-  await delay()
-  return mockResponse({
-    ok: true,
-    id: `sch-${Date.now()}`,
-    groupIds,
-    body,
-    scheduledAt,
-  })
+export async function putAutomation(id, payload) {
+  if (resolveUseRealApi()) return apiClient.put(`/automations/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ automation: { id, ...payload } })
 }
 
-export async function getScheduledMessages() {
-  if (resolveUseRealApi()) return apiClient.get('/messages/scheduled')
-  return mockResponse({ items: mockScheduledMessages })
+export async function getSendJob(id) {
+  if (resolveUseRealApi()) return apiClient.get(`/messages/jobs/${encodeURIComponent(id)}`)
+  return mockResponse({ job: { id, status: 'done', total: 1, done: 1, sent: 1, failed: 0 } })
 }
 
-export async function getMessageHistory() {
-  if (resolveUseRealApi()) return apiClient.get('/messages/history')
-  return mockResponse({ items: mockMessageHistory })
+export async function getMessageHistory(params = {}) {
+  if (resolveUseRealApi()) return apiClient.get('/messages/history', { params })
+  return mockResponse({ items: mockMessageHistory, total: mockMessageHistory.length, limit: 50, offset: 0 })
 }
 
 export async function createAutomation(payload) {
