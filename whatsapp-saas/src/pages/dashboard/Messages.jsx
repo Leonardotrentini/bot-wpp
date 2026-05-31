@@ -137,7 +137,7 @@ export function Messages() {
   }, [trackedLinks])
 
   useEffect(() => {
-    getGroups().then((r) => setGroups(r.data.groups))
+    getGroups().then((r) => setGroups((r.data.groups || []).filter((g) => g.status === 'ativo')))
     getScheduledMessages().then((r) =>
       setScheduled(
         r.data.items.map((x) => ({
@@ -365,8 +365,13 @@ export function Messages() {
         <div className="grid gap-6 lg:grid-cols-2">
           <Card className="space-y-4">
             <h3 className="font-semibold text-stone-50">Grupos</h3>
-            <p className="text-xs text-stone-500">Selecione um ou mais grupos</p>
+            <p className="text-xs text-stone-500">Selecione um ou mais grupos (somente ativos)</p>
             <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {groups.length === 0 && (
+                <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">
+                  Nenhum grupo ativo. Vá em Grupos, selecione e clique em Marcar ativo.
+                </p>
+              )}
               {groups.map((g) => (
                 <label key={g.id} className="flex cursor-pointer items-center gap-3 rounded-lg border border-brand-800 px-3 py-2 hover:bg-white/5">
                   <input
