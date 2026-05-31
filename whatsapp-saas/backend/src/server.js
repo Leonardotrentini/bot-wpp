@@ -187,6 +187,18 @@ function serializeJson(value) {
   return value == null ? null : JSON.parse(JSON.stringify(value))
 }
 
+/** Resumo curto do que a Evolution devolveu, para diagnosticar 0 grupos sem precisar de logs. */
+function previewPayloadShape(payload) {
+  if (payload == null) return "vazio/null"
+  if (Array.isArray(payload)) {
+    const first = payload[0]
+    const keys = first && typeof first === "object" ? Object.keys(first).slice(0, 6).join(",") : typeof first
+    return `array(${payload.length})${payload.length ? ` item0={${keys}}` : ""}`
+  }
+  if (typeof payload === "object") return `object{${Object.keys(payload).slice(0, 8).join(",")}}`
+  return `${typeof payload}: ${String(payload).slice(0, 60)}`
+}
+
 function isRateLimitError(err) {
   const message = `${err?.message || ""} ${JSON.stringify(err?.details || {})}`.toLowerCase()
   return err?.status === 429 || err?.details?.status === 429 || message.includes("429") || message.includes("rate-overlimit") || message.includes("rate limit")
@@ -444,7 +456,7 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
   })
 
   try {
-    const maxAttempts = Number(process.env.GROUP_DISCOVER_MAX_ATTEMPTS || 3)
+    const maxAttempts = Number(process.env.GROUP_DISCOVER_MAX_ATTEMPTS || 4)
     let payload
     for (let attempt = 1; ; attempt += 1) {
       try {
@@ -457,9 +469,10 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
           groupSyncStatus: "DISCOVERING_GROUPS",
           groupSyncMessage: `A Evolution está demorando (tentativa ${attempt}/${maxAttempts}). A primeira busca após conectar é mais lenta; aguardando para tentar de novo…`,
         })
-        await wait(5000)
+        await wait(8000)
       }
     }
+    const shape = previewPayloadShape(payload)
     const realGroups = normalizeEvolutionGroups(payload)
       .map((g) => mapEvolutionGroup(g, conn.instanceName))
       .filter((g) => g.groupJid)
@@ -500,11 +513,11 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
       groupSyncStatus: realGroups.length ? "GROUPS_FOUND" : "READY",
       groupSyncProgress: 100,
       groupSyncMessage: realGroups.length
-        ? `${realGroups.length} grupos encontrados. Clique em Sincronizar ${realGroups.length} grupos para ativar o cache local.`
-        : "Nenhum grupo encontrado nessa conta do WhatsApp.",
-      groupSyncError: null,
+        ? `${realGroups.length} grupos encontrados. Selecione os que quer conectar e clique em Conectar e importar.`
+        : "A Evolution respondeu, mas reconhecemos 0 grupos. Se você acabou de conectar, aguarde ~1 min (a sessão ainda sincroniza) e tente de novo.",
+      groupSyncError: realGroups.length ? null : `Resposta da Evolution: ${shape}`,
       groupSyncRetryAfter: null,
-      groupsLastSync: now,
+      groupsLastSync: realGroups.length ? now : conn.groupsLastSync,
     })
 
     return { skipped: false, conn: updatedConn, count: realGroups.length }

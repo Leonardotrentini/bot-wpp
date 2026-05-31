@@ -1,5 +1,5 @@
 const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_TIMEOUT_MS || 25000)
-const GROUPS_TIMEOUT_MS = Number(process.env.EVOLUTION_GROUPS_TIMEOUT_MS || 120000)
+const GROUPS_TIMEOUT_MS = Number(process.env.EVOLUTION_GROUPS_TIMEOUT_MS || 180000)
 const QRCode = require("qrcode")
 
 function ensureConfig() {
