@@ -12,7 +12,6 @@ const express = require("express")
 const cors = require("cors")
 const bcrypt = require("bcryptjs")
 const { z } = require("zod")
-const { v4: uuid } = require("uuid")
 const { createServer } = require("http")
 const { Server } = require("socket.io")
 const { prisma } = require("./lib/prisma")
@@ -26,6 +25,8 @@ const {
   fetchAllGroups,
   fetchGroupParticipants,
   fetchGroupMessages,
+  sendText,
+  sendMedia,
   logoutInstance,
   resolveQrForStorage,
   pickConnected,
@@ -33,7 +34,7 @@ const {
   pickPhone,
   isInstanceAlreadyExistsError,
 } = require("./lib/evolution")
-const { groups, scheduledMessages, sentMessages, getAnalyticsSnapshot } = require("./data/mock")
+const { getAnalyticsSnapshot } = require("./data/mock")
 const adminRoutes = require("./routes/admin")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
@@ -66,7 +67,7 @@ app.use(
     credentials: true,
   }),
 )
-app.use(express.json({ limit: "8mb" }))
+app.use(express.json({ limit: "32mb" }))
 
 app.use("/api/admin", adminRoutes)
 
@@ -1072,62 +1073,452 @@ app.get("/api/analytics", authMiddleware, (req, res) => {
   res.json(getAnalyticsSnapshot(period))
 })
 
-app.get("/api/messages/history", authMiddleware, (_req, res) => {
-  res.json({ items: sentMessages.slice(0, 100) })
-})
+// ===================== Mensagens reais + biblioteca + automações =====================
 
-app.get("/api/messages/scheduled", authMiddleware, (_req, res) => {
-  res.json({ items: scheduledMessages })
-})
+const MESSAGE_SEND_GROUP_DELAY_MS = Number(process.env.MESSAGE_SEND_GROUP_DELAY_MS || 1500)
+const MEDIA_MAX_BASE64_LEN = Number(process.env.MEDIA_MAX_BASE64_LEN || 24_000_000) // ~16MB binário
+const ENABLE_SCHEDULER = process.env.ENABLE_SCHEDULER !== "false"
+const SP_OFFSET = "-03:00" // America/Sao_Paulo (sem horário de verão)
+const schedulerLock = new Set()
 
-app.post("/api/messages/send", authMiddleware, (req, res) => {
-  const schema = z.object({
-    groupIds: z.array(z.string()).min(1),
-    body: z.string().min(1),
-    recipients: z.array(z.string()).optional(),
-    attachments: z.array(z.any()).optional(),
-  })
-  const parsed = schema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Payload inválido." })
+function stripDataUrlPrefix(b64) {
+  if (!b64) return b64
+  const idx = b64.indexOf("base64,")
+  return idx >= 0 ? b64.slice(idx + 7) : b64
+}
 
-  const item = {
-    id: uuid(),
-    groupIds: parsed.data.groupIds,
-    group: groups.find((g) => g.id === parsed.data.groupIds[0])?.name || "Grupo",
-    body: parsed.data.body,
-    status: "entregue",
-    sentAt: new Date().toISOString(),
+function getMessageContent(source) {
+  return {
+    body: source?.body || "",
+    mediaType: source?.mediaType || "none",
+    mediaBase64: source?.mediaBase64 || null,
+    mediaMime: source?.mediaMime || null,
+    mediaName: source?.mediaName || null,
   }
-  sentMessages.unshift(item)
-  io.emit("message:sent", item)
-  res.status(201).json({ message: item })
-})
+}
 
-app.post("/api/messages/schedule", authMiddleware, (req, res) => {
-  const schema = z.object({
-    groupIds: z.array(z.string()).min(1),
-    body: z.string().min(1),
-    scheduledAt: z.string(),
-    recurrence: z.string().optional(),
-    timezone: z.string().optional(),
-    retryPolicy: z.string().optional(),
-  })
-  const parsed = schema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Payload inválido." })
-
-  const row = {
-    id: `sch-${uuid()}`,
-    groupNames: groups.filter((g) => parsed.data.groupIds.includes(g.id)).map((g) => g.name),
-    body: parsed.data.body,
-    scheduledAt: parsed.data.scheduledAt,
-    recurrence: parsed.data.recurrence || "unico",
-    timezone: parsed.data.timezone || "America/Sao_Paulo",
-    retryPolicy: parsed.data.retryPolicy || "2x",
-    status: "pendente",
+function validateContent(content) {
+  const hasMedia = content.mediaType === "image" || content.mediaType === "video"
+  if (!hasMedia && !content.body?.trim()) return "Escreva um texto ou anexe uma mídia."
+  if (hasMedia && !content.mediaBase64) return "Mídia ausente para o tipo selecionado."
+  if (hasMedia && content.mediaBase64.length > MEDIA_MAX_BASE64_LEN) {
+    return "Mídia grande demais. Use imagens até ~5MB e vídeos até ~16MB."
   }
-  scheduledMessages.unshift(row)
-  res.status(201).json({ item: row })
+  return null
+}
+
+async function resolveContentFromBody(userId, body) {
+  if (body.templateId) {
+    const tpl = await prisma.messageTemplate.findFirst({ where: { id: body.templateId, userId } })
+    if (!tpl) {
+      const e = new Error("Mensagem não encontrada na biblioteca.")
+      e.code = "TEMPLATE_NOT_FOUND"
+      throw e
+    }
+    return getMessageContent(tpl)
+  }
+  return getMessageContent(body)
+}
+
+async function resolveGroupName(userId, groupJid) {
+  const g = await prisma.whatsAppGroup.findUnique({
+    where: { userId_groupJid: { userId, groupJid } },
+    select: { name: true },
+  })
+  return g?.name || groupJid
+}
+
+async function deliverToGroup(instanceName, groupJid, content) {
+  if (content.mediaType === "image" || content.mediaType === "video") {
+    await sendMedia(instanceName, groupJid, {
+      mediatype: content.mediaType,
+      media: stripDataUrlPrefix(content.mediaBase64),
+      mimetype: content.mediaMime || undefined,
+      caption: content.body || undefined,
+      fileName: content.mediaName || undefined,
+    })
+  } else {
+    await sendText(instanceName, groupJid, content.body)
+  }
+}
+
+async function dispatchMessage({ userId, instanceName, groupJids, content, automationId = null }) {
+  const results = []
+  for (const [index, groupJid] of groupJids.entries()) {
+    const groupName = await resolveGroupName(userId, groupJid)
+    try {
+      await deliverToGroup(instanceName, groupJid, content)
+      await prisma.outboundMessage.create({
+        data: { userId, automationId, groupJid, groupName, body: content.body || null, mediaType: content.mediaType, status: "entregue" },
+      })
+      results.push({ groupJid, groupName, status: "entregue" })
+    } catch (err) {
+      await prisma.outboundMessage.create({
+        data: {
+          userId,
+          automationId,
+          groupJid,
+          groupName,
+          body: content.body || null,
+          mediaType: content.mediaType,
+          status: "falhou",
+          error: (err?.message || "erro").slice(0, 300),
+        },
+      })
+      results.push({ groupJid, groupName, status: "falhou", error: err?.message || "erro" })
+    }
+    if (index < groupJids.length - 1) await wait(MESSAGE_SEND_GROUP_DELAY_MS)
+  }
+  return results
+}
+
+function spParts(date) {
+  const sp = new Date(date.getTime() - 3 * 3600 * 1000)
+  return { y: sp.getUTCFullYear(), m: sp.getUTCMonth(), d: sp.getUTCDate(), dow: sp.getUTCDay() }
+}
+
+function spDateAt(baseDate, hh, mm) {
+  const { y, m, d } = spParts(baseDate)
+  return new Date(Date.UTC(y, m, d, hh + 3, mm, 0, 0))
+}
+
+function parseScheduledAt(value) {
+  if (!value) return null
+  const s = String(value)
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return new Date(`${s}:00${SP_OFFSET}`)
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function computeNextRun(a, from = new Date()) {
+  if (a.frequency === "once") return a.scheduledAt ? new Date(a.scheduledAt) : null
+  if (a.frequency === "daily" || a.frequency === "weekly") {
+    if (!a.timeOfDay || !/^\d{1,2}:\d{2}$/.test(a.timeOfDay)) return null
+    const [hh, mm] = a.timeOfDay.split(":").map(Number)
+    let cand = spDateAt(from, hh, mm)
+    const dayMs = 24 * 3600 * 1000
+    if (a.frequency === "daily") {
+      if (cand <= from) cand = new Date(cand.getTime() + dayMs)
+      return cand
+    }
+    const target = Number.isInteger(a.weekday) ? a.weekday : 0
+    for (let i = 0; i < 9; i += 1) {
+      if (spParts(cand).dow === target && cand > from) return cand
+      cand = new Date(cand.getTime() + dayMs)
+    }
+    return cand
+  }
+  return null
+}
+
+function getAutomationPayload(a) {
+  return {
+    id: a.id,
+    name: a.name,
+    status: a.status,
+    groupJids: a.groupJids,
+    groupNames: a.groupNames,
+    templateId: a.templateId,
+    body: a.body,
+    mediaType: a.mediaType,
+    mediaName: a.mediaName,
+    frequency: a.frequency,
+    scheduledAt: a.scheduledAt?.toISOString() || null,
+    timeOfDay: a.timeOfDay,
+    weekday: a.weekday,
+    nextRunAt: a.nextRunAt?.toISOString() || null,
+    lastRunAt: a.lastRunAt?.toISOString() || null,
+  }
+}
+
+function getTemplatePayload(t) {
+  return {
+    id: t.id,
+    name: t.name,
+    body: t.body,
+    mediaType: t.mediaType,
+    mediaBase64: t.mediaBase64,
+    mediaMime: t.mediaMime,
+    mediaName: t.mediaName,
+    updatedAt: t.updatedAt?.toISOString?.() || null,
+  }
+}
+
+const templateBodySchema = z.object({
+  name: z.string().min(1),
+  body: z.string().optional(),
+  mediaType: z.enum(["none", "image", "video"]).optional(),
+  mediaBase64: z.string().optional().nullable(),
+  mediaMime: z.string().optional().nullable(),
+  mediaName: z.string().optional().nullable(),
 })
+
+app.get("/api/messages/templates", authMiddleware, async (req, res) => {
+  const rows = await prisma.messageTemplate.findMany({ where: { userId: req.user.sub }, orderBy: { updatedAt: "desc" } })
+  res.json({ templates: rows.map(getTemplatePayload) })
+})
+
+app.post("/api/messages/templates", authMiddleware, async (req, res) => {
+  const parsed = templateBodySchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
+  const content = getMessageContent(parsed.data)
+  const invalid = validateContent(content)
+  if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+  const tpl = await prisma.messageTemplate.create({
+    data: { userId: req.user.sub, name: parsed.data.name, ...content },
+  })
+  res.status(201).json({ template: getTemplatePayload(tpl) })
+})
+
+app.put("/api/messages/templates/:id", authMiddleware, async (req, res) => {
+  const parsed = templateBodySchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
+  const existing = await prisma.messageTemplate.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+  const content = getMessageContent(parsed.data)
+  const invalid = validateContent(content)
+  if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+  const tpl = await prisma.messageTemplate.update({
+    where: { id: existing.id },
+    data: { name: parsed.data.name, ...content },
+  })
+  res.json({ template: getTemplatePayload(tpl) })
+})
+
+app.delete("/api/messages/templates/:id", authMiddleware, async (req, res) => {
+  const existing = await prisma.messageTemplate.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+  await prisma.messageTemplate.delete({ where: { id: existing.id } })
+  res.json({ ok: true })
+})
+
+app.post("/api/messages/send", authMiddleware, async (req, res) => {
+  try {
+    const schema = z.object({
+      groupIds: z.array(z.string()).min(1),
+      templateId: z.string().optional(),
+      body: z.string().optional(),
+      mediaType: z.enum(["none", "image", "video"]).optional(),
+      mediaBase64: z.string().optional().nullable(),
+      mediaMime: z.string().optional().nullable(),
+      mediaName: z.string().optional().nullable(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Payload inválido." })
+
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    if (!conn.connected) {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: "Conecte o WhatsApp antes de enviar." })
+    }
+
+    const content = await resolveContentFromBody(req.user.sub, parsed.data)
+    const invalid = validateContent(content)
+    if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+
+    const results = await dispatchMessage({
+      userId: req.user.sub,
+      instanceName: conn.instanceName,
+      groupJids: parsed.data.groupIds,
+      content,
+    })
+    const sent = results.filter((r) => r.status === "entregue").length
+    return res.status(201).json({ results, sent, failed: results.length - sent })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
+    }
+    if (err?.code === "TEMPLATE_NOT_FOUND") {
+      return res.status(404).json({ error: "TEMPLATE_NOT_FOUND", message: err.message })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.get("/api/messages/history", authMiddleware, async (req, res) => {
+  const rows = await prisma.outboundMessage.findMany({
+    where: { userId: req.user.sub },
+    orderBy: { sentAt: "desc" },
+    take: 100,
+  })
+  res.json({
+    items: rows.map((m) => ({
+      id: m.id,
+      group: m.groupName,
+      body: m.body,
+      mediaType: m.mediaType,
+      status: m.status === "entregue" ? "entregue" : "falhou",
+      error: m.error,
+      sentAt: m.sentAt.toISOString(),
+    })),
+  })
+})
+
+app.get("/api/automations", authMiddleware, async (req, res) => {
+  const rows = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
+  res.json({ automations: rows.map(getAutomationPayload) })
+})
+
+app.post("/api/automations", authMiddleware, async (req, res) => {
+  try {
+    const schema = z.object({
+      name: z.string().min(1),
+      groupIds: z.array(z.string()).min(1),
+      templateId: z.string().optional(),
+      body: z.string().optional(),
+      mediaType: z.enum(["none", "image", "video"]).optional(),
+      mediaBase64: z.string().optional().nullable(),
+      mediaMime: z.string().optional().nullable(),
+      mediaName: z.string().optional().nullable(),
+      frequency: z.enum(["now", "once", "daily", "weekly"]),
+      scheduledAt: z.string().optional().nullable(),
+      timeOfDay: z.string().optional().nullable(),
+      weekday: z.number().int().min(0).max(6).optional().nullable(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
+
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    const content = await resolveContentFromBody(req.user.sub, parsed.data)
+    const invalid = validateContent(content)
+    if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+
+    const groupNames = []
+    for (const jid of parsed.data.groupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
+
+    const scheduledAt = parsed.data.frequency === "once" ? parseScheduledAt(parsed.data.scheduledAt) : null
+    if (parsed.data.frequency === "once" && !scheduledAt) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe data e hora válidas para o agendamento único." })
+    }
+    if ((parsed.data.frequency === "daily" || parsed.data.frequency === "weekly") && !parsed.data.timeOfDay) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe o horário do disparo." })
+    }
+
+    if (parsed.data.frequency === "now") {
+      if (!conn.connected) {
+        return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: "Conecte o WhatsApp antes de enviar." })
+      }
+      const created = await prisma.automation.create({
+        data: {
+          userId: req.user.sub,
+          name: parsed.data.name,
+          status: "concluida",
+          groupJids: parsed.data.groupIds,
+          groupNames,
+          templateId: parsed.data.templateId || null,
+          ...content,
+          frequency: "now",
+          lastRunAt: new Date(),
+        },
+      })
+      const results = await dispatchMessage({
+        userId: req.user.sub,
+        instanceName: conn.instanceName,
+        groupJids: parsed.data.groupIds,
+        content,
+        automationId: created.id,
+      })
+      const sent = results.filter((r) => r.status === "entregue").length
+      return res.status(201).json({ automation: getAutomationPayload(created), results, sent, failed: results.length - sent })
+    }
+
+    const draft = {
+      frequency: parsed.data.frequency,
+      scheduledAt,
+      timeOfDay: parsed.data.timeOfDay || null,
+      weekday: Number.isInteger(parsed.data.weekday) ? parsed.data.weekday : null,
+    }
+    const nextRunAt = computeNextRun(draft)
+
+    const created = await prisma.automation.create({
+      data: {
+        userId: req.user.sub,
+        name: parsed.data.name,
+        status: "ativa",
+        groupJids: parsed.data.groupIds,
+        groupNames,
+        templateId: parsed.data.templateId || null,
+        ...content,
+        frequency: parsed.data.frequency,
+        scheduledAt,
+        timeOfDay: draft.timeOfDay,
+        weekday: draft.weekday,
+        nextRunAt,
+      },
+    })
+    return res.status(201).json({ automation: getAutomationPayload(created) })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
+    }
+    if (err?.code === "TEMPLATE_NOT_FOUND") {
+      return res.status(404).json({ error: "TEMPLATE_NOT_FOUND", message: err.message })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.patch("/api/automations/:id", authMiddleware, async (req, res) => {
+  const existing = await prisma.automation.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Automação não encontrada." })
+
+  const schema = z.object({ status: z.enum(["ativa", "pausada"]).optional() })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
+
+  const data = {}
+  if (parsed.data.status) {
+    data.status = parsed.data.status
+    if (parsed.data.status === "ativa" && existing.frequency !== "once") {
+      data.nextRunAt = computeNextRun(existing)
+    }
+  }
+  const updated = await prisma.automation.update({ where: { id: existing.id }, data })
+  res.json({ automation: getAutomationPayload(updated) })
+})
+
+app.delete("/api/automations/:id", authMiddleware, async (req, res) => {
+  const existing = await prisma.automation.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Automação não encontrada." })
+  await prisma.automation.delete({ where: { id: existing.id } })
+  res.json({ ok: true })
+})
+
+async function processDueAutomations() {
+  const now = new Date()
+  const due = await prisma.automation.findMany({
+    where: { status: "ativa", nextRunAt: { lte: now } },
+    take: 20,
+  })
+
+  for (const a of due) {
+    if (schedulerLock.has(a.id)) continue
+    schedulerLock.add(a.id)
+    try {
+      const next = a.frequency === "once" ? null : computeNextRun(a, new Date(now.getTime() + 60000))
+      const newStatus = a.frequency === "once" ? "concluida" : "ativa"
+      const claim = await prisma.automation.updateMany({
+        where: { id: a.id, status: "ativa", nextRunAt: { lte: now } },
+        data: { nextRunAt: next, lastRunAt: now, status: newStatus },
+      })
+      if (claim.count === 0) continue
+
+      const conn = await prisma.whatsAppConnection.findUnique({ where: { userId: a.userId } })
+      if (!conn?.instanceName || !conn.connected) continue
+
+      await dispatchMessage({
+        userId: a.userId,
+        instanceName: conn.instanceName,
+        groupJids: a.groupJids,
+        content: getMessageContent(a),
+        automationId: a.id,
+      })
+    } catch (err) {
+      console.error("[scheduler]", a.id, err?.message || err)
+    } finally {
+      schedulerLock.delete(a.id)
+    }
+  }
+}
 
 function toInstanceName(userId) {
   const prefix = process.env.EVOLUTION_INSTANCE_PREFIX || "vesto"
@@ -1488,4 +1879,10 @@ const port = Number(process.env.PORT || 4000)
 httpServer.listen(port, () => {
   void ensureDefaultPlans().catch((err) => console.error("[bootstrap] ensureDefaultPlans:", err?.message || err))
   console.log(`Backend online na porta ${port}`)
+  if (ENABLE_SCHEDULER) {
+    setInterval(() => {
+      processDueAutomations().catch((err) => console.error("[scheduler] tick:", err?.message || err))
+    }, 30000)
+    console.log("Agendador de automações ativo (tick 30s).")
+  }
 })

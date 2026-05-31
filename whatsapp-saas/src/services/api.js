@@ -5,7 +5,6 @@ import {
   mockGroupMembersByGroup,
   mockMembersGlobal,
   mockDashboardMetrics,
-  mockAutomations,
   mockScheduledMessages,
   mockMessageHistory,
   mockAnalytics,
@@ -189,10 +188,42 @@ export async function getGroupDetails(id) {
   return mockResponse({ group, members, activity, settings: { ...mockGroupSettings } })
 }
 
-export async function sendMessage({ groupIds, body }) {
-  if (resolveUseRealApi()) return apiClient.post('/messages/send', { groupIds, body })
+export async function sendMessage({ groupIds, templateId, body, mediaType, mediaBase64, mediaMime, mediaName }) {
+  if (resolveUseRealApi()) {
+    return apiClient.post('/messages/send', { groupIds, templateId, body, mediaType, mediaBase64, mediaMime, mediaName })
+  }
   await delay()
-  return mockResponse({ ok: true, sent: groupIds?.length || 0, body })
+  return mockResponse({ results: (groupIds || []).map((id) => ({ groupJid: id, status: 'entregue' })), sent: groupIds?.length || 0 })
+}
+
+export async function getTemplates() {
+  if (resolveUseRealApi()) return apiClient.get('/messages/templates')
+  return mockResponse({ templates: [] })
+}
+
+export async function createTemplate(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/messages/templates', payload)
+  return mockResponse({ template: { id: `tpl-${Date.now()}`, ...payload } })
+}
+
+export async function updateTemplate(id, payload) {
+  if (resolveUseRealApi()) return apiClient.put(`/messages/templates/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ template: { id, ...payload } })
+}
+
+export async function deleteTemplate(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/messages/templates/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function updateAutomation(id, payload) {
+  if (resolveUseRealApi()) return apiClient.patch(`/automations/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ automation: { id, ...payload } })
+}
+
+export async function deleteAutomation(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/automations/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
 }
 
 export async function scheduleMessage({ groupIds, body, scheduledAt, recurrence, timezone, retryPolicy }) {
@@ -219,24 +250,15 @@ export async function getMessageHistory() {
   return mockResponse({ items: mockMessageHistory })
 }
 
-let automationsStore = [...mockAutomations]
-
 export async function createAutomation(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/automations', payload)
   await delay()
-  const row = {
-    id: `auto-${Date.now()}`,
-    name: payload.name,
-    type: payload.type,
-    status: 'ativa',
-    groupIds: payload.groupIds || [],
-    messagePreview: (payload.message || '').slice(0, 80) + ((payload.message || '').length > 80 ? '…' : ''),
-  }
-  automationsStore = [row, ...automationsStore]
-  return mockResponse({ automation: row })
+  return mockResponse({ automation: { id: `auto-${Date.now()}`, status: 'ativa', ...payload } })
 }
 
 export async function getAutomations() {
-  return mockResponse({ automations: [...automationsStore] })
+  if (resolveUseRealApi()) return apiClient.get('/automations')
+  return mockResponse({ automations: [] })
 }
 
 export async function getMembers() {

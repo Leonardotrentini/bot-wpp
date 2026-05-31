@@ -257,6 +257,25 @@ async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize =
   ])
 }
 
+async function sendText(instanceName, number, text) {
+  return requestEvolution(`/message/sendText/${encodeURIComponent(instanceName)}`, {
+    method: "POST",
+    body: { number, text },
+  })
+}
+
+/** mediatype: "image" | "video". media: base64 (sem prefixo data:) ou URL. */
+async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName }) {
+  const body = { number, mediatype, media }
+  if (mimetype) body.mimetype = mimetype
+  if (caption) body.caption = caption
+  if (fileName) body.fileName = fileName
+  return firstSuccess([
+    () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, { method: "POST", body: { ...body, options: {} } }),
+  ])
+}
+
 async function logoutInstance(instanceName) {
   return firstSuccess([
     () => requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
@@ -272,6 +291,8 @@ module.exports = {
   fetchAllGroups,
   fetchGroupParticipants,
   fetchGroupMessages,
+  sendText,
+  sendMedia,
   logoutInstance,
   pickQrSync,
   resolveQrForStorage,
