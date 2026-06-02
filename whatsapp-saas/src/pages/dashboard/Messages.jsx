@@ -525,25 +525,13 @@ export function Messages({ defaultTab = 'criar' }) {
     setCadenceModal(true)
   }
 
-  function openRenameCadence(c) {
-    setCadenceForm({ id: c.id, name: c.name })
-    setCadenceModal(true)
-  }
-
   async function saveCadence() {
     if (!cadenceForm.name.trim()) return toast.error('Dê um nome para a cadência.')
     try {
-      if (cadenceForm.id) {
-        await renameCadence(cadenceForm.id, cadenceForm.name.trim())
-        toast.success('Cadência salva.')
-        setCadenceModal(false)
-        refreshCadences()
-      } else {
-        const res = await createCadence(cadenceForm.name.trim())
-        setCadenceModal(false)
-        await refreshCadences()
-        if (res?.data?.cadence) openCadenceEditor(res.data.cadence)
-      }
+      const res = await createCadence(cadenceForm.name.trim())
+      setCadenceModal(false)
+      await refreshCadences()
+      if (res?.data?.cadence) openCadenceEditor(res.data.cadence)
     } catch {
       toast.error('Falha ao salvar a cadência.')
     }
@@ -1045,7 +1033,7 @@ export function Messages({ defaultTab = 'criar' }) {
                         <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(c, 'pausada')}>
                           <PauseCircle className="h-3.5 w-3.5" /> Pausar todas
                         </Button>
-                        <button type="button" className="p-2 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Renomear" title="Renomear" onClick={() => openRenameCadence(c)}>
+                        <button type="button" className="p-2 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Editar cadência" title="Editar nome e automações" onClick={() => openCadenceEditor(c)}>
                           <Pencil className="h-4 w-4" />
                         </button>
                         <button type="button" className="p-2 rounded-lg text-stone-400 hover:bg-red-500/10 hover:text-red-300" aria-label="Excluir" title="Excluir" onClick={() => setConfirmCad(c.id)}>
@@ -1057,7 +1045,7 @@ export function Messages({ defaultTab = 'criar' }) {
                     <div className="mt-3 space-y-2">
                       {members.length === 0 ? (
                         <p className="rounded-lg border border-dashed border-brand-800 px-3 py-3 text-xs text-stone-500">
-                          Nenhuma automação nesta cadência. Clique em “Gerenciar automações” para adicionar.
+                          Nenhuma automação nesta cadência. Clique no lápis ou em “Abrir e montar fluxo” para adicionar.
                         </p>
                       ) : (
                         members.map((a) => (
@@ -1362,7 +1350,7 @@ export function Messages({ defaultTab = 'criar' }) {
       <Modal
         isOpen={cadenceModal}
         onClose={() => setCadenceModal(false)}
-        title={cadenceForm.id ? 'Renomear cadência' : 'Nova cadência'}
+        title="Nova cadência"
         footer={
           <>
             <Button variant="ghost" onClick={() => setCadenceModal(false)}>Cancelar</Button>
