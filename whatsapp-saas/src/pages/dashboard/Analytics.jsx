@@ -123,48 +123,41 @@ export function Analytics() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <h2 className="text-xl font-semibold text-stone-50">Analytics</h2>
-        <div className="flex flex-wrap gap-2">
-          {[
-            { id: 'hoje', label: 'Hoje' },
-            { id: '7d', label: '7 dias' },
-            { id: '30d', label: '30 dias' },
-            { id: 'custom', label: 'Personalizado' },
-          ].map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => setPeriod(p.id)}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                period === p.id ? 'bg-accent-500/15 text-accent-400 border border-accent-500/30' : 'text-stone-400 border border-transparent hover:bg-white/5'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { id: 'hoje', label: 'Hoje' },
+              { id: '7d', label: '7 dias' },
+              { id: '30d', label: '30 dias' },
+              { id: 'custom', label: 'Personalizado' },
+            ].map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPeriod(p.id)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  period === p.id
+                    ? 'bg-accent-500/15 text-accent-400 border border-accent-500/30'
+                    : 'text-stone-400 border border-transparent hover:bg-white/5'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {period === 'custom' && (
+            <DateRangeCalendar
+              start={customRange.start}
+              end={customRange.end}
+              maxDate={new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })}
+              onChange={setCustomRange}
+              onApply={loadAnalytics}
+            />
+          )}
         </div>
       </div>
-      {period === 'custom' && (
-        <Card className="space-y-4">
-          <DateRangeCalendar
-            start={customRange.start}
-            end={customRange.end}
-            maxDate={new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })}
-            onChange={setCustomRange}
-          />
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={loadAnalytics}
-              disabled={!customRange.start}
-              className="rounded-xl border border-accent-500/30 bg-accent-500/15 px-4 py-2 text-sm font-medium text-accent-400 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Aplicar período
-            </button>
-          </div>
-        </Card>
-      )}
 
       {data.meta && !data.meta.hasActivity && (
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">

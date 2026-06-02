@@ -1,21 +1,8 @@
 import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-react'
 
-const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
-const MONTHS = [
-  'Janeiro',
-  'Fevereiro',
-  'Março',
-  'Abril',
-  'Maio',
-  'Junho',
-  'Julho',
-  'Agosto',
-  'Setembro',
-  'Outubro',
-  'Novembro',
-  'Dezembro',
-]
+const WEEKDAYS = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S']
+const MONTHS_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
 function parseYmd(ymd) {
   if (!ymd) return null
@@ -34,17 +21,13 @@ function isSameDay(a, b) {
 function isInRange(day, start, end) {
   if (!start || !end) return false
   const t = day.getTime()
-  const a = Math.min(start.getTime(), end.getTime())
-  const b = Math.max(start.getTime(), end.getTime())
-  return t >= a && t <= b
-}
-
-function startOfMonth(year, month) {
-  return new Date(year, month, 1, 12, 0, 0, 0)
+  const lo = Math.min(start.getTime(), end.getTime())
+  const hi = Math.max(start.getTime(), end.getTime())
+  return t >= lo && t <= hi
 }
 
 function buildMonthGrid(viewYear, viewMonth) {
-  const first = startOfMonth(viewYear, viewMonth)
+  const first = new Date(viewYear, viewMonth, 1, 12, 0, 0, 0)
   const startPad = first.getDay()
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
   const cells = []
@@ -55,13 +38,13 @@ function buildMonthGrid(viewYear, viewMonth) {
   return cells
 }
 
-function formatBr(ymd) {
+function formatShort(ymd) {
   const d = parseYmd(ymd)
-  if (!d) return '—'
-  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
+  if (!d) return null
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 }
 
-export function DateRangeCalendar({ start = '', end = '', onChange, maxDate }) {
+export function DateRangeCalendar({ start = '', end = '', onChange, onApply, maxDate }) {
   const today = useMemo(() => {
     const t = maxDate ? parseYmd(maxDate) : new Date()
     return t || new Date()
@@ -75,6 +58,12 @@ export function DateRangeCalendar({ start = '', end = '', onChange, maxDate }) {
   const startDate = parseYmd(start)
   const endDate = parseYmd(end)
   const cells = useMemo(() => buildMonthGrid(viewYear, viewMonth), [viewYear, viewMonth])
+
+  const rangeLabel = useMemo(() => {
+    if (start && end) return `${formatShort(start)} – ${formatShort(end)}`
+    if (start) return `${formatShort(start)} → escolha o fim`
+    return 'Escolha o início'
+  }, [start, end])
 
   function shiftMonth(delta) {
     let m = viewMonth + delta
@@ -106,79 +95,67 @@ export function DateRangeCalendar({ start = '', end = '', onChange, maxDate }) {
     onChange?.({ start: toYmd(startDate), end: ymd })
   }
 
-  function setPreset(days) {
-    const endD = today
-    const startD = new Date(today)
-    startD.setDate(startD.getDate() - (days - 1))
-    onChange?.({ start: toYmd(startD), end: toYmd(endD) })
-    setViewYear(endD.getFullYear())
-    setViewMonth(endD.getMonth())
-  }
-
   return (
-    <div className="rounded-2xl border border-brand-700 bg-brand-950/60 p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm text-stone-300">
-          <Calendar className="h-4 w-4 text-accent-400" />
-          <span>
-            {start ? formatBr(start) : 'Início'} — {end ? formatBr(end) : 'Fim'}
-          </span>
+    <div className="inline-flex w-full max-w-[300px] flex-col rounded-xl border border-brand-700/90 bg-brand-950/80 p-3 shadow-lg shadow-black/20">
+      <div className="mb-2.5 flex items-center justify-between gap-2 border-b border-brand-800/80 pb-2.5">
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-stone-300">
+          <Calendar className="h-3.5 w-3.5 shrink-0 text-accent-400/90" aria-hidden />
+          <span className="truncate font-medium">{rangeLabel}</span>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {[
-            { label: '7 dias', days: 7 },
-            { label: '30 dias', days: 30 },
-            { label: '90 dias', days: 90 },
-          ].map((p) => (
-            <button
-              key={p.days}
-              type="button"
-              onClick={() => setPreset(p.days)}
-              className="rounded-lg border border-brand-700 px-2.5 py-1 text-xs text-stone-400 transition hover:border-accent-500/40 hover:text-accent-300"
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        {onApply && (
+          <button
+            type="button"
+            onClick={onApply}
+            disabled={!start}
+            className="shrink-0 rounded-lg bg-accent-500/90 px-2.5 py-1 text-[11px] font-semibold text-brand-950 transition hover:bg-accent-400 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Aplicar
+          </button>
+        )}
       </div>
 
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-1.5 flex items-center justify-between gap-1">
         <button
           type="button"
           onClick={() => shiftMonth(-1)}
-          className="rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+          className="rounded-md p-1 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
           aria-label="Mês anterior"
         >
-          <ChevronLeft className="h-5 w-5" />
+          <ChevronLeft className="h-4 w-4" />
         </button>
-        <p className="text-sm font-semibold text-stone-100 font-heading">
-          {MONTHS[viewMonth]} {viewYear}
+        <p className="text-xs font-medium text-stone-200">
+          {MONTHS_SHORT[viewMonth]} {viewYear}
         </p>
         <button
           type="button"
           onClick={() => shiftMonth(1)}
-          className="rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+          className="rounded-md p-1 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
           aria-label="Próximo mês"
         >
-          <ChevronRight className="h-5 w-5" />
+          <ChevronRight className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-stone-500 mb-1">
-        {WEEKDAYS.map((w) => (
-          <span key={w}>{w}</span>
+      <div className="grid grid-cols-7 gap-px text-center text-[10px] font-medium uppercase tracking-wide text-stone-600">
+        {WEEKDAYS.map((w, i) => (
+          <span key={`${w}-${i}`} className="py-0.5">
+            {w}
+          </span>
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-px">
         {cells.map((day, idx) => {
-          if (!day) return <span key={`empty-${idx}`} />
+          if (!day) {
+            return <span key={`e-${idx}`} className="h-7" aria-hidden />
+          }
           const ymd = toYmd(day)
           const disabled = ymd > todayYmd
           const isStart = isSameDay(day, startDate)
           const isEnd = isSameDay(day, endDate)
           const inRange = isInRange(day, startDate, endDate)
           const isToday = ymd === todayYmd
+          const isEdge = isStart || isEnd
 
           return (
             <button
@@ -186,16 +163,16 @@ export function DateRangeCalendar({ start = '', end = '', onChange, maxDate }) {
               type="button"
               disabled={disabled}
               onClick={() => pickDay(day)}
-              className={`relative flex h-9 w-full items-center justify-center rounded-lg text-sm transition ${
+              className={`flex h-7 w-full items-center justify-center text-xs transition ${
                 disabled
                   ? 'cursor-not-allowed text-stone-700'
-                  : isStart || isEnd
-                    ? 'bg-accent-500 font-semibold text-brand-950'
+                  : isEdge
+                    ? 'rounded-md bg-accent-500 font-semibold text-brand-950 shadow-sm'
                     : inRange
-                      ? 'bg-accent-500/20 text-accent-200'
+                      ? 'bg-accent-500/15 text-accent-200/90'
                       : isToday
-                        ? 'border border-accent-500/40 text-accent-300 hover:bg-white/5'
-                        : 'text-stone-200 hover:bg-white/10'
+                        ? 'rounded-md text-accent-400 ring-1 ring-inset ring-accent-500/35 hover:bg-white/5'
+                        : 'rounded-md text-stone-300 hover:bg-white/8 hover:text-stone-100'
               }`}
             >
               {day.getDate()}
@@ -204,9 +181,7 @@ export function DateRangeCalendar({ start = '', end = '', onChange, maxDate }) {
         })}
       </div>
 
-      <p className="mt-3 text-xs text-stone-500">
-        Clique no dia inicial e depois no dia final. Para trocar, clique de novo no novo início.
-      </p>
+      <p className="mt-2 text-[10px] leading-snug text-stone-600">Dois cliques: início, depois fim.</p>
     </div>
   )
 }
