@@ -162,10 +162,16 @@ export function Analytics() {
         </Card>
       )}
 
-      {data.meta && !data.meta.messagesImported && (
+      {data.meta && !data.meta.hasActivity && (
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
-          Ainda não há mensagens importadas nos grupos. Em <strong>Grupos</strong>, abra cada grupo e sincronize o histórico
-          para preencher gráficos e métricas reais.
+          Nenhuma mensagem no período. Envie pelo app ou, em <strong>Grupos</strong>, sincronize o histórico do WhatsApp para
+          incluir conversas antigas nos gráficos.
+        </p>
+      )}
+      {data.meta?.hasActivity && !data.meta?.messagesImported && (data.meta?.outboundCount || 0) > 0 && (
+        <p className="rounded-xl border border-brand-700/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
+          Métricas incluem <strong>{data.meta.outboundCount}</strong> mensagem(ns) enviada(s) pela plataforma. Para ver
+          respostas dos membros, sincronize o histórico em <strong>Grupos</strong>.
         </p>
       )}
 
@@ -319,15 +325,16 @@ export function Analytics() {
               <h3 className="font-semibold text-stone-50 mb-4">Mensagens com mais engajamento</h3>
               <div className="space-y-2">
                 {topEngagedMessages.length === 0 ? (
-                  <p className="text-sm text-stone-500">Importe mensagens dos grupos para ver as mais engajadas.</p>
+                  <p className="text-sm text-stone-500">Envie mensagens ou sincronize o histórico do grupo para ver destaques.</p>
                 ) : (
                   topEngagedMessages.map((msg) => (
                     <div key={msg.id} className="rounded-lg border border-brand-800 p-3">
                       <p className="text-sm text-stone-100">{msg.title}</p>
                       <p className="text-xs text-stone-500 mt-1">{msg.group}</p>
                       <p className="text-xs text-accent-400 mt-1">
-                        {msg.replies} resposta(s) no período
-                        {msg.reactions > 0 ? ` • ${msg.reactions} reações` : ''}
+                        {msg.isOutbound
+                          ? 'Enviada pela plataforma'
+                          : `${msg.replies} resposta(s) no período${msg.reactions > 0 ? ` • ${msg.reactions} reações` : ''}`}
                       </p>
                     </div>
                   ))

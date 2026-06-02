@@ -1,6 +1,63 @@
 const { prisma } = require("./prisma")
 
 const PT_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
+const OUTBOUND_OK_STATUSES = ["enviado", "entregue", "lido"]
+
+async function loadUnifiedGroupMessages(userId, groups, start, end) {
+  const groupDbIds = groups.map((g) => g.id)
+  const groupJids = groups.map((g) => g.groupJid)
+  const jidToDbId = new Map(groups.map((g) => [g.groupJid, g.id]))
+
+  const [imported, outbound] = await Promise.all([
+    prisma.whatsAppMessage.findMany({
+      where: {
+        userId,
+        groupId: { in: groupDbIds },
+        timestamp: { gte: start, lte: end },
+      },
+      select: {
+        id: true,
+        groupId: true,
+        timestamp: true,
+        fromMe: true,
+        senderJid: true,
+        senderName: true,
+        body: true,
+      },
+      orderBy: { timestamp: "asc" },
+    }),
+    groupJids.length
+      ? prisma.outboundMessage.findMany({
+          where: {
+            userId,
+            groupJid: { in: groupJids },
+            sentAt: { gte: start, lte: end },
+            status: { in: OUTBOUND_OK_STATUSES },
+          },
+          select: { id: true, groupJid: true, groupName: true, body: true, sentAt: true },
+          orderBy: { sentAt: "asc" },
+        })
+      : [],
+  ])
+
+  const merged = [...imported]
+  for (const o of outbound) {
+    const groupId = jidToDbId.get(o.groupJid)
+    if (!groupId) continue
+    merged.push({
+      id: `outbound-${o.id}`,
+      groupId,
+      timestamp: o.sentAt,
+      fromMe: true,
+      senderJid: null,
+      senderName: "Você",
+      body: o.body || "",
+    })
+  }
+
+  merged.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  return { messages: merged, importedCount: imported.length, outboundCount: outbound.length, outboundRows: outbound }
+}
 
 function periodToRange(period, startDate, endDate) {
   const end = endDate ? new Date(`${endDate}T23:59:59.999-03:00`) : new Date()
@@ -81,28 +138,16 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
     orderBy: { name: "asc" },
   })
 
-  const groupDbIds = groups.map((g) => g.id)
-  if (!groupDbIds.length) {
+  if (!groups.length) {
     return emptyAnalytics(period)
   }
 
-  const messages = await prisma.whatsAppMessage.findMany({
-    where: {
-      userId,
-      groupId: { in: groupDbIds },
-      timestamp: { gte: start, lte: end },
-    },
-    select: {
-      id: true,
-      groupId: true,
-      timestamp: true,
-      fromMe: true,
-      senderJid: true,
-      senderName: true,
-      body: true,
-    },
-    orderBy: { timestamp: "asc" },
-  })
+  const { messages, importedCount, outboundCount, outboundRows } = await loadUnifiedGroupMessages(
+    userId,
+    groups,
+    start,
+    end,
+  )
 
   const totalMessages = messages.length
   const inbound = messages.filter((m) => !m.fromMe)
@@ -193,7 +238,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
   const replyScores = countRepliesAfter(
     messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp).getTime() })),
   )
-  const topMessages = replyScores.slice(0, 6).map((item, idx) => {
+  const topFromReplies = replyScores.slice(0, 6).map((item, idx) => {
     const body = item.message.body || "[mídia]"
     const replies = item.replies
     const rate = totalMessages > 0 ? Number(((replies / Math.max(inbound.length, 1)) * 100 + replies * 2).toFixed(1)) : 0
@@ -206,6 +251,19 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
       replies,
     }
   })
+  const topFromOutbound = [...outboundRows]
+    .sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt))
+    .slice(0, 6)
+    .map((o) => ({
+      id: `out-${o.id}`,
+      title: (o.body || "Mensagem enviada").length > 72 ? `${(o.body || "Mensagem enviada").slice(0, 72)}…` : o.body || "Mensagem enviada",
+      group: o.groupName || "Grupo",
+      engagementRate: 0,
+      reactions: 0,
+      replies: 0,
+      isOutbound: true,
+    }))
+  const topMessages = [...topFromReplies, ...topFromOutbound].slice(0, 8)
 
   return {
     period,
@@ -223,7 +281,9 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
     meta: {
       groupsCount: groups.length,
       activeGroupsOnly: true,
-      messagesImported: totalMessages > 0,
+      messagesImported: importedCount > 0,
+      outboundCount,
+      hasActivity: totalMessages > 0,
       rangeStart: start.toISOString(),
       rangeEnd: end.toISOString(),
     },
@@ -244,7 +304,7 @@ function emptyAnalytics(period) {
     topMembers: [],
     topMessages: [],
     groupComparison: [],
-    meta: { groupsCount: 0, messagesImported: false },
+    meta: { groupsCount: 0, messagesImported: false, outboundCount: 0, hasActivity: false },
   }
 }
 
@@ -261,18 +321,33 @@ async function buildDashboard(userId) {
   const last24h = new Date(now.getTime() - 86400000)
 
   const groupDbIds = groups.map((g) => g.id)
+  const groupJids = groups.map((g) => g.groupJid)
 
-  const [messagesToday, messagesLast7DaysRaw, topGroupsRaw, recentOutbound, recentAutomations] =
+  const outboundWhere = (from) => ({
+    userId,
+    groupJid: { in: groupJids },
+    sentAt: { gte: from },
+    status: { in: OUTBOUND_OK_STATUSES },
+  })
+
+  const [messagesTodayWa, messagesTodayOut, messagesLast7Wa, messagesLast7Out, topGroupsWa, topGroupsOut, recentOutbound, recentAutomations] =
     await Promise.all([
       groupDbIds.length
         ? prisma.whatsAppMessage.count({
             where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: todayStart } },
           })
         : 0,
+      groupJids.length ? prisma.outboundMessage.count({ where: outboundWhere(todayStart) }) : 0,
       groupDbIds.length
         ? prisma.whatsAppMessage.findMany({
             where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: last7Start } },
             select: { timestamp: true },
+          })
+        : [],
+      groupJids.length
+        ? prisma.outboundMessage.findMany({
+            where: outboundWhere(last7Start),
+            select: { sentAt: true },
           })
         : [],
       groupDbIds.length
@@ -280,8 +355,13 @@ async function buildDashboard(userId) {
             by: ["groupId"],
             where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: last24h } },
             _count: { id: true },
-            orderBy: { _count: { id: "desc" } },
-            take: 5,
+          })
+        : [],
+      groupJids.length
+        ? prisma.outboundMessage.groupBy({
+            by: ["groupJid"],
+            where: outboundWhere(last24h),
+            _count: { id: true },
           })
         : [],
       prisma.outboundMessage.findMany({
@@ -310,9 +390,15 @@ async function buildDashboard(userId) {
   const engagementRate =
     totalMembers > 0 ? Number(((activeCount / totalMembers) * 100).toFixed(1)) : 0
 
+  const messagesToday = messagesTodayWa + messagesTodayOut
+
   const dayBuckets = new Map()
-  for (const m of messagesLast7DaysRaw) {
+  for (const m of messagesLast7Wa) {
     const dk = dayKeyInSp(m.timestamp)
+    dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
+  }
+  for (const m of messagesLast7Out) {
+    const dk = dayKeyInSp(m.sentAt)
     dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
   }
   const messagesLast7Days = []
@@ -327,14 +413,25 @@ async function buildDashboard(userId) {
   }
 
   const groupByDbId = new Map(groups.map((g) => [g.id, g]))
-  const topGroups = topGroupsRaw.map((row) => {
+  const msg24hByJid = new Map()
+  for (const row of topGroupsWa) {
     const g = groupByDbId.get(row.groupId)
-    return {
-      id: g?.groupJid || row.groupId,
-      name: g?.name || "Grupo",
-      messages24h: row._count.id,
-    }
-  })
+    if (g) msg24hByJid.set(g.groupJid, (msg24hByJid.get(g.groupJid) || 0) + row._count.id)
+  }
+  for (const row of topGroupsOut) {
+    msg24hByJid.set(row.groupJid, (msg24hByJid.get(row.groupJid) || 0) + row._count.id)
+  }
+  const topGroups = [...msg24hByJid.entries()]
+    .map(([jid, count]) => {
+      const g = groups.find((x) => x.groupJid === jid)
+      return {
+        id: jid,
+        name: g?.name || jid,
+        messages24h: count,
+      }
+    })
+    .sort((a, b) => b.messages24h - a.messages24h)
+    .slice(0, 5)
 
   const recentActivities = []
   for (const o of recentOutbound) {
@@ -373,7 +470,7 @@ async function buildDashboard(userId) {
     recentActivities: recentActivities.slice(0, 6).map(({ id, text, time }) => ({ id, text, time })),
     meta: {
       whatsappConnected: groups.length > 0,
-      hasImportedMessages: messagesLast7DaysRaw.length > 0,
+      hasImportedMessages: messagesLast7Wa.length + messagesLast7Out.length > 0,
     },
   }
 }

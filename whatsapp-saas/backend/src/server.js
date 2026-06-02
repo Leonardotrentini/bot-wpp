@@ -1437,6 +1437,37 @@ function isRetryableSendError(err) {
   return true
 }
 
+async function recordOutboundAsGroupMessage(userId, groupJid, content, providerMessageId) {
+  const group = await prisma.whatsAppGroup.findUnique({
+    where: { userId_groupJid: { userId, groupJid } },
+    select: { id: true },
+  })
+  if (!group) return
+
+  const messageId =
+    providerMessageId || `outbound-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  const mediaType = content.mediaType && content.mediaType !== "none" ? content.mediaType : "text"
+
+  await prisma.whatsAppMessage.upsert({
+    where: { groupId_messageId: { groupId: group.id, messageId } },
+    create: {
+      userId,
+      groupId: group.id,
+      messageId,
+      fromMe: true,
+      senderName: "Você",
+      type: mediaType,
+      body: content.body || null,
+      timestamp: new Date(),
+    },
+    update: {
+      body: content.body || null,
+      type: mediaType,
+      timestamp: new Date(),
+    },
+  })
+}
+
 async function deliverWithRetry(instanceName, groupJid, content) {
   let attempt = 0
   for (;;) {
@@ -1458,6 +1489,7 @@ async function dispatchMessage({ userId, instanceName, groupJids, content, autom
     const groupName = await resolveGroupName(userId, groupJid)
     try {
       const resp = await deliverWithRetry(instanceName, groupJid, content)
+      const providerMessageId = extractProviderId(resp)
       await prisma.outboundMessage.create({
         data: {
           userId,
@@ -1467,9 +1499,10 @@ async function dispatchMessage({ userId, instanceName, groupJids, content, autom
           body: content.body || null,
           mediaType: content.mediaType,
           status: "enviado",
-          providerMessageId: extractProviderId(resp),
+          providerMessageId,
         },
       })
+      await recordOutboundAsGroupMessage(userId, groupJid, content, providerMessageId)
       sent += 1
       results.push({ groupJid, groupName, status: "enviado" })
     } catch (err) {
