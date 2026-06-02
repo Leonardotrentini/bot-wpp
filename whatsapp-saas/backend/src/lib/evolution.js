@@ -271,9 +271,11 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
   if (mimetype) body.mimetype = mimetype
   if (caption) body.caption = caption
   if (fileName) body.fileName = fileName
+  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
+  const opts = { method: "POST", body, timeoutMs }
   return firstSuccess([
-    () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-    () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, { method: "POST", body: { ...body, options: {} } }),
+    () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, opts),
+    () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, { ...opts, body: { ...body, options: {} } }),
   ])
 }
 

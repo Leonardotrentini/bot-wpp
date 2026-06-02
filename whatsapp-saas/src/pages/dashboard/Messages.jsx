@@ -48,9 +48,7 @@ import {
   setCadenceStatus,
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
-
-const IMAGE_MAX = 5 * 1024 * 1024
-const VIDEO_MAX = 16 * 1024 * 1024
+import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, imageMaxLabel, videoMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const HIST_PAGE_SIZE = 20
 
@@ -169,7 +167,7 @@ function PreviewBubble({ content }) {
 function MediaAttachmentBlock({ mediaType, mediaBase64, mediaName, onPick, onClear }) {
   return (
     <div className="space-y-2">
-      <p className="text-sm text-stone-200">Mídia (imagem até 5MB ou vídeo até 16MB)</p>
+      <p className="text-sm text-stone-200">Mídia (imagem até {imageMaxLabel} ou vídeo até {videoMaxLabel})</p>
       {mediaType === 'none' ? (
         <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-700 px-4 py-4 text-sm text-stone-400 hover:bg-white/5">
           Clique para anexar imagem ou vídeo
@@ -342,9 +340,9 @@ export function Messages({ defaultTab = 'criar' }) {
       toast.error('Tipo não suportado. Use imagem ou vídeo.')
       return
     }
-    const max = kind === 'video' ? VIDEO_MAX : IMAGE_MAX
+    const max = kind === 'video' ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES
     if (file.size > max) {
-      toast.error(`Arquivo grande demais. Limite: ${kind === 'video' ? '16MB' : '5MB'}.`)
+      toast.error(`Arquivo grande demais. Limite: ${mediaLimitLabel(kind)}.`)
       return
     }
     const dataUrl = await readFileAsDataUrl(file)

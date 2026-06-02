@@ -67,7 +67,7 @@ app.use(
     credentials: true,
   }),
 )
-app.use(express.json({ limit: "32mb" }))
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
 
 app.use("/api/admin", adminRoutes)
 
@@ -1079,7 +1079,7 @@ const MESSAGE_SEND_GROUP_DELAY_MS = Number(process.env.MESSAGE_SEND_GROUP_DELAY_
 const MESSAGE_SEND_JITTER_MS = Number(process.env.MESSAGE_SEND_JITTER_MS || 4000)
 const MESSAGE_SEND_RETRIES = Number(process.env.MESSAGE_SEND_RETRIES || 1)
 const MESSAGE_SEND_RETRY_DELAY_MS = Number(process.env.MESSAGE_SEND_RETRY_DELAY_MS || 4000)
-const MEDIA_MAX_BASE64_LEN = Number(process.env.MEDIA_MAX_BASE64_LEN || 24_000_000) // ~16MB binário
+const { validateMediaContentSize } = require("./lib/mediaLimits.js")
 const ENABLE_SCHEDULER = process.env.ENABLE_SCHEDULER !== "false"
 const SCHEDULER_CATCHUP_HOURS = Number(process.env.SCHEDULER_CATCHUP_HOURS || 6)
 const SP_OFFSET = "-03:00" // America/Sao_Paulo (sem horário de verão)
@@ -1110,13 +1110,7 @@ function getMessageContent(source) {
 }
 
 function validateContent(content) {
-  const hasMedia = content.mediaType === "image" || content.mediaType === "video"
-  if (!hasMedia && !content.body?.trim()) return "Escreva um texto ou anexe uma mídia."
-  if (hasMedia && !content.mediaBase64) return "Mídia ausente para o tipo selecionado."
-  if (hasMedia && content.mediaBase64.length > MEDIA_MAX_BASE64_LEN) {
-    return "Mídia grande demais. Use imagens até ~5MB e vídeos até ~16MB."
-  }
-  return null
+  return validateMediaContentSize(content)
 }
 
 async function resolveContentFromBody(userId, body) {
