@@ -19,7 +19,10 @@ function mbLabel(bytes) {
 function validateMediaContentSize(content) {
   const hasMedia = content.mediaType === "image" || content.mediaType === "video"
   if (!hasMedia && !content.body?.trim()) return "Escreva um texto ou anexe uma mídia."
-  if (hasMedia && !content.mediaBase64) return "Mídia ausente para o tipo selecionado."
+  if (!hasMedia) return null
+  if (!content.mediaBase64 || typeof content.mediaBase64 !== "string") {
+    return "Mídia ausente para o tipo selecionado."
+  }
 
   const len = content.mediaBase64.length
   if (content.mediaType === "video") {

@@ -1753,30 +1753,40 @@ app.get("/api/messages/templates", authMiddleware, async (req, res) => {
 })
 
 app.post("/api/messages/templates", authMiddleware, async (req, res) => {
-  const parsed = templateBodySchema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
-  const content = getMessageContent(parsed.data)
-  const invalid = validateContent(content)
-  if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
-  const tpl = await prisma.messageTemplate.create({
-    data: { userId: req.user.sub, name: parsed.data.name, ...content },
-  })
-  res.status(201).json({ template: getTemplatePayload(tpl) })
+  try {
+    const parsed = templateBodySchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
+    const content = getMessageContent(parsed.data)
+    const invalid = validateContent(content)
+    if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+    const tpl = await prisma.messageTemplate.create({
+      data: { userId: req.user.sub, name: parsed.data.name, ...content },
+    })
+    return res.status(201).json({ template: getTemplatePayload(tpl) })
+  } catch (err) {
+    console.error("[templates/create]", err?.message || err)
+    return res.status(500).json({ error: "TEMPLATE_SAVE_FAILED", message: "Não foi possível salvar a mensagem." })
+  }
 })
 
 app.put("/api/messages/templates/:id", authMiddleware, async (req, res) => {
-  const parsed = templateBodySchema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
-  const existing = await prisma.messageTemplate.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
-  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
-  const content = getMessageContent(parsed.data)
-  const invalid = validateContent(content)
-  if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
-  const tpl = await prisma.messageTemplate.update({
-    where: { id: existing.id },
-    data: { name: parsed.data.name, ...content },
-  })
-  res.json({ template: getTemplatePayload(tpl) })
+  try {
+    const parsed = templateBodySchema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
+    const existing = await prisma.messageTemplate.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+    if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+    const content = getMessageContent(parsed.data)
+    const invalid = validateContent(content)
+    if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
+    const tpl = await prisma.messageTemplate.update({
+      where: { id: existing.id },
+      data: { name: parsed.data.name, ...content },
+    })
+    return res.json({ template: getTemplatePayload(tpl) })
+  } catch (err) {
+    console.error("[templates/update]", err?.message || err)
+    return res.status(500).json({ error: "TEMPLATE_SAVE_FAILED", message: "Não foi possível salvar a mensagem." })
+  }
 })
 
 app.delete("/api/messages/templates/:id", authMiddleware, async (req, res) => {
