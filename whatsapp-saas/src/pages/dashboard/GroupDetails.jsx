@@ -159,6 +159,7 @@ export function GroupDetails() {
   const [tagsToRemove, setTagsToRemove] = useState(() => new Set())
   const [inlineNewTag, setInlineNewTag] = useState('')
   const [statusRules, setStatusRules] = useState(() => defaultStatusRules())
+  const [confirmInactivityModal, setConfirmInactivityModal] = useState(false)
   const [newAdmin, setNewAdmin] = useState('')
   const [x1Automation, setX1Automation] = useState(() => defaultX1Automation())
   const catalogExtrasRef = useRef([])
@@ -927,7 +928,7 @@ export function GroupDetails() {
                       }
                     />
                   </div>
-                  <Button type="button" variant="secondary" onClick={applyInactivityRule}>
+                  <Button type="button" variant="secondary" onClick={() => setConfirmInactivityModal(true)}>
                     Aplicar regra agora
                   </Button>
                 </div>
@@ -943,6 +944,14 @@ export function GroupDetails() {
                 <p className="text-xs text-stone-600">
                   Em produção: job agendado lê último &quot;visto&quot; ou última mensagem no grupo via API do WhatsApp e aplica a mesma lógica.
                 </p>
+                <div className="rounded-lg border border-brand-800/80 bg-brand-950/40 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">Regras ativas</p>
+                  <ul className="mt-2 space-y-1 text-xs text-stone-300">
+                    <li>• Inatividade após {statusRules.inactiveAfterDays} dia(s) sem atividade</li>
+                    <li>• Checagem automática diária: {statusRules.autoCheckEnabled ? 'ativada' : 'desativada'}</li>
+                    <li>• Aplicação manual disponível via botão &quot;Aplicar regra agora&quot;</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </Card>
@@ -1096,6 +1105,33 @@ export function GroupDetails() {
               </table>
             </div>
           </Card>
+
+          <Modal
+            isOpen={confirmInactivityModal}
+            onClose={() => setConfirmInactivityModal(false)}
+            title="Confirmar aplicação da regra"
+            size="md"
+            footer={
+              <>
+                <Button variant="ghost" onClick={() => setConfirmInactivityModal(false)}>
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={() => {
+                    setConfirmInactivityModal(false)
+                    applyInactivityRule()
+                  }}
+                >
+                  Confirmar e aplicar
+                </Button>
+              </>
+            }
+          >
+            <p className="text-sm text-stone-300">
+              Aplicar agora a regra de inatividade para marcar como <strong>inativo</strong> membros ativos com mais de{' '}
+              <strong>{statusRules.inactiveAfterDays} dia(s)</strong> sem atividade?
+            </p>
+          </Modal>
 
           <Modal
             isOpen={addTagModal}
