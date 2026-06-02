@@ -375,7 +375,6 @@ export function GroupDetails() {
     () => [
       { id: 'visao', label: 'Visão geral' },
       { id: 'membros', label: 'Membros' },
-      { id: 'governanca', label: 'Governança' },
       { id: 'config', label: 'Configurações' },
     ],
     [],
