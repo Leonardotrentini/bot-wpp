@@ -397,7 +397,7 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
   await prisma.whatsAppGroup.update({
     where: { id: groupRow.id },
     data: {
-      memberCount: participants.length || groupRow.memberCount,
+      memberCount: enriched.length || groupRow.memberCount,
       participantsSyncedAt: new Date(),
       lastSyncedAt: new Date(),
     },
@@ -1149,27 +1149,23 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       })
     }
 
+    let participantRows = groupRow.participants
     const needsParticipantSync =
       !groupRow.participantsSyncedAt ||
       Date.now() - groupRow.participantsSyncedAt.getTime() > PARTICIPANTS_SYNC_MIN_INTERVAL_MS
-    let participantRows = groupRow.participants
 
     if (needsParticipantSync && (!conn.groupSyncRetryAfter || conn.groupSyncRetryAfter <= new Date())) {
-      try {
-        await syncParticipantsForGroupRow(conn, groupRow)
-        participantRows = await prisma.whatsAppGroupParticipant.findMany({
-          where: { groupId: groupRow.id },
-          orderBy: { name: "asc" },
-        })
-      } catch (err) {
-        if (!isRateLimitError(err)) throw err
-        await updateConnectionSync(conn.userId, {
-          groupSyncStatus: "RATE_LIMITED",
-          groupSyncMessage: "WhatsApp limitou consultas de participantes. Mostrando cache salvo.",
-          groupSyncError: err?.message || "rate-overlimit",
-          groupSyncRetryAfter: new Date(Date.now() + GROUP_SYNC_RATE_LIMIT_BACKOFF_MS),
-        })
-      }
+      void syncParticipantsForGroupRow(conn, groupRow).catch((err) => {
+        if (isRateLimitError(err)) {
+          return updateConnectionSync(conn.userId, {
+            groupSyncStatus: "RATE_LIMITED",
+            groupSyncMessage: "WhatsApp limitou consultas de participantes. Mostrando cache salvo.",
+            groupSyncError: err?.message || "rate-overlimit",
+            groupSyncRetryAfter: new Date(Date.now() + GROUP_SYNC_RATE_LIMIT_BACKOFF_MS),
+          })
+        }
+        console.error(`[groups/${groupJid}] sync participantes:`, err?.message || err)
+      })
     }
 
     const group = getGroupApiPayload(groupRow)

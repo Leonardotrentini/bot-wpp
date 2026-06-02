@@ -136,6 +136,7 @@ export function GroupDetails() {
   const initialTab = searchParams.get('tab') === 'config' ? 'config' : 'visao'
   const [tab, setTab] = useState(initialTab)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [payload, setPayload] = useState(null)
   const [memberFilter, setMemberFilter] = useState('todos')
   const [memberQ, setMemberQ] = useState('')
@@ -231,12 +232,22 @@ export function GroupDetails() {
   useEffect(() => {
     let ok = true
     setLoading(true)
+    setLoadError(null)
     getGroupDetails(id)
       .then((res) => {
-        if (ok) {
-          setPayload(res.data)
-          if (res.data.settings) setSettings({ ...res.data.settings })
-        }
+        if (!ok) return
+        setPayload(res.data)
+        if (res.data.settings) setSettings({ ...res.data.settings })
+      })
+      .catch((err) => {
+        if (!ok) return
+        const msg =
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          'Não foi possível carregar os detalhes do grupo.'
+        setLoadError(typeof msg === 'string' ? msg : 'Não foi possível carregar os detalhes do grupo.')
+        setPayload(null)
       })
       .finally(() => {
         if (ok) setLoading(false)
@@ -689,12 +700,28 @@ export function GroupDetails() {
     persistAll(members, catalogExtras, statusRules, governance, next, nextAudit, snapshots)
   }
 
-  if (loading || !payload) {
+  if (loading) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-12 w-full" />
         <Skeleton className="h-64" />
+      </div>
+    )
+  }
+
+  if (loadError || !payload) {
+    return (
+      <div className="space-y-4">
+        <Link to="/dashboard/groups" className="inline-flex items-center gap-2 text-sm text-accent-400 hover:underline">
+          <ArrowLeft className="h-4 w-4" /> Voltar aos grupos
+        </Link>
+        <p className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-6 text-sm text-red-200/90">
+          {loadError || 'Grupo não encontrado.'}
+        </p>
+        <Button variant="secondary" onClick={() => window.location.reload()}>
+          Tentar novamente
+        </Button>
       </div>
     )
   }
