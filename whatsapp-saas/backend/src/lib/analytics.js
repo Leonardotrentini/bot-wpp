@@ -74,7 +74,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
   const { start, end } = periodToRange(period, startDate, endDate)
 
   const groups = await prisma.whatsAppGroup.findMany({
-    where: { userId },
+    where: { userId, status: "ativo" },
     include: {
       participants: { select: { status: true, participantJid: true, name: true, createdAt: true } },
     },
@@ -138,6 +138,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
     groupComparison.push({
       id: g.groupJid,
       name: g.name,
+      status: g.status,
       messages: msgsInPeriod,
       members: members || g.memberCount || 0,
       engagement: Number(engagement.toFixed(1)),
@@ -221,6 +222,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
     groupComparison,
     meta: {
       groupsCount: groups.length,
+      activeGroupsOnly: true,
       messagesImported: totalMessages > 0,
       rangeStart: start.toISOString(),
       rangeEnd: end.toISOString(),
@@ -248,7 +250,7 @@ function emptyAnalytics(period) {
 
 async function buildDashboard(userId) {
   const groups = await prisma.whatsAppGroup.findMany({
-    where: { userId },
+    where: { userId, status: "ativo" },
     include: { participants: { select: { participantJid: true, status: true } } },
     orderBy: { name: "asc" },
   })

@@ -79,7 +79,7 @@ export function Analytics() {
   }
 
   const topHorizontal = [...(data.topMembers || [])].reverse()
-  const availableGroups = data.groupComparison || []
+  const availableGroups = (data.groupComparison || []).filter((g) => g.status === 'ativo' || !g.status)
   const effectiveGroupIds = selectedGroups.length ? selectedGroups : availableGroups.map((g) => g.id)
   const idSet = new Set(effectiveGroupIds)
   const groupNameToId = new Map(availableGroups.map((g) => [g.name, g.id]))
@@ -171,9 +171,10 @@ export function Analytics() {
 
       <Card className="space-y-4">
         <h3 className="font-semibold text-stone-50">Setup de visualização</h3>
+        <p className="text-xs text-stone-500">Exibindo somente grupos marcados como <strong className="text-stone-400">ativo</strong> em Grupos.</p>
         <div className="grid gap-4 lg:grid-cols-2">
           <div>
-            <p className="text-sm text-stone-300 mb-2">Seleção de grupos</p>
+            <p className="text-sm text-stone-300 mb-2">Seleção de grupos ({availableGroups.length})</p>
             <div className="max-h-40 overflow-y-auto rounded-xl border border-brand-800 p-3 space-y-2">
               {availableGroups.length === 0 ? (
                 <p className="text-xs text-stone-500">Nenhum grupo sincronizado ainda.</p>
@@ -290,13 +291,24 @@ export function Analytics() {
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={filteredEngagementByGroup} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name }) => (name || '').split(/\s+/)[0]}>
+                    <Pie
+                      data={filteredEngagementByGroup}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={80}
+                      label={false}
+                    >
                       {filteredEngagementByGroup.map((_, i) => (
                         <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                       ))}
                     </Pie>
                     <Tooltip contentStyle={{ background: '#0f1812', border: '1px solid #2d4a38', borderRadius: '12px' }} />
-                    <Legend />
+                    <Legend
+                      wrapperStyle={{ fontSize: 11, maxHeight: 120, overflowY: 'auto' }}
+                      formatter={(value) => (String(value).length > 28 ? `${String(value).slice(0, 28)}…` : value)}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
