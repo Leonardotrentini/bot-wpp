@@ -4,7 +4,6 @@ import {
   Users,
   UserCircle2,
   Zap,
-  Plug,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -21,7 +20,6 @@ const nav = [
   { to: '/dashboard/groups', label: 'Grupos', icon: Users },
   { to: '/dashboard/automations', label: 'Automações', icon: Zap, beta: true },
   { to: '/dashboard/members', label: 'Membros', icon: UserCircle2 },
-  { to: '/dashboard/integrations', label: 'Integrações', icon: Plug },
   { to: '/dashboard/settings', label: 'Configurações', icon: Settings },
 ]
 
