@@ -269,6 +269,7 @@ model WhatsAppGroupParticipant {
   phone          String?
   role           String        @default("membro")
   status         String        @default("ativo")
+  leftAt         DateTime?
   raw            Json?
   lastSyncedAt   DateTime      @default(now())
   createdAt      DateTime      @default(now())

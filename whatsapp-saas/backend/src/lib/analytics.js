@@ -28,6 +28,71 @@ function participantEngagementPct(participants) {
   return (active / participants.length) * 100
 }
 
+function isInRange(date, start, end) {
+  if (!date) return false
+  const t = new Date(date).getTime()
+  return t >= start.getTime() && t <= end.getTime()
+}
+
+function isGroupConnected(group) {
+  return group.status === "ativo" || Boolean(group.monitoringEnabled)
+}
+
+/** Novos leads, saídas e % ativos no período (participantes únicos por JID). */
+function computeLeadMetrics(groups, start, end) {
+  const seenNew = new Set()
+  const seenExit = new Set()
+  const byJid = new Map()
+
+  for (const g of groups) {
+    for (const p of g.participants || []) {
+      const jid = p.participantJid
+      if (!jid) continue
+
+      if (isInRange(p.createdAt, start, end)) seenNew.add(jid)
+      if (isInRange(p.leftAt, start, end)) seenExit.add(jid)
+      else if (p.status === "saiu" && isInRange(p.updatedAt, start, end)) seenExit.add(jid)
+
+      const cur = byJid.get(jid)
+      if (!cur) {
+        byJid.set(jid, { status: p.status, leftAt: p.leftAt })
+      } else {
+        if (p.status === "ativo") cur.status = "ativo"
+        else if (p.status === "saiu") cur.status = "saiu"
+        if (p.leftAt) cur.leftAt = p.leftAt
+        if (p.status === "inativo") cur.status = "inativo"
+      }
+    }
+  }
+
+  let active = 0
+  let excludedLeft = 0
+  let excludedInactive = 0
+  for (const [, p] of byJid) {
+    if (p.status === "saiu" || p.leftAt) {
+      excludedLeft++
+      continue
+    }
+    if (p.status === "inativo") {
+      excludedInactive++
+      continue
+    }
+    if (p.status === "ativo") active++
+  }
+
+  const eligible = byJid.size - excludedLeft - excludedInactive
+  const activeLeadsPct = eligible > 0 ? Number(((active / eligible) * 100).toFixed(1)) : 0
+
+  return {
+    newLeads: seenNew.size,
+    exits: seenExit.size,
+    activeLeadsPct,
+    activeLeads: active,
+    eligibleLeads: eligible,
+    totalLeadsTracked: byJid.size,
+  }
+}
+
 function isEngagementAfter(base, next) {
   if (base.groupId !== next.groupId) return false
   if (!base.fromMe && !next.fromMe) {
@@ -162,16 +227,18 @@ async function buildTopEngagedMessages(userId, messages, groupIdToName, limit = 
   })
 }
 
-async function buildAnalytics(userId, period = "2d", startDate, endDate) {
+async function buildAnalytics(userId, period = "2d", startDate, endDate, groupsIn = null) {
   const { start, end, retentionDays } = periodToRange(period, startDate, endDate)
 
-  const groups = await prisma.whatsAppGroup.findMany({
-    where: { userId, status: "ativo" },
-    include: {
-      participants: { select: { status: true, participantJid: true, name: true, createdAt: true } },
-    },
-    orderBy: { name: "asc" },
-  })
+  const groups =
+    groupsIn ||
+    (await prisma.whatsAppGroup.findMany({
+      where: { userId, status: "ativo" },
+      include: {
+        participants: { select: { status: true, participantJid: true, name: true, createdAt: true } },
+      },
+      orderBy: { name: "asc" },
+    }))
 
   if (!groups.length) {
     return emptyAnalytics(period)
@@ -298,12 +365,14 @@ function emptyAnalytics(period) {
   }
 }
 
-async function buildDashboard(userId) {
-  const groups = await prisma.whatsAppGroup.findMany({
-    where: { userId, status: "ativo" },
-    include: { participants: { select: { participantJid: true, status: true } } },
-    orderBy: { name: "asc" },
-  })
+async function buildDashboard(userId, groupsIn = null) {
+  const groups =
+    groupsIn ||
+    (await prisma.whatsAppGroup.findMany({
+      where: { userId, status: "ativo" },
+      include: { participants: { select: { participantJid: true, status: true } } },
+      orderBy: { name: "asc" },
+    }))
 
   const now = new Date()
   const { start, end, retentionDays } = retentionRange(now)
@@ -407,14 +476,69 @@ async function buildDashboard(userId) {
 }
 
 /** Visão geral unificada (Dashboard + Analytics enxuto). */
-async function buildOverview(userId) {
-  const dashboard = await buildDashboard(userId)
-  const analytics = await buildAnalytics(userId, "2d")
+async function buildOverview(userId, { groupJids = null, period = "2d" } = {}) {
+  const allGroups = await prisma.whatsAppGroup.findMany({
+    where: { userId },
+    include: {
+      participants: {
+        select: {
+          participantJid: true,
+          status: true,
+          createdAt: true,
+          leftAt: true,
+          updatedAt: true,
+        },
+      },
+    },
+    orderBy: { name: "asc" },
+  })
+
+  const connected = allGroups.filter(isGroupConnected)
+  const selected =
+    groupJids?.length > 0
+      ? groupJids.filter((jid) => connected.some((g) => g.groupJid === jid))
+      : null
+  const scope = selected?.length ? connected.filter((g) => selected.includes(g.groupJid)) : connected
+
+  const { start, end, retentionDays } = periodToRange(period)
+  const leadMetrics = computeLeadMetrics(scope, start, end)
+
+  const dashboard = await buildDashboard(userId, scope)
+  const analytics = await buildAnalytics(userId, period, undefined, undefined, scope)
+
+  const connectedGroupsList = (selected?.length ? scope : connected).map((g) => ({
+    id: g.groupJid,
+    name: g.name,
+  }))
+
+  let connectedGroupsLabel = ""
+  if (!connected.length) {
+    connectedGroupsLabel = "Nenhum grupo conectado"
+  } else if (selected?.length === 1) {
+    connectedGroupsLabel = scope[0]?.name || ""
+  } else if (selected?.length > 1) {
+    connectedGroupsLabel = `${selected.length} grupos selecionados`
+  } else if (connected.length === 1) {
+    connectedGroupsLabel = connected[0].name
+  } else {
+    connectedGroupsLabel = `${connected.length} grupos conectados`
+  }
 
   return {
     ...dashboard,
+    period,
+    totalGroups: scope.length,
+    connectedGroupsCount: connectedGroupsList.length,
+    connectedGroups: connectedGroupsList,
+    connectedGroupsLabel,
+    filterMode: selected?.length ? "selected" : "all",
+    selectedGroupJids: selected || [],
+    newLeads: leadMetrics.newLeads,
+    exits: leadMetrics.exits,
+    activeLeadsPct: leadMetrics.activeLeadsPct,
+    activeLeads: leadMetrics.activeLeads,
+    eligibleLeads: leadMetrics.eligibleLeads,
     totalMessagesInPeriod: analytics.totalMessages,
-    activeLeadsPct: dashboard.activeLeadsPct ?? dashboard.engagementRate,
     topMembers: (analytics.topMembers || []).slice(0, 8),
     topMessages: analytics.topMessages || [],
     groupComparison: (analytics.groupComparison || []).slice(0, 10),
@@ -422,6 +546,9 @@ async function buildOverview(userId) {
       ...dashboard.meta,
       ...analytics.meta,
       hasInboundMessages: analytics.meta?.hasInboundMessages,
+      messageRetentionDays: retentionDays,
+      periodStart: start.toISOString(),
+      periodEnd: end.toISOString(),
     },
   }
 }

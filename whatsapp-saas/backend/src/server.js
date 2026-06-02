@@ -389,20 +389,37 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
   const mapped = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
   const enriched = await enrichParticipantsWithNames(conn, groupRow, mapped)
 
+  const currentJids = new Set(enriched.map((p) => p.participantJid))
+  const now = new Date()
+
   for (const participant of enriched) {
     const data = {
       name: finalizeParticipantName(participant),
       phone: participant.phone,
       role: participant.role,
-      status: participant.status,
+      status: participant.status === "inativo" ? "inativo" : "ativo",
+      leftAt: null,
       raw: serializeJson(participant.raw),
-      lastSyncedAt: new Date(),
+      lastSyncedAt: now,
     }
     await prisma.whatsAppGroupParticipant.upsert({
       where: { groupId_participantJid: { groupId: groupRow.id, participantJid: participant.participantJid } },
       create: { groupId: groupRow.id, participantJid: participant.participantJid, ...data },
       update: data,
     })
+  }
+
+  if (currentJids.size > 0) {
+    const stale = await prisma.whatsAppGroupParticipant.findMany({
+      where: { groupId: groupRow.id, participantJid: { notIn: [...currentJids] }, status: { not: "saiu" } },
+      select: { id: true },
+    })
+    if (stale.length) {
+      await prisma.whatsAppGroupParticipant.updateMany({
+        where: { id: { in: stale.map((s) => s.id) } },
+        data: { status: "saiu", leftAt: now, lastSyncedAt: now },
+      })
+    }
   }
   await prisma.whatsAppGroup.update({
     where: { id: groupRow.id },
@@ -1476,7 +1493,15 @@ app.get("/api/analytics", authMiddleware, async (req, res) => {
 
 async function handleOverview(req, res) {
   try {
-    const data = await buildOverview(req.user.sub)
+    const rawIds = req.query.groupIds || req.query.groupId
+    const groupJids = rawIds
+      ? String(rawIds)
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : null
+    const period = typeof req.query.period === "string" ? req.query.period : "2d"
+    const data = await buildOverview(req.user.sub, { groupJids, period })
     res.json(data)
   } catch (err) {
     console.error("[overview]", err)

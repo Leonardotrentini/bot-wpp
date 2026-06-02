@@ -342,8 +342,12 @@ export async function getAnalytics(period = '2d', { startDate, endDate } = {}) {
   return mockResponse({ ...mockAnalytics, period })
 }
 
-export async function getOverview() {
-  if (resolveUseRealApi()) return apiClient.get('/overview')
+export async function getOverview({ groupIds = [], period = '2d' } = {}) {
+  if (resolveUseRealApi()) {
+    const params = { period }
+    if (groupIds?.length) params.groupIds = groupIds.join(',')
+    return apiClient.get('/overview', { params })
+  }
   await delay()
   return mockResponse(mockDashboardMetrics)
 }

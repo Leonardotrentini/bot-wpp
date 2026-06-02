@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, MessageSquare, LayoutGrid, Send } from 'lucide-react'
+import { Users, LayoutGrid, UserPlus, UserMinus, Check } from 'lucide-react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -15,7 +15,7 @@ import {
 import { Card } from '../../components/common/Card.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
-import { getOverview } from '../../services/api.js'
+import { getOverview, getGroups } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 function DataBanner({ meta }) {
@@ -39,34 +39,135 @@ function DataBanner({ meta }) {
   return null
 }
 
+function GroupFilterBar({ groups, selectedIds, onChange }) {
+  const connected = useMemo(
+    () => groups.filter((g) => g.status === 'ativo' || g.monitoringEnabled),
+    [groups],
+  )
+  const allSelected = selectedIds.length === 0
+
+  function toggle(id) {
+    if (selectedIds.includes(id)) {
+      onChange(selectedIds.filter((x) => x !== id))
+    } else {
+      onChange([...selectedIds, id])
+    }
+  }
+
+  if (!connected.length) {
+    return (
+      <p className="text-sm text-stone-500">
+        Nenhum grupo conectado.{' '}
+        <Link to="/dashboard/groups" className="text-accent-400 hover:underline">
+          Ative um grupo
+        </Link>
+      </p>
+    )
+  }
+
+  return (
+    <div className="rounded-2xl border border-brand-800/80 bg-brand-950/40 p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-stone-500 mb-3">Filtrar por grupo</p>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm transition ${
+            allSelected
+              ? 'border-accent-500/60 bg-accent-500/15 text-accent-300'
+              : 'border-brand-700 bg-black/40 text-stone-300 hover:border-brand-600 hover:text-stone-100'
+          }`}
+        >
+          {allSelected && <Check className="h-3.5 w-3.5" />}
+          Todos os conectados
+        </button>
+        {connected.map((g) => {
+          const active = selectedIds.includes(g.id)
+          return (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => toggle(g.id)}
+              className={`inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm transition truncate ${
+                active
+                  ? 'border-accent-500/60 bg-accent-500/15 text-accent-300'
+                  : 'border-brand-700 bg-black/40 text-stone-300 hover:border-brand-600 hover:text-stone-100'
+              }`}
+              title={g.name}
+            >
+              {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+              <span className="truncate">{g.name}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({ label, value, hint, icon: Icon }) {
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm text-stone-400">{label}</p>
+          <p className="mt-2 text-2xl font-bold text-stone-50 font-heading tabular-nums">{value}</p>
+          {hint ? <p className="mt-1.5 text-xs text-stone-500 line-clamp-2">{hint}</p> : null}
+        </div>
+        <div className="shrink-0 rounded-xl bg-accent-500/15 p-2 text-accent-400">
+          <Icon className="h-5 w-5" />
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 export function Dashboard() {
   const toast = useToast()
   const [data, setData] = useState(null)
+  const [groups, setGroups] = useState([])
+  const [selectedIds, setSelectedIds] = useState([])
   const [loading, setLoading] = useState(true)
+
+  const loadOverview = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await getOverview({
+        groupIds: selectedIds.length ? selectedIds : [],
+        period: '2d',
+      })
+      setData(res.data)
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao carregar a visão geral.')
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedIds, toast])
 
   useEffect(() => {
     let ok = true
-    getOverview()
+    getGroups()
       .then((res) => {
-        if (ok) setData(res.data)
+        if (ok) setGroups(res.data?.groups || [])
       })
-      .catch((err) => {
-        if (ok) {
-          toast.error(err?.response?.data?.message || 'Falha ao carregar a visão geral.')
-          setData(null)
-        }
-      })
-      .finally(() => {
-        if (ok) setLoading(false)
-      })
+      .catch(() => {})
     return () => {
       ok = false
     }
-  }, [toast])
+  }, [])
 
-  if (loading) {
+  useEffect(() => {
+    loadOverview()
+  }, [loadOverview])
+
+  const retention = data?.meta?.messageRetentionDays ?? 2
+  const topMembers = [...(data?.topMembers || [])].reverse()
+
+  if (loading && !data) {
     return (
       <div className="space-y-6">
+        <Skeleton className="h-24" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-28" />
@@ -85,62 +186,90 @@ export function Dashboard() {
     )
   }
 
-  const retention = data.meta?.messageRetentionDays ?? 2
-  const activeLeadsPct = data.activeLeadsPct ?? data.engagementRate ?? 0
-  const topMembers = [...(data.topMembers || [])].reverse()
-
-  if (!data.totalGroups && !data.messagesToday && !data.totalMessagesInPeriod) {
-    return (
-      <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-8 text-sm text-amber-200/90">
-        Conecte o WhatsApp e ative grupos em <Link to="/dashboard/connect" className="text-accent-400 underline">Conectar</Link>{' '}
-        e <Link to="/dashboard/groups" className="text-accent-400 underline">Grupos</Link> para ver métricas aqui.
-      </p>
-    )
-  }
+  const connectedCount = data.connectedGroupsCount ?? data.totalGroups ?? 0
+  const activeLeadsPct = data.activeLeadsPct ?? 0
 
   const metrics = [
-    { label: 'Grupos conectados', value: data.totalGroups, icon: LayoutGrid },
     {
-      label: `Mensagens (${retention} dias)`,
-      value: (data.totalMessagesInPeriod ?? 0).toLocaleString('pt-BR'),
-      icon: MessageSquare,
+      label: 'Grupos conectados',
+      value: String(connectedCount),
+      hint: data.connectedGroupsLabel || undefined,
+      icon: LayoutGrid,
     },
     {
-      label: 'Mensagens hoje',
-      value: data.messagesToday.toLocaleString('pt-BR'),
-      icon: Send,
+      label: 'Novos leads',
+      value: String(data.newLeads ?? 0),
+      hint: `Entraram nos grupos nos últimos ${retention} dias`,
+      icon: UserPlus,
     },
-    { label: '% de LEADS ativos', value: `${Number(activeLeadsPct).toFixed(1)}%`, icon: Users },
+    {
+      label: 'Saída',
+      value: String(data.exits ?? 0),
+      hint: `Saíram do grupo no período (detectado na sincronização)`,
+      icon: UserMinus,
+    },
+    {
+      label: '% dos leads ativos',
+      value: `${Number(activeLeadsPct).toFixed(1)}%`,
+      hint:
+        data.eligibleLeads != null
+          ? `${data.activeLeads ?? 0} ativos de ${data.eligibleLeads} elegíveis (exclui saídas e inativos)`
+          : 'Exclui quem saiu ou está inativo',
+      icon: Users,
+    },
   ]
+
+  const hasConnected = groups.some((g) => g.status === 'ativo' || g.monitoringEnabled)
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap gap-2 text-xs text-stone-500">
-        <span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-xs text-stone-500">
           Visão geral · últimos {retention} dias ·{' '}
           <Link to="/dashboard/groups" className="text-accent-400 hover:underline">
             Gerenciar grupos
           </Link>
         </span>
+        {loading && <span className="text-xs text-stone-600 animate-pulse">Atualizando…</span>}
       </div>
+
+      <GroupFilterBar groups={groups} selectedIds={selectedIds} onChange={setSelectedIds} />
+
+      {!hasConnected && (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-8 text-sm text-amber-200/90">
+          Conecte o WhatsApp e ative grupos em{' '}
+          <Link to="/dashboard/connect" className="text-accent-400 underline">
+            Conectar
+          </Link>{' '}
+          e{' '}
+          <Link to="/dashboard/groups" className="text-accent-400 underline">
+            Grupos
+          </Link>{' '}
+          para ver métricas de leads aqui.
+        </p>
+      )}
 
       <DataBanner meta={data.meta} />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {metrics.map((m) => (
-          <Card key={m.label}>
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-stone-400">{m.label}</p>
-                <p className="mt-2 text-2xl font-bold text-stone-50 font-heading">{m.value}</p>
-              </div>
-              <div className="rounded-xl bg-accent-500/15 p-2 text-accent-400">
-                <m.icon className="h-5 w-5" />
-              </div>
-            </div>
-          </Card>
+          <MetricCard key={m.label} {...m} />
         ))}
       </div>
+
+      {data.connectedGroups?.length > 0 && data.connectedGroups.length <= 4 && (
+        <div className="flex flex-wrap gap-2">
+          {data.connectedGroups.map((g) => (
+            <Link
+              key={g.id}
+              to={`/dashboard/groups/${encodeURIComponent(g.id)}`}
+              className="rounded-lg border border-brand-800/90 bg-brand-950/50 px-3 py-1.5 text-xs text-stone-400 hover:border-accent-500/40 hover:text-accent-300 transition"
+            >
+              {g.name}
+            </Link>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
