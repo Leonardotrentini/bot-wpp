@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Tag, MessageSquare, Download, RefreshCw, Plus, X } from 'lucide-react'
+import { Tag, MessageSquare, Download, RefreshCw, Plus, X, CheckSquare, Eraser } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -283,16 +283,16 @@ export function Members() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" className="gap-1" onClick={() => setTagsModal(true)}>
-          <Tag className="h-4 w-4" /> Tags
+        <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setTagsModal(true)}>
+          <Tag className="h-4 w-4" /> Gerenciar tags
         </Button>
-        <Button size="sm" variant="secondary" className="gap-1" onClick={() => toast.info('Envio em massa em breve.')}>
+        <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => toast.info('Envio em massa em breve.')}>
           <MessageSquare className="h-4 w-4" /> Mensagem
         </Button>
         <Button
           size="sm"
-          variant="outline"
-          className="gap-1"
+          variant={selected.size > 0 ? 'primary' : 'outline'}
+          className="gap-1.5"
           onClick={exportCsv}
           disabled={!displayedMembers.length}
           title={
@@ -302,58 +302,93 @@ export function Members() {
           }
         >
           <Download className="h-4 w-4" />
-          {selected.size > 0 ? `Exportar (${selected.size})` : 'Exportar'}
+          {selected.size > 0 ? `Exportar ${selected.size}` : 'Exportar'}
         </Button>
-        <Button size="sm" variant="outline" className="gap-1" onClick={onSyncParticipants} disabled={syncing}>
+        <span className="hidden h-6 w-px bg-brand-700 sm:inline" aria-hidden />
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={onSyncParticipants} disabled={syncing}>
           <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-          {syncing ? 'Sincronizando…' : 'Sincronizar participantes'}
+          {syncing ? 'Sincronizando…' : 'Sincronizar'}
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brand-800 bg-brand-900/40 px-3 py-2">
-        <button
-          type="button"
-          onClick={selectAll}
-          disabled={!displayedMembers.length}
-          className="text-xs font-semibold uppercase tracking-wide text-accent-400 hover:text-accent-300 disabled:opacity-40"
-        >
-          Selecionar todos
-        </button>
-        <span className="text-stone-600">|</span>
-        <button
-          type="button"
-          onClick={clearAll}
-          disabled={selected.size === 0}
-          className="text-xs font-semibold uppercase tracking-wide text-stone-400 hover:text-stone-200 disabled:opacity-40"
-        >
-          Limpar todos
-        </button>
-        <span className="hidden text-stone-600 sm:inline">|</span>
-        <span className="text-xs text-stone-500">
-          {selected.size === 0 ? 'Nenhum selecionado' : `${selected.size} selecionado(s)`}
-        </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Select
-            className="min-w-[160px]"
-            value={applyTagValue}
-            onChange={(e) => setApplyTagValue(e.target.value)}
-            disabled={!tagCatalog.length}
-          >
-            <option value="">Aplicar tag…</option>
-            {tagCatalog.map((t) => (
-              <option key={t} value={t}>
-                {displayTag(t)}
-              </option>
-            ))}
-          </Select>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={!applyTagValue || selected.size === 0}
-            onClick={() => applyTagToSelected(applyTagValue)}
-          >
-            Aplicar
-          </Button>
+      <div className="rounded-2xl border border-brand-800/90 bg-brand-900/50 shadow-sm shadow-black/20">
+        <div className="flex flex-col gap-3 p-3 sm:p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="gap-1.5 border-brand-700"
+              onClick={selectAll}
+              disabled={!displayedMembers.length}
+            >
+              <CheckSquare className="h-4 w-4 shrink-0" />
+              Selecionar todos
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="gap-1.5 text-stone-400 hover:text-stone-100"
+              onClick={clearAll}
+              disabled={selected.size === 0}
+            >
+              <Eraser className="h-4 w-4 shrink-0" />
+              Limpar
+            </Button>
+            <span
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                selected.size > 0
+                  ? 'border-accent-500/35 bg-accent-500/10 text-accent-300'
+                  : 'border-brand-700/80 bg-brand-950/40 text-stone-400'
+              }`}
+              aria-live="polite"
+            >
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${
+                  selected.size > 0 ? 'bg-accent-400 shadow-[0_0_6px_rgba(212,175,55,0.6)]' : 'bg-stone-600'
+                }`}
+              />
+              {selected.size === 0
+                ? 'Nenhum membro selecionado'
+                : `${selected.size} de ${displayedMembers.length} selecionado${selected.size === 1 ? '' : 's'}`}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:shrink-0">
+            <p className="text-xs text-stone-500 sm:hidden">Aplicar tag aos selecionados</p>
+            <div className="flex w-full items-stretch gap-2 sm:w-auto">
+              <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-brand-700 bg-brand-950/50 px-3 sm:min-w-[200px] sm:flex-initial">
+                <Tag className="h-4 w-4 shrink-0 text-stone-500" aria-hidden />
+                <select
+                  value={applyTagValue}
+                  onChange={(e) => setApplyTagValue(e.target.value)}
+                  disabled={!tagCatalog.length || selected.size === 0}
+                  aria-label="Tag para aplicar"
+                  className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent py-2.5 text-sm text-stone-100 outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">
+                    {tagCatalog.length ? 'Escolher tag…' : 'Crie uma tag primeiro'}
+                  </option>
+                  {tagCatalog.map((t) => (
+                    <option key={t} value={t}>
+                      {displayTag(t)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="primary"
+                className="shrink-0 px-4"
+                disabled={!applyTagValue || selected.size === 0}
+                onClick={() => applyTagToSelected(applyTagValue)}
+              >
+                Aplicar tag
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
