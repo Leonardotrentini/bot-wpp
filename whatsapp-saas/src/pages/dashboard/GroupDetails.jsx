@@ -284,7 +284,6 @@ export function GroupDetails() {
             const s = byId.get(m.id)
             return {
               ...m,
-              ...s,
               tags: [...(s.tags || [])],
               lastActivity: s.lastActivity || m.lastActivity,
               persona: s.persona || m.persona,
@@ -306,7 +305,16 @@ export function GroupDetails() {
           }
         } else if (Array.isArray(saved) && saved.length) {
           const byId = new Map(saved.map((x) => [x.id, x]))
-          initial = base.map((m) => (byId.has(m.id) ? { ...m, ...byId.get(m.id), tags: [...(byId.get(m.id).tags || [])] } : m))
+          initial = base.map((m) => {
+            if (!byId.has(m.id)) return m
+            const s = byId.get(m.id)
+            return {
+              ...m,
+              tags: [...(s.tags || [])],
+              lastActivity: s.lastActivity || m.lastActivity,
+              persona: s.persona || m.persona,
+            }
+          })
         }
       }
     } catch {

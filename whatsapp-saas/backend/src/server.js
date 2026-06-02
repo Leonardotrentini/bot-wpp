@@ -381,7 +381,7 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
 
   for (const participant of enriched) {
     const data = {
-      name: participant.name,
+      name: finalizeParticipantName(participant),
       phone: participant.phone,
       role: participant.role,
       status: participant.status,
@@ -1169,7 +1169,46 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
     }
 
     const group = getGroupApiPayload(groupRow)
-    const members = participantRows.map((p) => getParticipantApiPayload(p, group.name))
+
+    let contactIndex = null
+    try {
+      const contactsPayload = await findContacts(conn.instanceName, {})
+      contactIndex = buildContactIndex(normalizeContactList(contactsPayload))
+    } catch (err) {
+      console.warn("[groups] findContacts:", err?.message || err)
+    }
+    const messageNames = await loadSenderNamesFromGroupMessages(groupRow.id)
+
+    const members = participantRows.map((p) => {
+      let mapped = p.raw
+        ? mapEvolutionParticipant(p.raw)
+        : mapEvolutionParticipant({ id: p.participantJid, admin: p.role === "admin" ? "admin" : p.role === "superadmin" ? "superadmin" : null })
+      mapped.role =
+        p.role === "superadmin" ? "superadmin" : p.role === "admin" ? "admin" : mapped.role || "membro"
+      mapped.status = p.status || mapped.status || "ativo"
+
+      const hit = lookupContact(contactIndex, mapped)
+      if (hit) mapped = enrichParticipantFromContact(mapped, hit)
+      mapped = applyMessageDisplayName(mapped, messageNames)
+      mapped.name = finalizeParticipantName(mapped)
+
+      if (hasRealDisplayName({ name: p.name, phoneDigits: mapped.phoneDigits }) && !hasRealDisplayName(mapped)) {
+        mapped.name = p.name
+        if (p.phone && p.phone !== "—") mapped.phone = p.phone
+      }
+
+      return getParticipantApiPayload(
+        {
+          participantJid: p.participantJid,
+          name: mapped.name,
+          phone: mapped.phone,
+          role: mapped.role,
+          status: mapped.status,
+          lastSyncedAt: p.lastSyncedAt,
+        },
+        group.name,
+      )
+    })
     const activity = [
       { day: "Seg", count: 0 },
       { day: "Ter", count: 0 },

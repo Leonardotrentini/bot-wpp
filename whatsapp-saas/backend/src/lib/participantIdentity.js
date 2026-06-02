@@ -197,6 +197,7 @@ module.exports = {
   formatPhoneBr,
   jidDomain,
   hasRealDisplayName,
+  looksLikeInternalIdName,
   finalizeParticipantName,
   lookupContact,
   resolvePhoneDigits,
