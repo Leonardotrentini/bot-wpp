@@ -323,13 +323,20 @@ export async function getMemberDetails(id) {
   return mockResponse({ member: m })
 }
 
-export async function getAnalytics(period = '7d') {
-  if (resolveUseRealApi()) return apiClient.get('/analytics', { params: { period } })
+export async function getAnalytics(period = '7d', { startDate, endDate } = {}) {
+  if (resolveUseRealApi()) {
+    const params = { period }
+    if (startDate) params.startDate = startDate
+    if (endDate) params.endDate = endDate
+    return apiClient.get('/analytics', { params })
+  }
   await delay()
   return mockResponse({ ...mockAnalytics, period })
 }
 
 export async function getDashboardSummary() {
+  if (resolveUseRealApi()) return apiClient.get('/dashboard')
+  await delay()
   return mockResponse(mockDashboardMetrics)
 }
 

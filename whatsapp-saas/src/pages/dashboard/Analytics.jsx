@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useToast } from '../../contexts/ToastContext.jsx'
 import {
   ResponsiveContainer,
   LineChart,
@@ -22,6 +23,7 @@ import { getAnalytics } from '../../services/api.js'
 const PIE_COLORS = ['#eab308', '#3b82f6', '#22c55e', '#a855f7', '#f97316']
 
 export function Analytics() {
+  const toast = useToast()
   const [period, setPeriod] = useState('7d')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -33,15 +35,29 @@ export function Analytics() {
     groupComparison: true,
   })
 
-  useEffect(() => {
+  const loadAnalytics = useCallback(async () => {
     setLoading(true)
-    getAnalytics(period).then((r) => {
+    try {
+      const opts =
+        period === 'custom' && customRange.start
+          ? { startDate: customRange.start, endDate: customRange.end || undefined }
+          : {}
+      const r = await getAnalytics(period, opts)
       setData(r.data)
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao carregar analytics.')
+      setData(null)
+    } finally {
       setLoading(false)
-    })
-  }, [period])
+    }
+  }, [period, customRange.start, customRange.end, toast])
 
-  if (loading || !data) {
+  useEffect(() => {
+    if (period === 'custom' && !customRange.start) return
+    loadAnalytics()
+  }, [loadAnalytics, period, customRange.start])
+
+  if (loading) {
     return (
       <div className="space-y-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -54,7 +70,15 @@ export function Analytics() {
     )
   }
 
-  const topHorizontal = [...data.topMembers].reverse()
+  if (!data) {
+    return (
+      <p className="rounded-xl border border-brand-800 bg-brand-900/40 px-4 py-8 text-sm text-stone-400">
+        Não foi possível carregar os dados. Verifique se o WhatsApp está conectado e se há grupos sincronizados.
+      </p>
+    )
+  }
+
+  const topHorizontal = [...(data.topMembers || [])].reverse()
   const availableGroups = data.groupComparison || []
   const effectiveGroupIds = selectedGroups.length ? selectedGroups : availableGroups.map((g) => g.id)
   const idSet = new Set(effectiveGroupIds)
@@ -72,17 +96,10 @@ export function Analytics() {
   const activeMembers = Math.round(totalMembers * (weightedEngagement / 100))
   const inactiveMembers = Math.max(totalMembers - activeMembers, 0)
 
-  const topEngagedMessages = filteredGroupComparison
-    .slice(0, 6)
-    .map((g, idx) => ({
-      id: `msg-top-${g.id}`,
-      title: idx % 2 === 0 ? 'Chamada para ação com bônus' : 'Lembrete de conteúdo do dia',
-      group: g.name,
-      engagementRate: Number((g.engagement - idx * 1.3).toFixed(1)),
-      reactions: 120 - idx * 11,
-      replies: 58 - idx * 6,
-    }))
-    .sort((a, b) => b.engagementRate - a.engagementRate)
+  const topEngagedMessages = (data.topMessages || []).filter((msg) => {
+    const gid = groupNameToId.get(msg.group)
+    return !gid || idSet.has(gid)
+  })
 
   function toggleGroup(groupId) {
     setSelectedGroups((prev) => (prev.includes(groupId) ? prev.filter((id) => id !== groupId) : [...prev, groupId]))
@@ -133,9 +150,23 @@ export function Analytics() {
             />
           </div>
           <p className="mt-2 text-xs text-stone-500">
-            Intervalo selecionado: {customRange.start || '...'} até {customRange.end || '...'}.
+            Intervalo selecionado: {customRange.start || '...'} até {customRange.end || 'hoje'}.
           </p>
+          <button
+            type="button"
+            onClick={loadAnalytics}
+            className="mt-3 rounded-xl border border-accent-500/30 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-400 hover:bg-accent-500/15"
+          >
+            Aplicar período
+          </button>
         </Card>
+      )}
+
+      {data.meta && !data.meta.messagesImported && (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
+          Ainda não há mensagens importadas nos grupos. Em <strong>Grupos</strong>, abra cada grupo e sincronize o histórico
+          para preencher gráficos e métricas reais.
+        </p>
       )}
 
       <Card className="space-y-4">
@@ -144,16 +175,21 @@ export function Analytics() {
           <div>
             <p className="text-sm text-stone-300 mb-2">Seleção de grupos</p>
             <div className="max-h-40 overflow-y-auto rounded-xl border border-brand-800 p-3 space-y-2">
-              {availableGroups.map((group) => (
-                <label key={group.id} className="flex items-center gap-2 text-sm text-stone-300">
-                  <input
-                    type="checkbox"
-                    checked={effectiveGroupIds.includes(group.id)}
-                    onChange={() => toggleGroup(group.id)}
-                  />
-                  {group.name}
-                </label>
-              ))}
+              {availableGroups.length === 0 ? (
+                <p className="text-xs text-stone-500">Nenhum grupo sincronizado ainda.</p>
+              ) : (
+                availableGroups.map((group) => (
+                  <label key={group.id} className="flex items-center gap-2 text-sm text-stone-300">
+                    <input
+                      type="checkbox"
+                      className="vg-checkbox"
+                      checked={effectiveGroupIds.includes(group.id)}
+                      onChange={() => toggleGroup(group.id)}
+                    />
+                    {group.name}
+                  </label>
+                ))
+              )}
             </div>
             <p className="mt-2 text-xs text-stone-500">
               Se nenhum grupo for marcado, exibimos todos automaticamente.
@@ -165,6 +201,7 @@ export function Analytics() {
               <label className="flex items-center gap-2 text-sm text-stone-300">
                 <input
                   type="checkbox"
+                  className="vg-checkbox"
                   checked={visibleSections.engagementByGroup}
                   onChange={() => toggleSection('engagementByGroup')}
                 />
@@ -173,6 +210,7 @@ export function Analytics() {
               <label className="flex items-center gap-2 text-sm text-stone-300">
                 <input
                   type="checkbox"
+                  className="vg-checkbox"
                   checked={visibleSections.topMessages}
                   onChange={() => toggleSection('topMessages')}
                 />
@@ -181,6 +219,7 @@ export function Analytics() {
               <label className="flex items-center gap-2 text-sm text-stone-300">
                 <input
                   type="checkbox"
+                  className="vg-checkbox"
                   checked={visibleSections.groupComparison}
                   onChange={() => toggleSection('groupComparison')}
                 />
@@ -267,15 +306,20 @@ export function Analytics() {
             <Card>
               <h3 className="font-semibold text-stone-50 mb-4">Mensagens com mais engajamento</h3>
               <div className="space-y-2">
-                {topEngagedMessages.map((msg) => (
-                  <div key={msg.id} className="rounded-lg border border-brand-800 p-3">
-                    <p className="text-sm text-stone-100">{msg.title}</p>
-                    <p className="text-xs text-stone-500 mt-1">{msg.group}</p>
-                    <p className="text-xs text-accent-400 mt-1">
-                      Engajamento {msg.engagementRate}% • {msg.replies} respostas • {msg.reactions} reações
-                    </p>
-                  </div>
-                ))}
+                {topEngagedMessages.length === 0 ? (
+                  <p className="text-sm text-stone-500">Importe mensagens dos grupos para ver as mais engajadas.</p>
+                ) : (
+                  topEngagedMessages.map((msg) => (
+                    <div key={msg.id} className="rounded-lg border border-brand-800 p-3">
+                      <p className="text-sm text-stone-100">{msg.title}</p>
+                      <p className="text-xs text-stone-500 mt-1">{msg.group}</p>
+                      <p className="text-xs text-accent-400 mt-1">
+                        {msg.replies} resposta(s) no período
+                        {msg.reactions > 0 ? ` • ${msg.reactions} reações` : ''}
+                      </p>
+                    </div>
+                  ))
+                )}
               </div>
             </Card>
           )}

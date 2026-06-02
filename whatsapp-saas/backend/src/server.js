@@ -36,7 +36,7 @@ const {
   pickPhone,
   isInstanceAlreadyExistsError,
 } = require("./lib/evolution")
-const { getAnalyticsSnapshot } = require("./data/mock")
+const { buildAnalytics, buildDashboard } = require("./lib/analytics.js")
 const adminRoutes = require("./routes/admin")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
@@ -1326,9 +1326,27 @@ app.post("/api/members/sync-participants", authMiddleware, async (req, res) => {
   }
 })
 
-app.get("/api/analytics", authMiddleware, (req, res) => {
-  const period = req.query.period || "7d"
-  res.json(getAnalyticsSnapshot(period))
+app.get("/api/analytics", authMiddleware, async (req, res) => {
+  try {
+    const period = typeof req.query.period === "string" ? req.query.period : "7d"
+    const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined
+    const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined
+    const data = await buildAnalytics(req.user.sub, period, startDate, endDate)
+    res.json(data)
+  } catch (err) {
+    console.error("[analytics]", err)
+    res.status(500).json({ error: "ANALYTICS_FAILED", message: err?.message || "Falha ao carregar analytics." })
+  }
+})
+
+app.get("/api/dashboard", authMiddleware, async (req, res) => {
+  try {
+    const data = await buildDashboard(req.user.sub)
+    res.json(data)
+  } catch (err) {
+    console.error("[dashboard]", err)
+    res.status(500).json({ error: "DASHBOARD_FAILED", message: err?.message || "Falha ao carregar dashboard." })
+  }
 })
 
 // ===================== Mensagens reais + biblioteca + automações =====================
