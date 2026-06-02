@@ -791,13 +791,15 @@ async function importGroupMessages(conn, group, cutoffMs) {
   return totalSaved
 }
 
-async function runMessageImport(userId) {
+async function runMessageImport(userId, { onlyGroupJids } = {}) {
   if (activeMessageImports.has(userId)) return
   activeMessageImports.add(userId)
   try {
     const conn = await getUserWhatsAppConnection(userId)
+    const groupWhere = { userId, monitoringEnabled: true }
+    if (onlyGroupJids?.length) groupWhere.groupJid = { in: onlyGroupJids }
     const monitoredGroups = await prisma.whatsAppGroup.findMany({
-      where: { userId, monitoringEnabled: true },
+      where: groupWhere,
       orderBy: { name: "asc" },
     })
     const total = monitoredGroups.length
@@ -1089,6 +1091,10 @@ app.post("/api/groups/discover", authMiddleware, async (req, res) => {
 
 app.post("/api/groups/sync", authMiddleware, async (req, res) => {
   try {
+    const schema = z.object({ groupIds: z.array(z.string()).optional() })
+    const parsed = schema.safeParse(req.body || {})
+    const requestedGroupIds = parsed.success && parsed.data.groupIds?.length ? parsed.data.groupIds : null
+
     const conn = await getUserWhatsAppConnection(req.user.sub)
     const cachedGroups = await readCachedGroups(req.user.sub)
 
@@ -1102,35 +1108,57 @@ app.post("/api/groups/sync", authMiddleware, async (req, res) => {
     }
 
     if (activeMessageImports.has(req.user.sub)) {
-      return res.status(202).json({ groups: cachedGroups, import: getImportPayload(conn) })
-    }
-
-    const monitoredCount = await prisma.whatsAppGroup.count({
-      where: { userId: req.user.sub, monitoringEnabled: true },
-    })
-    if (!monitoredCount) {
       return res.status(202).json({
         groups: cachedGroups,
-        import: {
-          ...getImportPayload(conn),
-          status: "IDLE",
-          message: "Selecione os grupos que quer conectar antes de importar mensagens.",
+        import: getImportPayload(conn),
+        message: "Já existe uma importação em andamento.",
+      })
+    }
+
+    if (requestedGroupIds?.length) {
+      await prisma.whatsAppGroup.updateMany({
+        where: { userId: req.user.sub, groupJid: { in: requestedGroupIds } },
+        data: {
+          monitoringEnabled: true,
+          status: "ativo",
+          messageSyncStatus: "QUEUED",
+          messageSyncProgress: 0,
         },
       })
     }
 
+    const importWhere = { userId: req.user.sub, monitoringEnabled: true }
+    if (requestedGroupIds?.length) importWhere.groupJid = { in: requestedGroupIds }
+
+    const importTargets = await prisma.whatsAppGroup.findMany({
+      where: importWhere,
+      select: { groupJid: true },
+    })
+
+    if (!importTargets.length) {
+      return res.status(400).json({
+        error: "NO_GROUPS_TO_IMPORT",
+        message: requestedGroupIds?.length
+          ? "Nenhum dos grupos selecionados foi encontrado. Procure os grupos e tente de novo."
+          : "Selecione ao menos um grupo conectado antes de reimportar.",
+        groups: cachedGroups,
+        import: { ...getImportPayload(conn), status: "IDLE" },
+      })
+    }
+
+    const targetJids = importTargets.map((g) => g.groupJid)
     const queuedConn = await updateConnectionSync(req.user.sub, {
       msgImportStatus: "QUEUED",
-      msgImportTotal: monitoredCount,
+      msgImportTotal: targetJids.length,
       msgImportDone: 0,
-      msgImportMessage: `Reimportação de ${monitoredCount} grupo(s) agendada (últimos ${MESSAGE_BACKFILL_DAYS} dias).`,
+      msgImportMessage: `Reimportação de ${targetJids.length} grupo(s) agendada (últimos ${MESSAGE_BACKFILL_DAYS} dias).`,
       msgImportError: null,
       msgImportRetryAfter: null,
     })
 
-    void runMessageImport(req.user.sub)
+    void runMessageImport(req.user.sub, { onlyGroupJids: targetJids })
 
-    return res.status(202).json({ groups: cachedGroups, import: getImportPayload(queuedConn) })
+    return res.status(202).json({ groups: await readCachedGroups(req.user.sub), import: getImportPayload(queuedConn) })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message, groups: [] })

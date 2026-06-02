@@ -71,18 +71,28 @@ export function Groups() {
   }, [applyData, toast])
 
   const startReimport = useCallback(async () => {
+    const groupIds = Array.from(selected)
+    if (!groupIds.length) {
+      toast.info('Selecione ao menos um grupo para reimportar.')
+      return
+    }
     setActionLoading(true)
     try {
-      const { data } = await syncGroups()
+      const { data } = await syncGroups(groupIds)
       applyData(data)
-      toast.info(data.import?.message || 'Reimportação dos últimos 2 dias iniciada.')
+      const impStatus = data.import?.status
+      if (impStatus === 'QUEUED' || impStatus === 'RUNNING') {
+        toast.info(data.import?.message || 'Reimportação dos últimos 2 dias iniciada.')
+      } else if (data.import?.message) {
+        toast.info(data.import.message)
+      }
     } catch (e) {
       const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível reimportar.'
       toast.error(typeof msg === 'string' ? msg : 'Não foi possível reimportar.')
     } finally {
       setActionLoading(false)
     }
-  }, [applyData, toast])
+  }, [applyData, selected, toast])
 
   const startImport = useCallback(async () => {
     const groupIds = Array.from(selected)
@@ -140,6 +150,7 @@ export function Groups() {
   const inCooldown =
     (sync?.status === 'RATE_LIMITED' && syncRetryMs > nowMs) ||
     (imp?.status === 'RATE_LIMITED' && importRetryMs > nowMs)
+  const importCooldown = imp?.status === 'RATE_LIMITED' && importRetryMs > nowMs
   const discoveredCount = sync?.groupsCount || groups.length
   const busy = discoverActive || importActive
 
@@ -211,11 +222,15 @@ export function Groups() {
             variant="secondary"
             className="gap-2 shrink-0"
             onClick={startReimport}
-            disabled={loading || actionLoading || busy || inCooldown}
-            title={`Baixa de novo as mensagens dos últimos ${imp?.backfillDays || 2} dias nos grupos conectados`}
+            disabled={loading || actionLoading || importActive || importCooldown || selected.size === 0}
+            title={
+              selected.size === 0
+                ? 'Selecione um ou mais grupos'
+                : `Reimportar mensagens dos últimos ${imp?.backfillDays || 2} dias do(s) grupo(s) selecionado(s)`
+            }
           >
-            <RefreshCw className={`h-4 w-4 ${importActive ? 'animate-spin' : ''}`} />
-            Reimportar {imp?.backfillDays || 2} dias
+            <RefreshCw className={`h-4 w-4 ${importActive || actionLoading ? 'animate-spin' : ''}`} />
+            {importActive ? 'Importando…' : `Reimportar ${imp?.backfillDays || 2} dias (${selected.size})`}
           </Button>
         </div>
       </div>

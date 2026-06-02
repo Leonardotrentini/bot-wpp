@@ -160,8 +160,11 @@ export async function setGroupsStatus(groupIds = [], status = 'ativo') {
   })
 }
 
-export async function syncGroups() {
-  if (resolveUseRealApi()) return apiClient.post('/groups/sync')
+export async function syncGroups(groupIds = []) {
+  if (resolveUseRealApi()) {
+    const body = groupIds?.length ? { groupIds } : {}
+    return apiClient.post('/groups/sync', body)
+  }
   return mockResponse({ groups: mockGroups, import: { status: 'READY', total: mockGroups.length, done: mockGroups.length, backfillDays: 2 } })
 }
 
