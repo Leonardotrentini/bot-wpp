@@ -1,22 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { RefreshCw, Settings2, Check, Download } from 'lucide-react'
+import { RefreshCw, Settings2, Check } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { discoverGroups, getGroups, selectGroups, setGroupsStatus, syncGroups } from '../../services/api.js'
+import { discoverGroups, getGroups, setGroupsStatus } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
-
-const MESSAGE_SYNC_LABELS = {
-  IDLE: null,
-  QUEUED: { label: 'na fila', variant: 'muted' },
-  SYNCING: { label: 'baixando…', variant: 'warning' },
-  READY: { label: 'importado', variant: 'success' },
-  RATE_LIMITED: { label: 'em espera', variant: 'warning' },
-  ERROR: { label: 'erro', variant: 'muted' },
-}
 
 export function Groups() {
   const toast = useToast()
@@ -25,7 +16,6 @@ export function Groups() {
   const [filter, setFilter] = useState('ativos')
   const [q, setQ] = useState('')
   const [sync, setSync] = useState(null)
-  const [imp, setImp] = useState(null)
   const [nowMs, setNowMs] = useState(0)
   const [actionLoading, setActionLoading] = useState(false)
   const [selected, setSelected] = useState(() => new Set())
@@ -35,7 +25,6 @@ export function Groups() {
     const nextGroups = data.groups || []
     setGroups(nextGroups)
     setSync(data.sync || null)
-    setImp(data.import || null)
     if (!initializedSelection.current) {
       const monitored = nextGroups.filter((g) => g.monitoringEnabled && g.status === 'ativo').map((g) => g.id)
       if (monitored.length) setSelected(new Set(monitored))
@@ -70,49 +59,6 @@ export function Groups() {
     }
   }, [applyData, toast])
 
-  const startReimport = useCallback(async () => {
-    const groupIds = Array.from(selected)
-    if (!groupIds.length) {
-      toast.info('Selecione ao menos um grupo para reimportar.')
-      return
-    }
-    setActionLoading(true)
-    try {
-      const { data } = await syncGroups(groupIds)
-      applyData(data)
-      const impStatus = data.import?.status
-      if (impStatus === 'QUEUED' || impStatus === 'RUNNING') {
-        toast.info(data.import?.message || 'Reimportação dos últimos 2 dias iniciada.')
-      } else if (data.import?.message) {
-        toast.info(data.import.message)
-      }
-    } catch (e) {
-      const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível reimportar.'
-      toast.error(typeof msg === 'string' ? msg : 'Não foi possível reimportar.')
-    } finally {
-      setActionLoading(false)
-    }
-  }, [applyData, selected, toast])
-
-  const startImport = useCallback(async () => {
-    const groupIds = Array.from(selected)
-    if (!groupIds.length) {
-      toast.info('Selecione ao menos um grupo para conectar.')
-      return
-    }
-    setActionLoading(true)
-    try {
-      const { data } = await selectGroups(groupIds)
-      applyData(data)
-      toast.info(data.import?.message || 'Importação de mensagens iniciada.')
-    } catch (e) {
-      const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível iniciar a importação.'
-      toast.error(typeof msg === 'string' ? msg : 'Não foi possível iniciar a importação.')
-    } finally {
-      setActionLoading(false)
-    }
-  }, [applyData, selected, toast])
-
   const changeStatus = useCallback(async (status) => {
     const groupIds = Array.from(selected)
     if (!groupIds.length) {
@@ -124,8 +70,8 @@ export function Groups() {
       const { data } = await setGroupsStatus(groupIds, status)
       applyData(data)
       setSelected(new Set())
-      if (status === 'ativo' && data.import?.message) {
-        toast.info(data.import.message)
+      if (data.message) {
+        toast.success(data.message)
       } else {
         toast.success(`${groupIds.length} grupo(s) marcado(s) como ${status}.`)
       }
@@ -148,15 +94,10 @@ export function Groups() {
   }, [])
 
   const discoverActive = ['QUEUED', 'DISCOVERING_GROUPS', 'FETCHING_GROUPS'].includes(sync?.status)
-  const importActive = ['QUEUED', 'RUNNING'].includes(imp?.status)
   const syncRetryMs = sync?.retryAfter ? new Date(sync.retryAfter).getTime() : 0
-  const importRetryMs = imp?.retryAfter ? new Date(imp.retryAfter).getTime() : 0
-  const inCooldown =
-    (sync?.status === 'RATE_LIMITED' && syncRetryMs > nowMs) ||
-    (imp?.status === 'RATE_LIMITED' && importRetryMs > nowMs)
-  const importCooldown = imp?.status === 'RATE_LIMITED' && importRetryMs > nowMs
+  const inCooldown = sync?.status === 'RATE_LIMITED' && syncRetryMs > nowMs
   const discoveredCount = sync?.groupsCount || groups.length
-  const busy = discoverActive || importActive
+  const busy = discoverActive
 
   useEffect(() => {
     if (!busy) return undefined
@@ -195,14 +136,15 @@ export function Groups() {
   const selectAll = useCallback(() => setSelected(new Set(filtered.map((g) => g.id))), [filtered])
   const clearAll = useCallback(() => setSelected(new Set()), [])
 
-  const importProgress = imp?.total ? Math.round((imp.done / imp.total) * 100) : 0
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-stone-50">Seus grupos</h2>
-          <p className="text-sm text-stone-400 mt-1">1) Procure os grupos. 2) Selecione. 3) Conecte para importar os últimos {imp?.backfillDays || 2} dias.</p>
+          <p className="text-sm text-stone-400 mt-1">
+            1) Procure os grupos. 2) Selecione. 3) Marque como <strong className="text-stone-300">ativo</strong> para monitorar
+            mensagens, entradas e saídas a partir de agora.
+          </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button
@@ -214,28 +156,6 @@ export function Groups() {
             <RefreshCw className={`h-4 w-4 ${discoverActive || actionLoading ? 'animate-spin' : ''}`} />
             {discoverActive ? 'Procurando…' : inCooldown ? 'Aguardando cooldown' : 'Procurar grupos'}
           </Button>
-          <Button
-            className="gap-2 shrink-0"
-            onClick={startImport}
-            disabled={loading || actionLoading || busy || inCooldown || selected.size === 0}
-          >
-            <Download className={`h-4 w-4 ${importActive ? 'animate-pulse' : ''}`} />
-            {importActive ? 'Importando…' : `Conectar e importar (${selected.size})`}
-          </Button>
-          <Button
-            variant="secondary"
-            className="gap-2 shrink-0"
-            onClick={startReimport}
-            disabled={loading || actionLoading || importActive || importCooldown || selected.size === 0}
-            title={
-              selected.size === 0
-                ? 'Selecione um ou mais grupos'
-                : `Reimportar mensagens dos últimos ${imp?.backfillDays || 2} dias do(s) grupo(s) selecionado(s)`
-            }
-          >
-            <RefreshCw className={`h-4 w-4 ${importActive || actionLoading ? 'animate-spin' : ''}`} />
-            {importActive ? 'Importando…' : `Reimportar ${imp?.backfillDays || 2} dias (${selected.size})`}
-          </Button>
         </div>
       </div>
 
@@ -246,7 +166,7 @@ export function Groups() {
               <p className="text-sm font-medium text-stone-100">
                 Mapeamento: {sync.status === 'GROUPS_FOUND' ? 'grupos encontrados' : sync.status === 'RATE_LIMITED' ? 'em espera' : sync.status?.toLowerCase?.() || 'pendente'}
               </p>
-              <p className="mt-1 text-xs text-stone-400">{sync.message || 'Clique em Procurar grupos para mapear sua conta sem baixar mensagens.'}</p>
+              <p className="mt-1 text-xs text-stone-400">{sync.message || 'Clique em Procurar grupos para mapear sua conta.'}</p>
               {sync.error && <p className="mt-1 break-words text-xs text-red-400">Detalhe do erro: {sync.error}</p>}
               {sync.status === 'RATE_LIMITED' && sync.retryAfter && (
                 <p className="mt-1 text-xs text-amber-300">
@@ -260,43 +180,6 @@ export function Groups() {
               </div>
               <p className="mt-1 text-right text-xs text-stone-500">{discoveredCount} grupos mapeados</p>
             </div>
-          </div>
-        </Card>
-      )}
-
-      {imp?.message && (
-        <Card
-          className={
-            importActive
-              ? 'border-emerald-700/40 bg-emerald-950/20'
-              : /evolution não|nenhuma de outros|0 no banco/i.test(imp.message)
-                ? 'border-amber-600/50 bg-amber-950/25'
-                : 'border-emerald-700/40 bg-emerald-950/15'
-          }
-        >
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-medium text-stone-100">
-                {importActive
-                  ? `Importando mensagens — ${imp.done}/${imp.total} grupos`
-                  : 'Resultado da importação'}
-              </p>
-              <p className="mt-1 text-xs text-stone-300">{imp.message}</p>
-              {imp.error && <p className="mt-1 break-words text-xs text-red-400">Detalhe do erro: {imp.error}</p>}
-              {imp.retryAfter && imp.status === 'RATE_LIMITED' && (
-                <p className="mt-1 text-xs text-amber-300">
-                  Pausado por limite do WhatsApp. Retomar após {new Date(imp.retryAfter).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              )}
-            </div>
-            {importActive && imp.total > 0 && (
-              <div className="min-w-40">
-                <div className="h-2 overflow-hidden rounded-full bg-brand-800">
-                  <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${importProgress}%` }} />
-                </div>
-                <p className="mt-1 text-right text-xs text-stone-500">{importProgress}%</p>
-              </div>
-            )}
           </div>
         </Card>
       )}
@@ -364,21 +247,14 @@ export function Groups() {
             <p className="mt-2 text-sm text-stone-400">
               {filter === 'ativos' && groupCounts.pendentes > 0 ? (
                 <>
-                  Grupos encontrados ficam em <strong>Pendentes</strong> até você conectar. Abra essa aba, selecione e use{' '}
-                  <strong>Marcar ativo</strong> ou <strong>Conectar e importar</strong>.
+                  Grupos encontrados ficam em <strong>Pendentes</strong> até você marcar como <strong>ativo</strong>.
                 </>
               ) : filter === 'pendentes' ? (
                 <>Clique em <strong>Procurar grupos</strong> para mapear sua conta do WhatsApp.</>
               ) : filter === 'inativos' ? (
-                <>
-                  Use <strong>Marcar inativo</strong> em grupos que não quer mais usar. Grupos só mapeados aparecem em{' '}
-                  <strong>Pendentes</strong>.
-                </>
+                <>Use <strong>Marcar inativo</strong> em grupos que não quer mais monitorar.</>
               ) : (
-                <>
-                  Se o WhatsApp acabou de conectar, clique em Procurar grupos. Depois selecione e clique em Conectar e
-                  importar.
-                </>
+                <>Se o WhatsApp acabou de conectar, clique em <strong>Procurar grupos</strong> e depois marque como ativo.</>
               )}
             </p>
           </div>
@@ -387,7 +263,6 @@ export function Groups() {
         <div className="grid gap-4 md:grid-cols-2">
           {filtered.map((g) => {
             const isSelected = selected.has(g.id)
-            const msgStatus = MESSAGE_SYNC_LABELS[g.messageSyncStatus] || null
             return (
               <Card key={g.id} className={isSelected ? 'ring-1 ring-accent-500/40' : ''}>
                 <div className="flex gap-4">
@@ -406,15 +281,13 @@ export function Groups() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold text-stone-50 truncate">{g.name}</h3>
                       <Badge variant={g.status === 'ativo' ? 'success' : g.status === 'pendente' ? 'warning' : 'muted'}>{g.status}</Badge>
-                      {g.monitoringEnabled && msgStatus && <Badge variant={msgStatus.variant}>{msgStatus.label}</Badge>}
+                      {g.monitoringEnabled && g.status === 'ativo' && <Badge variant="success">Monitorando</Badge>}
                     </div>
-                    <p className="text-xs text-stone-500 mt-1">
-                      {g.memberCount} membros{g.messagesSyncedCount ? ` · ${g.messagesSyncedCount} msgs` : ''}
-                    </p>
-                    {g.messageSyncStatus === 'SYNCING' && (
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-brand-800">
-                        <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${Math.max(5, Math.min(100, g.messageSyncProgress || 0))}%` }} />
-                      </div>
+                    <p className="text-xs text-stone-500 mt-1">{g.memberCount} membros</p>
+                    {g.activatedAt && (
+                      <p className="text-xs text-stone-600 mt-0.5">
+                        Ativo desde {new Date(g.activatedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                      </p>
                     )}
                     <p className="text-sm text-stone-400 mt-2 line-clamp-2">&ldquo;{g.lastMessage}&rdquo;</p>
                     <div className="mt-4 flex flex-wrap gap-2">

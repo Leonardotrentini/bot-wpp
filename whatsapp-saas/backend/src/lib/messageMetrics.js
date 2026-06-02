@@ -105,12 +105,21 @@ async function loadUnifiedMessages(userId, groups, start, end) {
     })
   }
 
-  merged.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-  const inboundCount = merged.filter((m) => !m.fromMe).length
+  const activatedByGroupId = new Map(
+    groups.map((g) => [g.id, g.activatedAt ? new Date(g.activatedAt) : null]),
+  )
+  const filtered = merged.filter((m) => {
+    const activated = activatedByGroupId.get(m.groupId)
+    if (!activated) return true
+    return new Date(m.timestamp).getTime() >= activated.getTime()
+  })
+
+  filtered.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  const inboundCount = filtered.filter((m) => !m.fromMe).length
 
   return {
-    messages: merged,
-    importedCount: imported.length,
+    messages: filtered,
+    importedCount: filtered.filter((m) => !String(m.id).startsWith("outbound-")).length,
     outboundCount: outbound.length,
     inboundCount,
   }

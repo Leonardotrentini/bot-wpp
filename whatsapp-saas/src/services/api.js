@@ -352,6 +352,15 @@ export async function getOverview({ groupIds = [], period = '2d' } = {}) {
   return mockResponse(mockDashboardMetrics)
 }
 
+export async function refreshOverview({ groupIds = [], period = '2d' } = {}) {
+  if (resolveUseRealApi()) {
+    const body = { period }
+    if (groupIds?.length) body.groupIds = groupIds
+    return apiClient.post('/overview/refresh', body)
+  }
+  return getOverview({ groupIds, period })
+}
+
 /** @deprecated use getOverview */
 export async function getDashboardSummary() {
   return getOverview()

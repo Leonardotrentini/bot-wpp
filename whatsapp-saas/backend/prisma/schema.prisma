@@ -128,6 +128,7 @@ model WhatsAppGroup {
   messageSyncProgress  Int                        @default(0)
   messagesSyncedCount  Int                        @default(0)
   messagesLastSyncAt   DateTime?
+  activatedAt          DateTime?
   createdAt            DateTime                   @default(now())
   updatedAt            DateTime                   @updatedAt
   participants         WhatsAppGroupParticipant[]

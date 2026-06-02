@@ -246,6 +246,7 @@ function getGroupApiPayload(group) {
     restrict: Boolean(group.restrict),
     owner: group.owner || null,
     monitoringEnabled: Boolean(group.monitoringEnabled),
+    activatedAt: group.activatedAt?.toISOString?.() || group.activatedAt || null,
     messageSyncStatus: group.messageSyncStatus || "IDLE",
     messageSyncProgress: group.messageSyncProgress || 0,
     messagesSyncedCount: group.messagesSyncedCount || 0,
@@ -662,7 +663,7 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
       groupSyncStatus: realGroups.length ? "GROUPS_FOUND" : "READY",
       groupSyncProgress: 100,
       groupSyncMessage: realGroups.length
-        ? `${realGroups.length} grupos encontrados. Selecione os que quer conectar e clique em Conectar e importar.`
+        ? `${realGroups.length} grupos encontrados. Selecione e marque como ativo para monitorar a partir de agora.`
         : "A Evolution respondeu, mas reconhecemos 0 grupos. Se você acabou de conectar, aguarde ~1 min (a sessão ainda sincroniza) e tente de novo.",
       groupSyncError: realGroups.length ? null : `Resposta da Evolution: ${shape}`,
       groupSyncRetryAfter: null,
@@ -818,39 +819,55 @@ async function importGroupMessages(conn, group, cutoffMs) {
   return { totalSaved, inboundSaved, evolutionRecords }
 }
 
-/** Marca grupos como monitorados e agenda import dos últimos N dias (sem desligar outros). */
-async function queueMessageImportForGroups(userId, groupJids, { message } = {}) {
-  const unique = [...new Set((groupJids || []).filter(Boolean))]
-  if (!unique.length) return null
+/** Sincroniza participantes dos grupos ativos (entrada/saída). */
+async function syncParticipantsForActiveGroups(userId, groupJids = null) {
+  const conn = await getUserWhatsAppConnection(userId)
+  if (!conn?.connected) return { synced: 0, failed: 0 }
 
-  await prisma.whatsAppGroup.updateMany({
+  const where = { userId, status: "ativo", monitoringEnabled: true }
+  if (groupJids?.length) where.groupJid = { in: groupJids }
+
+  const rows = await prisma.whatsAppGroup.findMany({ where, orderBy: { name: "asc" } })
+  let synced = 0
+  let failed = 0
+  for (const row of rows) {
+    try {
+      await syncParticipantsForGroupRow(conn, row)
+      synced++
+    } catch (err) {
+      failed++
+      console.warn("[participants-sync]", row.groupJid, err?.message || err)
+    }
+  }
+  return { synced, failed }
+}
+
+/** Ativa monitoramento em tempo real (sem backup de mensagens antigas). */
+async function activateGroupsForMonitoring(userId, groupJids) {
+  const unique = [...new Set((groupJids || []).filter(Boolean))]
+  if (!unique.length) return { activated: 0 }
+
+  const now = new Date()
+  const rows = await prisma.whatsAppGroup.findMany({
     where: { userId, groupJid: { in: unique } },
-    data: {
-      monitoringEnabled: true,
-      status: "ativo",
-      messageSyncStatus: "QUEUED",
-      messageSyncProgress: 0,
-    },
+    select: { id: true, groupJid: true, activatedAt: true },
   })
 
-  const defaultMessage = `Importação de ${unique.length} grupo(s) agendada (últimos ${MESSAGE_BACKFILL_DAYS} dias). Novas mensagens entram pelo webhook.`
-
-  if (activeMessageImports.has(userId)) {
-    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
-    return conn
+  for (const row of rows) {
+    await prisma.whatsAppGroup.update({
+      where: { id: row.id },
+      data: {
+        monitoringEnabled: true,
+        status: "ativo",
+        messageSyncStatus: "READY",
+        messageSyncProgress: 100,
+        activatedAt: row.activatedAt || now,
+      },
+    })
   }
 
-  const conn = await updateConnectionSync(userId, {
-    msgImportStatus: "QUEUED",
-    msgImportTotal: unique.length,
-    msgImportDone: 0,
-    msgImportMessage: message || defaultMessage,
-    msgImportError: null,
-    msgImportRetryAfter: null,
-  })
-
-  void runMessageImport(userId, { onlyGroupJids: unique })
-  return conn
+  void syncParticipantsForActiveGroups(userId, unique)
+  return { activated: rows.length }
 }
 
 async function runMessageImport(userId, { onlyGroupJids } = {}) {
@@ -1006,14 +1023,18 @@ app.post("/api/groups/select", authMiddleware, async (req, res) => {
     if (!conn.connected) {
       return res.status(409).json({
         error: "WHATSAPP_NOT_CONNECTED",
-        message: "Conecte o WhatsApp antes de importar mensagens.",
+        message: "Conecte o WhatsApp antes de ativar grupos.",
       })
     }
 
     const { groupIds } = parsed.data
-    const queuedConn = await queueMessageImportForGroups(req.user.sub, groupIds)
+    const { activated } = await activateGroupsForMonitoring(req.user.sub, groupIds)
     const cachedGroups = await readCachedGroups(req.user.sub)
-    return res.status(202).json({ groups: cachedGroups, import: getImportPayload(queuedConn) })
+    return res.json({
+      groups: cachedGroups,
+      import: getImportPayload(conn),
+      message: `${activated} grupo(s) ativo(s). Métricas e mensagens a partir de agora.`,
+    })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
@@ -1035,36 +1056,35 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
 
     const conn = await getUserWhatsAppConnection(req.user.sub)
     const { groupIds, status } = parsed.data
-    const data =
-      status === "ativo"
-        ? { status: "ativo", monitoringEnabled: true, messageSyncStatus: "QUEUED", messageSyncProgress: 0 }
-        : status === "inativo"
-          ? { status: "inativo", monitoringEnabled: false }
-          : { status: "pendente", monitoringEnabled: false }
-
-    await prisma.whatsAppGroup.updateMany({
-      where: { userId: req.user.sub, groupJid: { in: groupIds } },
-      data,
-    })
-
-    let importConn = conn
     if (status === "ativo") {
       if (!conn.connected) {
         return res.status(409).json({
           error: "WHATSAPP_NOT_CONNECTED",
-          message: "Conecte o WhatsApp antes de ativar grupos e importar mensagens.",
+          message: "Conecte o WhatsApp antes de ativar grupos.",
         })
       }
-      importConn = await queueMessageImportForGroups(req.user.sub, groupIds, {
-        message: `${groupIds.length} grupo(s) ativo(s): importando últimos ${MESSAGE_BACKFILL_DAYS} dias.`,
+      await activateGroupsForMonitoring(req.user.sub, groupIds)
+    } else {
+      const data =
+        status === "inativo"
+          ? { status: "inativo", monitoringEnabled: false }
+          : { status: "pendente", monitoringEnabled: false }
+      await prisma.whatsAppGroup.updateMany({
+        where: { userId: req.user.sub, groupJid: { in: groupIds } },
+        data,
       })
     }
 
     const cachedGroups = await readCachedGroups(req.user.sub)
-    return res.status(status === "ativo" ? 202 : 200).json({
+    const message =
+      status === "ativo"
+        ? `${groupIds.length} grupo(s) ativo(s). Dados coletados somente a partir de agora.`
+        : undefined
+    return res.json({
       groups: cachedGroups,
       sync: getSyncPayload(conn, cachedGroups.length),
-      import: getImportPayload(importConn || conn),
+      import: getImportPayload(conn),
+      message,
     })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
@@ -1174,64 +1194,18 @@ app.post("/api/groups/sync", authMiddleware, async (req, res) => {
     if (!conn.connected) {
       return res.status(409).json({
         error: "WHATSAPP_NOT_CONNECTED",
-        message: "Conecte o WhatsApp antes de sincronizar grupos.",
+        message: "Conecte o WhatsApp antes de sincronizar.",
         groups: cachedGroups,
-        import: getImportPayload(conn),
       })
     }
 
-    if (activeMessageImports.has(req.user.sub)) {
-      return res.status(202).json({
-        groups: cachedGroups,
-        import: getImportPayload(conn),
-        message: "Já existe uma importação em andamento.",
-      })
-    }
+    const { synced, failed } = await syncParticipantsForActiveGroups(req.user.sub, requestedGroupIds)
 
-    if (requestedGroupIds?.length) {
-      await prisma.whatsAppGroup.updateMany({
-        where: { userId: req.user.sub, groupJid: { in: requestedGroupIds } },
-        data: {
-          monitoringEnabled: true,
-          status: "ativo",
-          messageSyncStatus: "QUEUED",
-          messageSyncProgress: 0,
-        },
-      })
-    }
-
-    const importWhere = { userId: req.user.sub, monitoringEnabled: true }
-    if (requestedGroupIds?.length) importWhere.groupJid = { in: requestedGroupIds }
-
-    const importTargets = await prisma.whatsAppGroup.findMany({
-      where: importWhere,
-      select: { groupJid: true },
+    return res.json({
+      groups: await readCachedGroups(req.user.sub),
+      message: `Participantes atualizados em ${synced} grupo(s).${failed ? ` ${failed} falha(s).` : ""}`,
+      participants: { synced, failed },
     })
-
-    if (!importTargets.length) {
-      return res.status(400).json({
-        error: "NO_GROUPS_TO_IMPORT",
-        message: requestedGroupIds?.length
-          ? "Nenhum dos grupos selecionados foi encontrado. Procure os grupos e tente de novo."
-          : "Selecione ao menos um grupo conectado antes de reimportar.",
-        groups: cachedGroups,
-        import: { ...getImportPayload(conn), status: "IDLE" },
-      })
-    }
-
-    const targetJids = importTargets.map((g) => g.groupJid)
-    const queuedConn = await updateConnectionSync(req.user.sub, {
-      msgImportStatus: "QUEUED",
-      msgImportTotal: targetJids.length,
-      msgImportDone: 0,
-      msgImportMessage: `Reimportação de ${targetJids.length} grupo(s) agendada (últimos ${MESSAGE_BACKFILL_DAYS} dias).`,
-      msgImportError: null,
-      msgImportRetryAfter: null,
-    })
-
-    void runMessageImport(req.user.sub, { onlyGroupJids: targetJids })
-
-    return res.status(202).json({ groups: await readCachedGroups(req.user.sub), import: getImportPayload(queuedConn) })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message, groups: [] })
@@ -1491,16 +1465,20 @@ app.get("/api/analytics", authMiddleware, async (req, res) => {
   }
 })
 
+function parseOverviewQuery(req) {
+  const rawIds = req.query?.groupIds || req.query?.groupId || req.body?.groupIds
+  const groupJids = rawIds
+    ? (Array.isArray(rawIds) ? rawIds : String(rawIds).split(","))
+        .map((s) => String(s).trim())
+        .filter(Boolean)
+    : null
+  const period = typeof (req.query?.period || req.body?.period) === "string" ? req.query?.period || req.body?.period : "2d"
+  return { groupJids, period }
+}
+
 async function handleOverview(req, res) {
   try {
-    const rawIds = req.query.groupIds || req.query.groupId
-    const groupJids = rawIds
-      ? String(rawIds)
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : null
-    const period = typeof req.query.period === "string" ? req.query.period : "2d"
+    const { groupJids, period } = parseOverviewQuery(req)
     const data = await buildOverview(req.user.sub, { groupJids, period })
     res.json(data)
   } catch (err) {
@@ -1511,6 +1489,32 @@ async function handleOverview(req, res) {
 
 app.get("/api/overview", authMiddleware, handleOverview)
 app.get("/api/dashboard", authMiddleware, handleOverview)
+
+app.post("/api/overview/refresh", authMiddleware, async (req, res) => {
+  try {
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    if (!conn.connected) {
+      return res.status(409).json({
+        error: "WHATSAPP_NOT_CONNECTED",
+        message: "Conecte o WhatsApp antes de atualizar.",
+      })
+    }
+    const { groupJids, period } = parseOverviewQuery(req)
+    const { synced, failed } = await syncParticipantsForActiveGroups(req.user.sub, groupJids)
+    const data = await buildOverview(req.user.sub, { groupJids, period })
+    res.json({
+      ...data,
+      refresh: {
+        synced,
+        failed,
+        at: new Date().toISOString(),
+      },
+    })
+  } catch (err) {
+    console.error("[overview/refresh]", err)
+    res.status(500).json({ error: "OVERVIEW_REFRESH_FAILED", message: err?.message || "Falha ao atualizar." })
+  }
+})
 
 // ===================== Mensagens reais + biblioteca + automações =====================
 

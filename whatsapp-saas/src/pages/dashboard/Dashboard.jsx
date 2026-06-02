@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Users, LayoutGrid, UserPlus, UserMinus, Check } from 'lucide-react'
+import { Users, LayoutGrid, UserPlus, UserMinus, Check, RefreshCw } from 'lucide-react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -15,24 +15,17 @@ import {
 import { Card } from '../../components/common/Card.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
-import { getOverview, getGroups } from '../../services/api.js'
+import { Button } from '../../components/common/Button.jsx'
+import { getOverview, getGroups, refreshOverview } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 function DataBanner({ meta }) {
   if (!meta) return null
-  if (meta.onlyPlatformOutbound) {
-    return (
-      <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
-        Só há envios pela plataforma no período. Em <strong>Grupos</strong>, marque o grupo como{' '}
-        <strong>ativo</strong> (importa 2 dias automaticamente) ou use <strong>Reimportar 2 dias</strong>.
-      </p>
-    )
-  }
   if (!meta.hasActivity) {
     return (
       <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
-        Nenhuma mensagem nos últimos {meta.messageRetentionDays ?? 2} dias. Ative um grupo em{' '}
-        <strong>Grupos</strong> para importar o histórico e receber novas mensagens pelo webhook.
+        Ainda não há mensagens desde que o grupo foi ativado. Novas mensagens entram automaticamente; use{' '}
+        <strong>Atualizar</strong> para sincronizar entradas e saídas de membros.
       </p>
     )
   }
@@ -128,6 +121,7 @@ export function Dashboard() {
   const [groups, setGroups] = useState([])
   const [selectedIds, setSelectedIds] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
 
   const loadOverview = useCallback(async () => {
     setLoading(true)
@@ -142,6 +136,27 @@ export function Dashboard() {
       setData(null)
     } finally {
       setLoading(false)
+    }
+  }, [selectedIds, toast])
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const res = await refreshOverview({
+        groupIds: selectedIds.length ? selectedIds : [],
+        period: '2d',
+      })
+      setData(res.data)
+      const r = res.data?.refresh
+      if (r?.synced != null) {
+        toast.success(`Atualizado: ${r.synced} grupo(s) sincronizado(s).`)
+      } else {
+        toast.success('Visão geral atualizada.')
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar.')
+    } finally {
+      setRefreshing(false)
     }
   }, [selectedIds, toast])
 
@@ -199,13 +214,13 @@ export function Dashboard() {
     {
       label: 'Novos leads',
       value: String(data.newLeads ?? 0),
-      hint: `Entraram nos grupos nos últimos ${retention} dias`,
+      hint: `Novos membros desde que o grupo foi ativado (${retention} dias)`,
       icon: UserPlus,
     },
     {
       label: 'Saída',
       value: String(data.exits ?? 0),
-      hint: `Saíram do grupo no período (detectado na sincronização)`,
+      hint: 'Saídas detectadas na última sincronização (use Atualizar)',
       icon: UserMinus,
     },
     {
@@ -225,12 +240,22 @@ export function Dashboard() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-xs text-stone-500">
-          Visão geral · últimos {retention} dias ·{' '}
+          Dados desde a ativação do grupo · janela de {retention} dias ·{' '}
           <Link to="/dashboard/groups" className="text-accent-400 hover:underline">
             Gerenciar grupos
           </Link>
         </span>
-        {loading && <span className="text-xs text-stone-600 animate-pulse">Atualizando…</span>}
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="gap-2 shrink-0"
+          onClick={handleRefresh}
+          disabled={refreshing || loading}
+        >
+          <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Atualizando…' : 'Atualizar'}
+        </Button>
       </div>
 
       <GroupFilterBar groups={groups} selectedIds={selectedIds} onChange={setSelectedIds} />

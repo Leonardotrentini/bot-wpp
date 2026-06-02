@@ -45,11 +45,15 @@ function computeLeadMetrics(groups, start, end) {
   const byJid = new Map()
 
   for (const g of groups) {
+    const activatedAt = g.activatedAt ? new Date(g.activatedAt) : null
+    const effectiveStart =
+      activatedAt && activatedAt.getTime() > start.getTime() ? activatedAt : start
+
     for (const p of g.participants || []) {
       const jid = p.participantJid
       if (!jid) continue
 
-      if (isInRange(p.createdAt, start, end)) seenNew.add(jid)
+      if (isInRange(p.createdAt, effectiveStart, end)) seenNew.add(jid)
       if (isInRange(p.leftAt, start, end)) seenExit.add(jid)
       else if (p.status === "saiu" && isInRange(p.updatedAt, start, end)) seenExit.add(jid)
 
