@@ -365,7 +365,7 @@ export function Members() {
                   onChange={(e) => setApplyTagValue(e.target.value)}
                   disabled={!tagCatalog.length || selected.size === 0}
                   aria-label="Tag para aplicar"
-                  className="min-w-0 flex-1 cursor-pointer border-0 bg-transparent py-2.5 text-sm text-stone-100 outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="vg-select-dark min-w-0 flex-1 cursor-pointer border-0 bg-transparent py-2.5 text-sm text-stone-100 outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <option value="">
                     {tagCatalog.length ? 'Escolher tag…' : 'Crie uma tag primeiro'}
@@ -427,7 +427,7 @@ export function Members() {
               type="checkbox"
               checked={activeGroupsOnly}
               onChange={(e) => setActiveGroupsOnly(e.target.checked)}
-              className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30"
+              className="vg-checkbox"
             />
             Só grupos ativos ({groups.filter((g) => g.status === 'ativo').length})
           </label>
@@ -454,7 +454,7 @@ export function Members() {
                       type="checkbox"
                       checked={allVisibleSelected}
                       onChange={toggleSelectAllHeader}
-                      className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30"
+                      className="vg-checkbox"
                       title="Selecionar todos visíveis"
                       aria-label="Selecionar todos"
                     />
@@ -475,7 +475,7 @@ export function Members() {
                         type="checkbox"
                         checked={selected.has(m.id)}
                         onChange={() => toggleRow(m.id)}
-                        className="rounded border-brand-600 text-accent-500 focus:ring-accent-500/30"
+                        className="vg-checkbox"
                         aria-label={`Selecionar ${m.name}`}
                       />
                     </td>

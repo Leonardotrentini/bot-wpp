@@ -53,3 +53,26 @@
 .vg-toast {
   animation: vg-toast-in 0.28s ease-out;
 }
+
+@layer components {
+  /* Checkbox: fundo escuro, borda clara; marcado = dourado com ✓ escuro */
+  .vg-checkbox {
+    @apply h-4 w-4 shrink-0 cursor-pointer appearance-none rounded border-2 border-stone-400 bg-brand-950 transition-colors;
+    @apply focus:outline-none focus:ring-2 focus:ring-accent-500/40 focus:ring-offset-2 focus:ring-offset-brand-950;
+  }
+  .vg-checkbox:checked {
+    @apply border-accent-500 bg-accent-500;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23070f0c'%3E%3Cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3E%3C/svg%3E");
+    background-size: 85% 85%;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .vg-checkbox:disabled {
+    @apply cursor-not-allowed opacity-40;
+  }
+
+  /* Lista nativa do select no tema escuro (Windows/Chrome) */
+  .vg-select-dark {
+    color-scheme: dark;
+  }
+}
