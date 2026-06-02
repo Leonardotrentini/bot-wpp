@@ -49,6 +49,7 @@ import {
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, imageMaxLabel, videoMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
+import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const HIST_PAGE_SIZE = 20
 
@@ -77,6 +78,8 @@ const emptyInlineMessage = () => ({
   mediaBase64: null,
   mediaMime: null,
   mediaName: null,
+  mediaPreviewUrl: null,
+  mediaSize: null,
 })
 
 function emptyAutomationForm() {
@@ -108,6 +111,15 @@ function appendInlineMedia(payload, f) {
   payload.mediaBase64 = f.mediaBase64
   payload.mediaMime = f.mediaMime
   payload.mediaName = f.mediaName
+}
+
+function inlineMediaPreviewFields(f) {
+  return {
+    mediaPreviewUrl: f.mediaPreviewUrl,
+    mediaName: f.mediaName,
+    mediaSize: f.mediaSize,
+    mediaMime: f.mediaMime,
+  }
 }
 
 function fmtDate(iso) {
@@ -142,18 +154,29 @@ function statusBadge(status) {
   return { variant: 'muted', label: status || 'enviado' }
 }
 
+function mediaPreviewSrc(content) {
+  return content.mediaPreviewUrl || content.mediaBase64 || null
+}
+
 function PreviewBubble({ content }) {
   const hasMedia = content.mediaType === 'image' || content.mediaType === 'video'
   if (!hasMedia && !content.body?.trim()) {
     return <p className="text-sm text-stone-500">A prévia da mensagem aparece aqui.</p>
   }
+  const src = mediaPreviewSrc(content)
   return (
     <div className="max-w-xs rounded-2xl rounded-tl-sm bg-[#075E54]/30 border border-[#128C7E]/30 p-2.5">
-      {content.mediaType === 'image' && content.mediaBase64 && (
-        <img src={content.mediaBase64} alt="" className="mb-2 max-h-44 w-full rounded-lg object-cover" />
+      {content.mediaType === 'image' && src && (
+        <ImageMediaPreview src={src} className="mb-2 max-h-44 w-full rounded-lg object-cover" />
       )}
-      {content.mediaType === 'video' && content.mediaBase64 && (
-        <video src={content.mediaBase64} controls className="mb-2 max-h-44 w-full rounded-lg" />
+      {content.mediaType === 'video' && (src || content.mediaName) && (
+        <VideoMediaPreview
+          src={src}
+          mediaName={content.mediaName}
+          mediaSize={content.mediaSize}
+          mediaMime={content.mediaMime}
+          className="mb-2 max-h-44 w-full rounded-lg bg-black"
+        />
       )}
       {content.body?.trim() ? (
         <p className="whitespace-pre-wrap text-sm text-stone-100">{content.body}</p>
@@ -164,7 +187,8 @@ function PreviewBubble({ content }) {
   )
 }
 
-function MediaAttachmentBlock({ mediaType, mediaBase64, mediaName, onPick, onClear }) {
+function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaName, mediaSize, mediaMime, onPick, onClear }) {
+  const src = mediaPreviewUrl || mediaBase64
   return (
     <div className="space-y-2">
       <p className="text-sm text-stone-200">Mídia (imagem até {imageMaxLabel} ou vídeo até {videoMaxLabel})</p>
@@ -186,9 +210,16 @@ function MediaAttachmentBlock({ mediaType, mediaBase64, mediaName, onPick, onCle
           </div>
           <div className="mt-2">
             {mediaType === 'image' ? (
-              <img src={mediaBase64} alt="" className="h-28 rounded border border-brand-700 object-cover" />
+              <ImageMediaPreview src={src} className="h-28 w-full rounded border border-brand-700 object-cover" />
             ) : (
-              <video src={mediaBase64} controls className="h-28 rounded border border-brand-700" />
+              <VideoMediaPreview
+                src={src}
+                mediaName={mediaName}
+                mediaSize={mediaSize}
+                mediaMime={mediaMime}
+                compact
+                className="h-28 w-full rounded border border-brand-700 bg-black"
+              />
             )}
           </div>
         </div>
@@ -345,8 +376,19 @@ export function Messages({ defaultTab = 'criar' }) {
       toast.error(`Arquivo grande demais. Limite: ${mediaLimitLabel(kind)}.`)
       return
     }
+    const previewUrl = URL.createObjectURL(file)
+    const mime =
+      file.type ||
+      (kind === 'video' && /\.mov$/i.test(file.name) ? 'video/quicktime' : kind === 'video' ? 'video/mp4' : 'image/jpeg')
     const dataUrl = await readFileAsDataUrl(file)
-    apply({ mediaType: kind, mediaBase64: dataUrl, mediaMime: file.type, mediaName: file.name })
+    apply({
+      mediaType: kind,
+      mediaBase64: dataUrl,
+      mediaMime: mime,
+      mediaName: file.name,
+      mediaPreviewUrl: previewUrl,
+      mediaSize: file.size,
+    })
   }
 
   async function onPickMedia(ev) {
@@ -368,15 +410,24 @@ export function Messages({ defaultTab = 'criar' }) {
   }
 
   function clearMedia() {
-    setTplForm((f) => ({ ...f, ...emptyInlineMessage() }))
+    setTplForm((f) => {
+      revokeMediaPreviewUrl(f.mediaPreviewUrl)
+      return { ...f, ...emptyInlineMessage() }
+    })
   }
 
   function clearAutoMedia() {
-    setAutoForm((f) => ({ ...f, ...emptyInlineMessage() }))
+    setAutoForm((f) => {
+      revokeMediaPreviewUrl(f.mediaPreviewUrl)
+      return { ...f, ...emptyInlineMessage() }
+    })
   }
 
   function clearCadMedia() {
-    setCadStep((f) => ({ ...f, ...emptyInlineMessage() }))
+    setCadStep((f) => {
+      revokeMediaPreviewUrl(f.mediaPreviewUrl)
+      return { ...f, ...emptyInlineMessage() }
+    })
   }
 
   async function saveTemplate() {
@@ -457,6 +508,7 @@ export function Messages({ defaultTab = 'criar' }) {
       body: autoForm.body,
       mediaType: autoForm.mediaType || 'none',
       mediaBase64: autoForm.mediaBase64,
+      ...inlineMediaPreviewFields(autoForm),
     }
   }
 
@@ -849,7 +901,14 @@ export function Messages({ defaultTab = 'criar' }) {
                     </div>
                   </div>
                   {t.mediaType === 'image' && t.mediaBase64 && <img src={t.mediaBase64} alt="" className="h-28 w-full rounded-lg object-cover border border-brand-800" />}
-                  {t.mediaType === 'video' && t.mediaBase64 && <video src={t.mediaBase64} controls className="h-28 w-full rounded-lg border border-brand-800" />}
+                  {t.mediaType === 'video' && t.mediaBase64 && (
+                    <VideoMediaPreview
+                      src={t.mediaBase64}
+                      mediaName={t.mediaName}
+                      compact
+                      className="h-28 w-full rounded-lg border border-brand-800 bg-black"
+                    />
+                  )}
                   {t.body && <p className="text-sm text-stone-400 whitespace-pre-wrap line-clamp-4">{t.body}</p>}
                 </Card>
               ))}
@@ -903,7 +962,10 @@ export function Messages({ defaultTab = 'criar' }) {
                 <MediaAttachmentBlock
                   mediaType={autoForm.mediaType}
                   mediaBase64={autoForm.mediaBase64}
+                  mediaPreviewUrl={autoForm.mediaPreviewUrl}
                   mediaName={autoForm.mediaName}
+                  mediaSize={autoForm.mediaSize}
+                  mediaMime={autoForm.mediaMime}
                   onPick={onPickAutoMedia}
                   onClear={clearAutoMedia}
                 />
@@ -1249,7 +1311,10 @@ export function Messages({ defaultTab = 'criar' }) {
                       <MediaAttachmentBlock
                         mediaType={cadStep.mediaType}
                         mediaBase64={cadStep.mediaBase64}
+                        mediaPreviewUrl={cadStep.mediaPreviewUrl}
                         mediaName={cadStep.mediaName}
+                        mediaSize={cadStep.mediaSize}
+                        mediaMime={cadStep.mediaMime}
                         onPick={onPickCadMedia}
                         onClear={clearCadMedia}
                       />
@@ -1410,7 +1475,10 @@ export function Messages({ defaultTab = 'criar' }) {
           <MediaAttachmentBlock
             mediaType={tplForm.mediaType}
             mediaBase64={tplForm.mediaBase64}
+            mediaPreviewUrl={tplForm.mediaPreviewUrl}
             mediaName={tplForm.mediaName}
+            mediaSize={tplForm.mediaSize}
+            mediaMime={tplForm.mediaMime}
             onPick={onPickMedia}
             onClear={clearMedia}
           />
