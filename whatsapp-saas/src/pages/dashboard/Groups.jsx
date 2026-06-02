@@ -22,7 +22,7 @@ export function Groups() {
   const toast = useToast()
   const [groups, setGroups] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState('todos')
+  const [filter, setFilter] = useState('ativos')
   const [q, setQ] = useState('')
   const [sync, setSync] = useState(null)
   const [imp, setImp] = useState(null)
@@ -37,7 +37,7 @@ export function Groups() {
     setSync(data.sync || null)
     setImp(data.import || null)
     if (!initializedSelection.current) {
-      const monitored = nextGroups.filter((g) => g.monitoringEnabled).map((g) => g.id)
+      const monitored = nextGroups.filter((g) => g.monitoringEnabled && g.status === 'ativo').map((g) => g.id)
       if (monitored.length) setSelected(new Set(monitored))
       initializedSelection.current = true
     }
@@ -239,7 +239,6 @@ export function Groups() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2">
           {[
-            { id: 'todos', label: 'Todos' },
             { id: 'ativos', label: 'Ativos' },
             { id: 'inativos', label: 'Inativos' },
           ].map((f) => (
@@ -287,9 +286,23 @@ export function Groups() {
       ) : filtered.length === 0 ? (
         <Card>
           <div className="py-10 text-center">
-            <p className="font-medium text-stone-200">Nenhum grupo encontrado ainda.</p>
+            <p className="font-medium text-stone-200">
+              {filter === 'ativos' && groups.some((g) => g.status !== 'ativo')
+                ? 'Nenhum grupo ativo no momento.'
+                : 'Nenhum grupo encontrado ainda.'}
+            </p>
             <p className="mt-2 text-sm text-stone-400">
-              Se o WhatsApp acabou de conectar, clique em Procurar grupos. Depois selecione e clique em Conectar e importar.
+              {filter === 'ativos' && groups.some((g) => g.status !== 'ativo') ? (
+                <>
+                  Você tem grupos inativos na aba <strong>Inativos</strong>. Selecione um grupo lá e use{' '}
+                  <strong>Marcar ativo</strong>, ou procure novos grupos.
+                </>
+              ) : (
+                <>
+                  Se o WhatsApp acabou de conectar, clique em Procurar grupos. Depois selecione e clique em Conectar e
+                  importar.
+                </>
+              )}
             </p>
           </div>
         </Card>
