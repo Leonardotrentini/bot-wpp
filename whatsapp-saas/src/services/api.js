@@ -190,6 +190,14 @@ export async function getGroupDetails(id) {
   return mockResponse({ group, members, activity, settings: { ...mockGroupSettings } })
 }
 
+export async function setGroupParticipantsStatus(groupId, participantIds = [], status = 'ativo') {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/groups/${encodeURIComponent(groupId)}/participants/status`, { participantIds, status })
+  }
+  await delay()
+  return mockResponse({ updated: participantIds.length, status })
+}
+
 export async function sendMessage({ groupIds, templateId, body, mediaType, mediaBase64, mediaMime, mediaName }) {
   if (resolveUseRealApi()) {
     return apiClient.post('/messages/send', { groupIds, templateId, body, mediaType, mediaBase64, mediaMime, mediaName })

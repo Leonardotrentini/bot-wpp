@@ -34,7 +34,7 @@ import { Badge } from '../../components/common/Badge.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
 import { Select } from '../../components/common/Select.jsx'
-import { getGroupDetails } from '../../services/api.js'
+import { getGroupDetails, setGroupParticipantsStatus } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { avatar, mockGroupSettings } from '../../utils/mockData.js'
 
@@ -493,7 +493,7 @@ export function GroupDetails() {
     setRemoveTagModal(true)
   }
 
-  const setMemberStatus = (memberId, nextStatus) => {
+  const setMemberStatus = async (memberId, nextStatus) => {
     if (nextStatus !== 'ativo' && nextStatus !== 'inativo') return
     const cur = members.find((x) => x.id === memberId)
     if (cur?.status === nextStatus) return
@@ -505,6 +505,14 @@ export function GroupDetails() {
       return next
     })
     toast.success('Status atualizado.')
+
+    if (!id) return
+
+    try {
+      await setGroupParticipantsStatus(id, [memberId], nextStatus)
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Falha ao salvar status no servidor.')
+    }
   }
 
   const setBulkStatus = (nextStatus) => {
@@ -513,6 +521,7 @@ export function GroupDetails() {
       toast.error('Selecione ao menos um membro.')
       return
     }
+    const memberIds = [...selected]
     setMembers((prev) => {
       const next = prev.map((m) => (selected.has(m.id) ? { ...m, status: nextStatus } : m))
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'member.status_bulk', details: `${selected.size} -> ${nextStatus}` }, ...auditLogRef.current].slice(0, 50)
@@ -521,15 +530,22 @@ export function GroupDetails() {
       return next
     })
     toast.success(`Status "${nextStatus}" aplicado a ${selected.size} membro(s).`)
+
+    if (!id) return
+    void setGroupParticipantsStatus(id, memberIds, nextStatus).catch(() => {
+      toast.error('Falha ao salvar status no servidor.')
+    })
   }
 
   const applyInactivityRule = () => {
     const days = Math.max(1, Math.min(365, Number(statusRules.inactiveAfterDays) || 3))
     const nextRules = { ...statusRules, inactiveAfterDays: days }
+    const changedIds = []
     let changed = 0
     const next = members.map((m) => {
       if (m.status === 'ativo' && daysSince(m.lastActivity) > days) {
         changed += 1
+        changedIds.push(m.id)
         return { ...m, status: 'inativo' }
       }
       return m
@@ -543,6 +559,12 @@ export function GroupDetails() {
       toast.info('Nenhum membro ativo ultrapassou o limite de dias sem atividade (campo lastActivity).')
     } else {
       toast.success(`${changed} membro(s) marcado(s) como inativo por inatividade (> ${days} dia(s)).`)
+    }
+
+    if (id && changedIds.length) {
+      void setGroupParticipantsStatus(id, changedIds, 'inativo').catch(() => {
+        toast.error('Falha ao salvar status inativo no servidor.')
+      })
     }
   }
 

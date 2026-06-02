@@ -393,12 +393,26 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
   const currentJids = new Set(enriched.map((p) => p.participantJid))
   const now = new Date()
 
+  // Preserva o status manual (ex.: "inativo") do usuário para que um novo sync
+  // não sobrescreva o que foi configurado no dashboard/GroupDetails.
+  const existingStatuses = currentJids.size
+    ? await prisma.whatsAppGroupParticipant.findMany({
+        where: { groupId: groupRow.id, participantJid: { in: [...currentJids] } },
+        select: { participantJid: true, status: true },
+      })
+    : []
+  const existingByJid = new Map(existingStatuses.map((r) => [r.participantJid, r.status]))
+
   for (const participant of enriched) {
+    const prevStatus = existingByJid.get(participant.participantJid)
+      // Se o usuário marcou "inativo", preservamos; caso contrário, tratamos como ativo
+      // (reentrada => ativo; saída => "saiu" tratada pelo stale detection).
+      const status = prevStatus === "inativo" ? "inativo" : "ativo"
     const data = {
       name: finalizeParticipantName(participant),
       phone: participant.phone,
       role: participant.role,
-      status: participant.status === "inativo" ? "inativo" : "ativo",
+      status,
       leftAt: null,
       raw: serializeJson(participant.raw),
       lastSyncedAt: now,
@@ -1447,6 +1461,45 @@ app.post("/api/members/sync-participants", authMiddleware, async (req, res) => {
     }
 
     res.json({ synced, failed, attempted: rows.length })
+  } catch (err) {
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.post("/api/groups/:id/participants/status", authMiddleware, async (req, res) => {
+  try {
+    const groupJid = decodeURIComponent(req.params.id)
+    const schema = z.object({
+      participantIds: z.array(z.string()).min(1),
+      status: z.enum(["ativo", "inativo"]),
+    })
+
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos para status do participante." })
+    }
+
+    const { participantIds, status } = parsed.data
+    const group = await prisma.whatsAppGroup.findUnique({
+      where: { userId_groupJid: { userId: req.user.sub, groupJid } },
+      select: { id: true },
+    })
+
+    if (!group) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado no cache." })
+    }
+
+    const now = new Date()
+    const { count } = await prisma.whatsAppGroupParticipant.updateMany({
+      where: { groupId: group.id, participantJid: { in: participantIds } },
+      data: {
+        status,
+        leftAt: null,
+        lastSyncedAt: now,
+      },
+    })
+
+    return res.json({ updated: count, status })
   } catch (err) {
     return handleEvolutionError(res, err)
   }
