@@ -4,6 +4,7 @@ import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Select } from '../../components/common/Select.jsx'
+import { DarkDropdown } from '../../components/common/DarkDropdown.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
 import { getMembers, syncMembersParticipants } from '../../services/api.js'
@@ -358,25 +359,19 @@ export function Members() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:shrink-0">
             <p className="text-xs text-stone-500 sm:hidden">Aplicar tag aos selecionados</p>
             <div className="flex w-full items-stretch gap-2 sm:w-auto">
-              <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-brand-700 bg-brand-950/50 px-3 sm:min-w-[200px] sm:flex-initial">
-                <Tag className="h-4 w-4 shrink-0 text-stone-500" aria-hidden />
-                <select
-                  value={applyTagValue}
-                  onChange={(e) => setApplyTagValue(e.target.value)}
-                  disabled={!tagCatalog.length || selected.size === 0}
-                  aria-label="Tag para aplicar"
-                  className="vg-select-dark min-w-0 flex-1 cursor-pointer border-0 bg-transparent py-2.5 text-sm text-stone-100 outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <option value="">
-                    {tagCatalog.length ? 'Escolher tag…' : 'Crie uma tag primeiro'}
-                  </option>
-                  {tagCatalog.map((t) => (
-                    <option key={t} value={t}>
-                      {displayTag(t)}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <DarkDropdown
+                className="min-w-0 flex-1 sm:min-w-[220px] sm:flex-initial"
+                value={applyTagValue}
+                onChange={(e) => setApplyTagValue(e.target.value)}
+                disabled={!tagCatalog.length || selected.size === 0}
+                ariaLabel="Tag para aplicar"
+                leadingIcon={<Tag className="h-4 w-4 shrink-0 text-stone-400" aria-hidden />}
+                placeholder={tagCatalog.length ? 'Escolher tag…' : 'Crie uma tag primeiro'}
+                options={[
+                  { value: '', label: tagCatalog.length ? 'Escolher tag…' : 'Crie uma tag primeiro' },
+                  ...tagCatalog.map((t) => ({ value: t, label: displayTag(t) })),
+                ]}
+              />
               <Button
                 type="button"
                 size="sm"
