@@ -227,9 +227,7 @@ export function Dashboard() {
       label: '% dos leads ativos',
       value: `${Number(activeLeadsPct).toFixed(1)}%`,
       hint:
-        data.eligibleLeads != null
-          ? `${data.activeLeads ?? 0} ativos de ${data.eligibleLeads} leads (exclui apenas saídas)`
-          : 'Exclui quem saiu',
+        `${data.activeLeads ?? 0} lead(s) ativos`,
       icon: Users,
     },
   ]
