@@ -35,6 +35,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { getGroupDetails, setGroupParticipantsStatus } from '../../services/api.js'
+import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { avatar, mockGroupSettings } from '../../utils/mockData.js'
 
@@ -328,6 +329,29 @@ export function GroupDetails() {
     setAuditLog(aud)
     setSnapshots(snp)
     setX1Automation(x1)
+
+    if (!resolveUseRealApi() || !id) return
+
+    const pending = initial
+      .filter((m) => {
+        const apiMember = base.find((b) => b.id === m.id)
+        return apiMember && apiMember.status !== m.status && (m.status === 'ativo' || m.status === 'inativo')
+      })
+      .map((m) => ({ id: m.id, status: m.status }))
+
+    if (!pending.length) return
+
+    const byStatus = { ativo: [], inativo: [] }
+    pending.forEach(({ id: memberId, status }) => byStatus[status].push(memberId))
+
+    void (async () => {
+      try {
+        if (byStatus.ativo.length) await setGroupParticipantsStatus(id, byStatus.ativo, 'ativo')
+        if (byStatus.inativo.length) await setGroupParticipantsStatus(id, byStatus.inativo, 'inativo')
+      } catch {
+        /* mantém UI local; usuário pode salvar de novo */
+      }
+    })()
   }, [payload, id])
 
   const tagCatalog = useMemo(() => {
@@ -509,7 +533,10 @@ export function GroupDetails() {
     if (!id) return
 
     try {
-      await setGroupParticipantsStatus(id, [memberId], nextStatus)
+      const res = await setGroupParticipantsStatus(id, [memberId], nextStatus)
+      if (!res.data?.updated) {
+        toast.error('Participante não encontrado no servidor. Sincronize o grupo e tente de novo.')
+      }
     } catch (e) {
       toast.error(e?.response?.data?.message || 'Falha ao salvar status no servidor.')
     }

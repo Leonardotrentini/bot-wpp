@@ -227,7 +227,9 @@ export function Dashboard() {
       label: '% dos leads ativos',
       value: `${Number(activeLeadsPct).toFixed(1)}%`,
       hint:
-        `${data.activeLeads ?? 0} lead(s) ativos`,
+        (data.inactiveLeads ?? 0) > 0
+          ? `${data.activeLeads ?? 0} ativo(s) · ${data.inactiveLeads} inativo(s) (admins não entram na conta)`
+          : `${data.activeLeads ?? 0} lead(s) ativos (admins não entram na conta)`,
       icon: Users,
     },
   ]

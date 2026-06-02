@@ -1280,7 +1280,8 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
         : mapEvolutionParticipant({ id: p.participantJid, admin: p.role === "admin" ? "admin" : p.role === "superadmin" ? "superadmin" : null })
       mapped.role =
         p.role === "superadmin" ? "superadmin" : p.role === "admin" ? "admin" : mapped.role || "membro"
-      mapped.status = p.status || mapped.status || "ativo"
+      mapped.status =
+        p.status === "inativo" ? "inativo" : p.status === "saiu" ? "saiu" : p.status === "ativo" ? "ativo" : "ativo"
 
       const hit = lookupContact(contactIndex, mapped)
       if (hit) mapped = enrichParticipantFromContact(mapped, hit)
@@ -1498,6 +1499,14 @@ app.post("/api/groups/:id/participants/status", authMiddleware, async (req, res)
         lastSyncedAt: now,
       },
     })
+
+    if (count === 0) {
+      return res.status(404).json({
+        error: "PARTICIPANT_NOT_FOUND",
+        message: "Participante não encontrado neste grupo.",
+        updated: 0,
+      })
+    }
 
     return res.json({ updated: count, status })
   } catch (err) {

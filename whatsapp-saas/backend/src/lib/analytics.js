@@ -38,6 +38,18 @@ function isGroupConnected(group) {
   return group.status === "ativo" || Boolean(group.monitoringEnabled)
 }
 
+function mergeParticipantStatus(current, incoming) {
+  const cur = current || "ativo"
+  const next = incoming || "ativo"
+  if (cur === "saiu" || next === "saiu") return "saiu"
+  if (cur === "inativo" || next === "inativo") return "inativo"
+  return "ativo"
+}
+
+function isLeadParticipant(p) {
+  return p.role !== "admin" && p.role !== "superadmin"
+}
+
 /** Novos leads, saídas e % ativos no período (participantes únicos por JID). */
 function computeLeadMetrics(groups, start, end) {
   const seenNew = new Set()
@@ -51,7 +63,7 @@ function computeLeadMetrics(groups, start, end) {
 
     for (const p of g.participants || []) {
       const jid = p.participantJid
-      if (!jid) continue
+      if (!jid || !isLeadParticipant(p)) continue
 
       if (isInRange(p.createdAt, effectiveStart, end)) seenNew.add(jid)
       if (isInRange(p.leftAt, start, end)) seenExit.add(jid)
@@ -59,28 +71,26 @@ function computeLeadMetrics(groups, start, end) {
 
       const cur = byJid.get(jid)
       if (!cur) {
-        byJid.set(jid, { status: p.status, leftAt: p.leftAt })
+        byJid.set(jid, { status: p.status || "ativo", leftAt: p.leftAt })
       } else {
-        if (p.status === "ativo") cur.status = "ativo"
-        else if (p.status === "saiu") cur.status = "saiu"
+        cur.status = mergeParticipantStatus(cur.status, p.status)
         if (p.leftAt) cur.leftAt = p.leftAt
-        if (p.status === "inativo") cur.status = "inativo"
       }
     }
   }
 
   let active = 0
+  let inactive = 0
   let excludedLeft = 0
   for (const [, p] of byJid) {
     if (p.status === "saiu" || p.leftAt) {
       excludedLeft++
       continue
     }
-    if (p.status === "ativo") active++
+    if (p.status === "inativo") inactive++
+    else if (p.status === "ativo") active++
   }
 
-  // MVP: % considera leads ativos versus todos que não saíram.
-  // Membros "inativos" entram no denominador para refletir a proporção real.
   const eligible = byJid.size - excludedLeft
   const activeLeadsPct = eligible > 0 ? Number(((active / eligible) * 100).toFixed(1)) : 0
 
@@ -89,6 +99,7 @@ function computeLeadMetrics(groups, start, end) {
     exits: seenExit.size,
     activeLeadsPct,
     activeLeads: active,
+    inactiveLeads: inactive,
     eligibleLeads: eligible,
     totalLeadsTracked: byJid.size,
   }
@@ -485,6 +496,7 @@ async function buildOverview(userId, { groupJids = null, period = "2d" } = {}) {
         select: {
           participantJid: true,
           status: true,
+          role: true,
           createdAt: true,
           leftAt: true,
           updatedAt: true,
@@ -538,6 +550,7 @@ async function buildOverview(userId, { groupJids = null, period = "2d" } = {}) {
     exits: leadMetrics.exits,
     activeLeadsPct: leadMetrics.activeLeadsPct,
     activeLeads: leadMetrics.activeLeads,
+    inactiveLeads: leadMetrics.inactiveLeads,
     eligibleLeads: leadMetrics.eligibleLeads,
     totalMessagesInPeriod: analytics.totalMessages,
     topMembers: (analytics.topMembers || []).slice(0, 8),
