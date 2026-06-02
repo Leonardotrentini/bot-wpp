@@ -242,6 +242,22 @@ async function fetchGroupParticipants(instanceName, groupJid) {
   )
 }
 
+/** Lista contatos da instância (pushName / número quando disponível). */
+async function findContacts(instanceName, where = {}) {
+  return firstSuccess([
+    () =>
+      requestEvolution(`/chat/findContacts/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: { where },
+      }),
+    () =>
+      requestEvolution(`/contact/findContacts/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: { where },
+      }),
+  ])
+}
+
 /**
  * Busca mensagens de um grupo (Evolution v2 `POST /chat/findMessages/{instance}`).
  * Ordena por timestamp desc; paginado para limitar o volume por chamada.
@@ -293,6 +309,7 @@ module.exports = {
   getConnectionState,
   fetchAllGroups,
   fetchGroupParticipants,
+  findContacts,
   fetchGroupMessages,
   sendText,
   sendMedia,

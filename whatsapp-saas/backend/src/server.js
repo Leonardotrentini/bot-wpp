@@ -24,6 +24,7 @@ const {
   getConnectionState,
   fetchAllGroups,
   fetchGroupParticipants,
+  findContacts,
   fetchGroupMessages,
   sendText,
   sendMedia,
@@ -273,6 +274,13 @@ function mergeGlobalMember(map, participant, groupApi) {
     existing.groupIds.push(groupApi.id)
     existing.groups.push(groupApi.name)
   }
+  const betterName = participant.name || existing.name
+  if (betterName && betterName !== existing.name && !String(betterName).includes("número oculto")) {
+    existing.name = betterName
+  }
+  if (participant.phone && participant.phone !== "—" && existing.phone === "—") {
+    existing.phone = participant.phone
+  }
   if (new Date(lastAt).getTime() > new Date(existing.lastActivity).getTime()) {
     existing.lastActivity = lastAt
   }
@@ -283,12 +291,37 @@ function mergeGlobalMember(map, participant, groupApi) {
 
 async function syncParticipantsForGroupRow(conn, groupRow) {
   const participantsPayload = await fetchGroupParticipants(conn.instanceName, groupRow.groupJid)
-  const participants = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
-  for (const participant of participants) {
+  let mapped = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
+
+  let contactIndex = null
+  try {
+    const contactsPayload = await findContacts(conn.instanceName, {})
+    contactIndex = buildContactIndex(normalizeContactList(contactsPayload))
+  } catch (err) {
+    console.warn("[members] findContacts:", err?.message || err)
+  }
+
+  if (contactIndex?.size) {
+    mapped = mapped.map((p) => {
+      if (!p.isLid && p.phoneDigits) return p
+      const hit = contactIndex.get(p.participantJid)
+      return hit ? enrichParticipantFromContact(p, hit) : p
+    })
+  }
+
+  for (const participant of mapped) {
+    const data = {
+      name: participant.name,
+      phone: participant.phone,
+      role: participant.role,
+      status: participant.status,
+      raw: serializeJson(participant.raw),
+      lastSyncedAt: new Date(),
+    }
     await prisma.whatsAppGroupParticipant.upsert({
       where: { groupId_participantJid: { groupId: groupRow.id, participantJid: participant.participantJid } },
-      create: { groupId: groupRow.id, ...participant, lastSyncedAt: new Date() },
-      update: { ...participant, lastSyncedAt: new Date() },
+      create: { groupId: groupRow.id, participantJid: participant.participantJid, ...data },
+      update: data,
     })
   }
   await prisma.whatsAppGroup.update({
@@ -333,21 +366,12 @@ function normalizeEvolutionParticipants(payload, group) {
   return []
 }
 
-function mapEvolutionParticipant(participant) {
-  const id = participant?.id || participant?.jid || participant?.number || participant
-  const phone = String(id || "").split("@")[0]
-  const role = participant?.admin ? "admin" : "membro"
-  const name = participant?.name || participant?.pushName || participant?.notify || phone || "Participante"
-
-  return {
-    participantJid: String(id || phone),
-    name,
-    phone: phone ? `+${phone}` : "—",
-    role,
-    status: "ativo",
-    raw: serializeJson(participant),
-  }
-}
+const {
+  mapEvolutionParticipant,
+  enrichParticipantFromContact,
+  normalizeContactList,
+  buildContactIndex,
+} = require("./lib/participantIdentity.js")
 
 function normalizeEvolutionMessages(payload) {
   if (Array.isArray(payload)) return payload
