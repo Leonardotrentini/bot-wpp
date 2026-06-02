@@ -21,22 +21,59 @@ function extractMessageText(message) {
   )
 }
 
+function unwrapMessageList(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  if (Array.isArray(value?.records)) return value.records
+  if (Array.isArray(value?.messages)) return value.messages
+  return []
+}
+
 /** Aceita lista, paginação Evolution ou um único evento MESSAGES_UPSERT / MESSAGES_SET. */
 function normalizeEvolutionMessages(payload) {
   if (!payload || typeof payload !== "object") return []
   if (Array.isArray(payload)) return payload
+
+  const nestedLists = [
+    payload?.messages,
+    payload?.data?.messages,
+    payload?.response?.messages,
+    payload?.result?.messages,
+  ]
+  for (const candidate of nestedLists) {
+    const list = unwrapMessageList(candidate)
+    if (list.length) return list
+  }
+
   if (Array.isArray(payload?.messages?.records)) return payload.messages.records
-  if (Array.isArray(payload?.messages)) return payload.messages
   if (Array.isArray(payload?.records)) return payload.records
   if (Array.isArray(payload?.data?.messages?.records)) return payload.data.messages.records
   if (Array.isArray(payload?.data?.messages)) return payload.data.messages
   if (Array.isArray(payload?.data)) return payload.data
+  if (Array.isArray(payload?.response)) return payload.response
+  if (Array.isArray(payload?.result)) return payload.result
 
   const single = payload?.data?.key ? payload.data : payload
   if (single?.key && (single?.message || single?.messageType || single?.messageTimestamp)) {
     return [single]
   }
   return []
+}
+
+function normalizeJid(jid) {
+  return String(jid || "")
+    .trim()
+    .toLowerCase()
+}
+
+function jidsMatch(a, b) {
+  const left = normalizeJid(a)
+  const right = normalizeJid(b)
+  if (!left || !right) return false
+  if (left === right) return true
+  const leftBase = left.split("@")[0]
+  const rightBase = right.split("@")[0]
+  return Boolean(leftBase && leftBase === rightBase)
 }
 
 /** Extrai registros de webhook (Evolution envia `messages.upsert` com formatos variados). */
@@ -69,7 +106,7 @@ function filterMessagesForGroup(records, groupJid) {
   if (!target) return records || []
   return (records || []).filter((record) => {
     const remote = messageRemoteJid(record)
-    return remote && String(remote) === target
+    return remote && jidsMatch(remote, target)
   })
 }
 
@@ -122,4 +159,6 @@ module.exports = {
   extractMessageText,
   messageRemoteJid,
   toIsoFromEvolutionTimestamp,
+  jidsMatch,
+  normalizeJid,
 }

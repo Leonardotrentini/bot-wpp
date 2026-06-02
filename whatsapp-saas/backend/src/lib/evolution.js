@@ -273,66 +273,127 @@ async function findContacts(instanceName, where = {}) {
  * Busca mensagens de um grupo (Evolution v2 `POST /chat/findMessages/{instance}`).
  * Ordena por timestamp desc; paginado para limitar o volume por chamada.
  */
-const { normalizeEvolutionMessages, filterMessagesForGroup } = require("./evolutionMessages")
+const { normalizeEvolutionMessages, filterMessagesForGroup, mapEvolutionMessage } = require("./evolutionMessages")
+
+function findMessagesEndpoints(instanceName, body) {
+  return [
+    () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+  ]
+}
+
+async function requestFindMessages(instanceName, body) {
+  return firstSuccess(findMessagesEndpoints(instanceName, body))
+}
+
+/** Varre o banco da Evolution (filtro por JID costuma falhar) e filtra pelo grupo no nosso servidor. */
+async function scanEvolutionMessagesForGroup(instanceName, groupJid, { cutoffMs, pageSize = 200, maxPages = 8 } = {}) {
+  const collected = []
+  const seenIds = new Set()
+
+  for (let scanPage = 0; scanPage < maxPages; scanPage += 1) {
+    const skip = scanPage * pageSize
+    const bodies = [
+      { take: pageSize, skip, orderBy: { messageTimestamp: "desc" } },
+      { limit: pageSize, page: scanPage + 1 },
+      { where: {}, take: pageSize, skip },
+    ]
+
+    let payload = null
+    let batch = []
+    for (const body of bodies) {
+      try {
+        payload = await requestFindMessages(instanceName, body)
+        batch = normalizeEvolutionMessages(payload)
+        if (batch.length) break
+      } catch {
+        /* próximo body */
+      }
+    }
+
+    if (!batch.length) {
+      if (scanPage === 0 && payload && typeof payload === "object") {
+        console.warn(
+          `[evolution] findMessages vazio para ${groupJid}. Chaves: ${Object.keys(payload).join(", ") || "(vazio)"}`,
+        )
+      }
+      break
+    }
+
+    let batchBelowCutoff = 0
+    for (const record of batch) {
+      const mapped = mapEvolutionMessage(record)
+      if (cutoffMs && mapped.timestamp.getTime() < cutoffMs) batchBelowCutoff += 1
+    }
+
+    const groupRecords = filterMessagesForGroup(batch, groupJid)
+    for (const record of groupRecords) {
+      const mapped = mapEvolutionMessage(record)
+      if (cutoffMs && mapped.timestamp.getTime() < cutoffMs) continue
+      const key = mapped.messageId ? String(mapped.messageId) : null
+      if (key && seenIds.has(key)) continue
+      if (key) seenIds.add(key)
+      collected.push(record)
+    }
+
+    if (batchBelowCutoff === batch.length) break
+    if (batch.length < pageSize) break
+  }
+
+  return collected
+}
 
 async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50, cutoffMs } = {}) {
+  const skip = (page - 1) * pageSize
   const cutoffSec =
     cutoffMs && Number.isFinite(cutoffMs) ? Math.floor(Number(cutoffMs) / 1000) : null
 
   const bodies = [
-    { where: { key: { remoteJid: groupJid } }, page, offset: pageSize },
+    { where: { key: { remoteJid: groupJid } }, take: pageSize, skip, orderBy: { messageTimestamp: "desc" } },
+    { where: { key: { remoteJid: groupJid } }, skip, take: pageSize },
     { where: { key: { remoteJid: groupJid } }, page, limit: pageSize },
-    { where: { key: { remoteJid: groupJid } }, skip: (page - 1) * pageSize, take: pageSize },
+    { where: { key: { remoteJid: groupJid } }, page, offset: pageSize },
     ...(cutoffSec
       ? [
           {
             where: { key: { remoteJid: groupJid }, messageTimestamp: { gte: cutoffSec } },
-            page,
-            limit: pageSize,
+            take: pageSize,
+            skip,
+            orderBy: { messageTimestamp: "desc" },
           },
         ]
       : []),
   ]
 
-  const endpoints = (body) => [
-    () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-    () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-  ]
-
   let lastPayload = null
   for (const body of bodies) {
     try {
-      const payload = await firstSuccess(endpoints(body))
+      const payload = await requestFindMessages(instanceName, body)
       lastPayload = payload
       const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid)
-      if (records.length) return { payload, records }
+      if (records.length) return { payload, records, source: "filtered" }
     } catch {
-      /* tenta próximo formato de body */
+      /* tenta próximo formato */
     }
   }
 
   if (lastPayload) {
     const records = filterMessagesForGroup(normalizeEvolutionMessages(lastPayload), groupJid)
-    if (records.length) return { payload: lastPayload, records }
+    if (records.length) return { payload: lastPayload, records, source: "filtered-partial" }
   }
 
-  // Evolution costuma ignorar remoteJid no where — busca lote maior e filtra no servidor.
-  const fallbackTake = Math.min(500, pageSize * 4)
-  const fallbackBodies = [
-    { page, limit: fallbackTake },
-    { skip: (page - 1) * fallbackTake, take: fallbackTake },
-  ]
-  for (const body of fallbackBodies) {
-    try {
-      const payload = await firstSuccess(endpoints(body))
-      const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid)
-      if (records.length) return { payload, records }
-    } catch {
-      /* próximo */
+  if (page === 1) {
+    const scanned = await scanEvolutionMessagesForGroup(instanceName, groupJid, {
+      cutoffMs,
+      pageSize: Math.min(250, pageSize * 5),
+      maxPages: Number(process.env.MESSAGE_SYNC_SCAN_MAX_PAGES || 8),
+    })
+    if (scanned.length) {
+      return { payload: lastPayload || {}, records: scanned, source: "scan" }
     }
   }
 
-  return { payload: lastPayload || {}, records: [] }
+  return { payload: lastPayload || {}, records: [], source: "none" }
 }
 
 async function sendText(instanceName, number, text) {

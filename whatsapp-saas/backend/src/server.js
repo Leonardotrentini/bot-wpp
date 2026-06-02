@@ -48,6 +48,7 @@ const {
   collectWebhookMessageRecords,
   filterMessagesForGroup,
   mapEvolutionMessage,
+  jidsMatch,
 } = require("./lib/evolutionMessages")
 const adminRoutes = require("./routes/admin")
 
@@ -737,15 +738,17 @@ async function importGroupMessages(conn, group, cutoffMs) {
 
   let totalSaved = 0
   let inboundSaved = 0
+  let evolutionRecords = 0
   let latestMessage = null
   let latestAt = null
 
   for (let page = 1; page <= MESSAGE_SYNC_MAX_PAGES; page += 1) {
-    const { records } = await fetchGroupMessages(conn.instanceName, group.groupJid, {
+    const { records, source } = await fetchGroupMessages(conn.instanceName, group.groupJid, {
       page,
       pageSize: MESSAGE_SYNC_PAGE_SIZE,
       cutoffMs,
     })
+    evolutionRecords += records.length
     if (!records.length) break
 
     const { saved, allBelowCutoff, lastMessage, lastMessageAt, inbound } = await storeGroupMessages(group, records, {
@@ -767,7 +770,7 @@ async function importGroupMessages(conn, group, cutoffMs) {
       },
     })
 
-    if (allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
+    if (source === "scan" || allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
     if (page < MESSAGE_SYNC_MAX_PAGES) await wait(MESSAGE_SYNC_PAGE_DELAY_MS)
   }
 
@@ -784,13 +787,15 @@ async function importGroupMessages(conn, group, cutoffMs) {
     },
   })
 
-  if (totalSaved > 0 && inboundSaved === 0) {
+  if (evolutionRecords === 0) {
+    console.warn(`[msg-import] grupo ${group.groupJid}: Evolution retornou 0 mensagens no banco dela.`)
+  } else if (totalSaved > 0 && inboundSaved === 0) {
     console.warn(
-      `[msg-import] grupo ${group.groupJid}: ${totalSaved} mensagens salvas, nenhuma de outros membros (só suas/envios).`,
+      `[msg-import] grupo ${group.groupJid}: ${totalSaved} salvas, 0 de membros (${evolutionRecords} na Evolution).`,
     )
   }
 
-  return totalSaved
+  return { totalSaved, inboundSaved, evolutionRecords }
 }
 
 async function runMessageImport(userId, { onlyGroupJids } = {}) {
@@ -832,9 +837,16 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
       msgImportRetryAfter: null,
     })
 
+    let importSavedTotal = 0
+    let importInboundTotal = 0
+    let importEvolutionTotal = 0
+
     for (const [index, group] of monitoredGroups.entries()) {
       try {
-        await importGroupMessages(conn, group, cutoffMs)
+        const result = await importGroupMessages(conn, group, cutoffMs)
+        importSavedTotal += result.totalSaved
+        importInboundTotal += result.inboundSaved
+        importEvolutionTotal += result.evolutionRecords
       } catch (err) {
         if (isRateLimitError(err)) {
           await prisma.whatsAppGroup.update({
@@ -868,10 +880,27 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
 
     await pruneUserMessagesBeyondRetention(userId).catch(() => {})
 
+    let finalMessage
+    if (importEvolutionTotal === 0) {
+      finalMessage =
+        `Importação concluída, mas a Evolution não tinha mensagens salvas (0 no banco dela). ` +
+        `Mensagens novas entram pelo webhook com o WhatsApp conectado. Confira EVOLUTION_WEBHOOK_URL no Railway.`
+    } else if (importSavedTotal === 0) {
+      finalMessage = `Evolution retornou ${importEvolutionTotal} mensagem(ns), mas nenhuma ficou nos últimos ${MESSAGE_BACKFILL_DAYS} dias.`
+    } else if (importInboundTotal === 0) {
+      finalMessage =
+        `${importSavedTotal} mensagem(ns) importadas, porém nenhuma de outros membros (só suas). ` +
+        `A Evolution pode não ter histórico de terceiros nesta instância.`
+    } else {
+      finalMessage =
+        `${importSavedTotal} mensagens importadas (${importInboundTotal} de membros). ` +
+        `Novas mensagens chegam por webhook.`
+    }
+
     await updateConnectionSync(userId, {
       msgImportStatus: "READY",
       msgImportDone: total,
-      msgImportMessage: `${total} grupos importados (últimos ${MESSAGE_BACKFILL_DAYS} dias). Novas mensagens chegam por webhook.`,
+      msgImportMessage: finalMessage,
       msgImportError: null,
       msgImportRetryAfter: null,
     })
@@ -2269,13 +2298,17 @@ function getWebhookEvent(body) {
 
 function getWebhookInstanceName(body) {
   const candidate =
+    body?.instance ||
     body?.data?.instanceName ||
     body?.data?.instance?.instanceName ||
     body?.data?.instance?.name ||
     body?.instanceName ||
-    body?.instance ||
     null
-  return typeof candidate === "string" ? candidate : null
+  if (typeof candidate === "string") return candidate
+  if (candidate && typeof candidate === "object") {
+    return candidate.instanceName || candidate.name || null
+  }
+  return null
 }
 
 function getWebhookPayload(body) {
@@ -2361,6 +2394,12 @@ async function storeIncomingMessages(instanceName, body) {
       group = await prisma.whatsAppGroup.findUnique({
         where: { userId_groupJid: { userId: conn.userId, groupJid } },
       })
+      if (!group) {
+        const monitored = await prisma.whatsAppGroup.findMany({
+          where: { userId: conn.userId, monitoringEnabled: true },
+        })
+        group = monitored.find((g) => jidsMatch(g.groupJid, groupJid)) || null
+      }
       if (!group || !group.monitoringEnabled) {
         touchedGroups.set(groupJid, null)
         continue

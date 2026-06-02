@@ -260,14 +260,24 @@ export function Groups() {
         </Card>
       )}
 
-      {imp && imp.total > 0 && (
-        <Card className="border-emerald-700/40 bg-emerald-950/20">
+      {imp?.message && (
+        <Card
+          className={
+            importActive
+              ? 'border-emerald-700/40 bg-emerald-950/20'
+              : /evolution não|nenhuma de outros|0 no banco/i.test(imp.message)
+                ? 'border-amber-600/50 bg-amber-950/25'
+                : 'border-emerald-700/40 bg-emerald-950/15'
+          }
+        >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-stone-100">
-                Importando mensagens — {imp.done}/{imp.total} grupos {importActive ? 'carregando…' : ''}
+                {importActive
+                  ? `Importando mensagens — ${imp.done}/${imp.total} grupos`
+                  : 'Resultado da importação'}
               </p>
-              <p className="mt-1 text-xs text-stone-400">{imp.message || `Baixando os últimos ${imp.backfillDays || 2} dias, um grupo por vez.`}</p>
+              <p className="mt-1 text-xs text-stone-300">{imp.message}</p>
               {imp.error && <p className="mt-1 break-words text-xs text-red-400">Detalhe do erro: {imp.error}</p>}
               {imp.retryAfter && imp.status === 'RATE_LIMITED' && (
                 <p className="mt-1 text-xs text-amber-300">
@@ -275,12 +285,14 @@ export function Groups() {
                 </p>
               )}
             </div>
-            <div className="min-w-40">
-              <div className="h-2 overflow-hidden rounded-full bg-brand-800">
-                <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${importProgress}%` }} />
+            {importActive && imp.total > 0 && (
+              <div className="min-w-40">
+                <div className="h-2 overflow-hidden rounded-full bg-brand-800">
+                  <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${importProgress}%` }} />
+                </div>
+                <p className="mt-1 text-right text-xs text-stone-500">{importProgress}%</p>
               </div>
-              <p className="mt-1 text-right text-xs text-stone-500">{importProgress}%</p>
-            </div>
+            )}
           </div>
         </Card>
       )}
