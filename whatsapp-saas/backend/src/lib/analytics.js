@@ -40,10 +40,20 @@ async function loadUnifiedGroupMessages(userId, groups, start, end) {
       : [],
   ])
 
+  const importedKeys = new Set()
+  for (const m of imported) {
+    if (!m.fromMe) continue
+    const day = dayKeyInSp(m.timestamp)
+    importedKeys.add(`${m.groupId}:${String(m.body || "").trim().toLowerCase()}:${day}`)
+  }
+
   const merged = [...imported]
   for (const o of outbound) {
     const groupId = jidToDbId.get(o.groupJid)
     if (!groupId) continue
+    const day = dayKeyInSp(o.sentAt)
+    const key = `${groupId}:${String(o.body || "").trim().toLowerCase()}:${day}`
+    if (importedKeys.has(key)) continue
     merged.push({
       id: `outbound-${o.id}`,
       groupId,
@@ -56,7 +66,7 @@ async function loadUnifiedGroupMessages(userId, groups, start, end) {
   }
 
   merged.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-  return { messages: merged, importedCount: imported.length, outboundCount: outbound.length, outboundRows: outbound }
+  return { messages: merged, importedCount: imported.length, outboundCount: outbound.length }
 }
 
 function periodToRange(period, startDate, endDate) {
@@ -102,7 +112,17 @@ function participantEngagementPct(participants) {
   return (active / participants.length) * 100
 }
 
-function countRepliesAfter(messages, windowMs = 30 * 60 * 1000) {
+function isEngagementAfter(base, next) {
+  if (base.groupId !== next.groupId) return false
+  if (!base.fromMe && !next.fromMe) {
+    return Boolean(base.senderJid && next.senderJid && base.senderJid !== next.senderJid)
+  }
+  if (base.fromMe && !next.fromMe) return true
+  if (!base.fromMe && next.fromMe) return true
+  return false
+}
+
+function scoreMessagesEngagement(messages, windowMs = 60 * 60 * 1000) {
   const byGroup = new Map()
   for (const m of messages) {
     if (!byGroup.has(m.groupId)) byGroup.set(m.groupId, [])
@@ -113,18 +133,69 @@ function countRepliesAfter(messages, windowMs = 30 * 60 * 1000) {
     list.sort((a, b) => a.timestamp - b.timestamp)
     for (let i = 0; i < list.length; i++) {
       const base = list[i]
-      if (base.fromMe) continue
+      const body = String(base.body || "").trim()
       let replies = 0
       for (let j = i + 1; j < list.length; j++) {
         if (list[j].timestamp - base.timestamp > windowMs) break
-        if (!list[j].fromMe && list[j].senderJid && list[j].senderJid !== base.senderJid) replies++
+        if (isEngagementAfter(base, list[j])) replies++
       }
-      if (replies > 0 || (base.body && base.body.length > 10)) {
-        scores.push({ message: base, replies })
+      const score = replies * 100 + Math.min(body.length, 80)
+      if (replies > 0 || body.length >= 4) {
+        scores.push({ message: base, replies, score })
       }
     }
   }
-  return scores.sort((a, b) => b.replies - a.replies)
+  return scores.sort((a, b) => b.score - a.score || b.replies - a.replies)
+}
+
+function truncateBody(text, max = 72) {
+  const t = String(text || "").trim() || "[mídia]"
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
+  const normalized = messages.map((m) => ({
+    ...m,
+    timestamp: new Date(m.timestamp).getTime(),
+  }))
+
+  const scored = scoreMessagesEngagement(normalized)
+  const used = new Set()
+  const picked = []
+
+  for (const item of scored) {
+    if (picked.length >= limit) break
+    if (used.has(item.message.id)) continue
+    used.add(item.message.id)
+    picked.push(item)
+  }
+
+  if (picked.length < limit) {
+    const fillers = normalized
+      .filter((m) => !used.has(m.id) && String(m.body || "").trim().length >= 2)
+      .sort((a, b) => b.timestamp - a.timestamp)
+    for (const m of fillers) {
+      if (picked.length >= limit) break
+      used.add(m.id)
+      picked.push({ message: m, replies: 0, score: 0 })
+    }
+  }
+
+  return picked.map((item, idx) => {
+    const m = item.message
+    const isPlatformOnly = String(m.id).startsWith("outbound-")
+    return {
+      id: m.id || `top-${idx}`,
+      title: truncateBody(m.body),
+      group: groupIdToName.get(m.groupId) || "Grupo",
+      senderName: m.senderName || (m.fromMe ? "Você" : "Membro"),
+      replies: item.replies,
+      reactions: 0,
+      engagementRate: item.replies > 0 ? Math.min(99, item.replies * 12 + 5) : 0,
+      isOutbound: Boolean(m.fromMe && isPlatformOnly),
+      at: new Date(m.timestamp).toISOString(),
+    }
+  })
 }
 
 async function buildAnalytics(userId, period = "7d", startDate, endDate) {
@@ -142,7 +213,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
     return emptyAnalytics(period)
   }
 
-  const { messages, importedCount, outboundCount, outboundRows } = await loadUnifiedGroupMessages(
+  const { messages, importedCount, outboundCount } = await loadUnifiedGroupMessages(
     userId,
     groups,
     start,
@@ -235,35 +306,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
     }))
 
   const groupIdToName = new Map(groups.map((g) => [g.id, g.name]))
-  const replyScores = countRepliesAfter(
-    messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp).getTime() })),
-  )
-  const topFromReplies = replyScores.slice(0, 6).map((item, idx) => {
-    const body = item.message.body || "[mídia]"
-    const replies = item.replies
-    const rate = totalMessages > 0 ? Number(((replies / Math.max(inbound.length, 1)) * 100 + replies * 2).toFixed(1)) : 0
-    return {
-      id: item.message.id || `msg-${idx}`,
-      title: body.length > 72 ? `${body.slice(0, 72)}…` : body,
-      group: groupIdToName.get(item.message.groupId) || "Grupo",
-      engagementRate: Math.min(99, Math.max(rate, replies > 0 ? 8 : 2)),
-      reactions: 0,
-      replies,
-    }
-  })
-  const topFromOutbound = [...outboundRows]
-    .sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt))
-    .slice(0, 6)
-    .map((o) => ({
-      id: `out-${o.id}`,
-      title: (o.body || "Mensagem enviada").length > 72 ? `${(o.body || "Mensagem enviada").slice(0, 72)}…` : o.body || "Mensagem enviada",
-      group: o.groupName || "Grupo",
-      engagementRate: 0,
-      reactions: 0,
-      replies: 0,
-      isOutbound: true,
-    }))
-  const topMessages = [...topFromReplies, ...topFromOutbound].slice(0, 8)
+  const topMessages = buildTopEngagedMessages(messages, groupIdToName, 12)
 
   return {
     period,

@@ -325,13 +325,21 @@ export function Analytics() {
                   <p className="text-sm text-stone-500">Envie mensagens ou sincronize o histórico do grupo para ver destaques.</p>
                 ) : (
                   topEngagedMessages.map((msg) => (
-                    <div key={msg.id} className="rounded-lg border border-brand-800 p-3">
-                      <p className="text-sm text-stone-100">{msg.title}</p>
-                      <p className="text-xs text-stone-500 mt-1">{msg.group}</p>
-                      <p className="text-xs text-accent-400 mt-1">
-                        {msg.isOutbound
-                          ? 'Enviada pela plataforma'
-                          : `${msg.replies} resposta(s) no período${msg.reactions > 0 ? ` • ${msg.reactions} reações` : ''}`}
+                    <div key={msg.id} className="rounded-lg border border-brand-800/90 bg-brand-950/30 px-3 py-2.5">
+                      <p className="text-sm text-stone-100 leading-snug">{msg.title}</p>
+                      <p className="text-xs text-stone-500 mt-1">
+                        {msg.group}
+                        {msg.senderName ? ` · ${msg.senderName}` : ''}
+                        {msg.at
+                          ? ` · ${new Date(msg.at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`
+                          : ''}
+                      </p>
+                      <p className="text-xs text-accent-400/90 mt-1">
+                        {msg.replies > 0
+                          ? `${msg.replies} resposta(s) após esta mensagem`
+                          : msg.isOutbound
+                            ? 'Enviada pela plataforma'
+                            : 'Mensagem do grupo'}
                       </p>
                     </div>
                   ))
