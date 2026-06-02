@@ -552,14 +552,22 @@ function getGroupUpdateData(group, extra = {}) {
 
 async function upsertDiscoveredGroup(userId, group, status = "pendente") {
   const now = new Date()
+  const existing = await prisma.whatsAppGroup.findUnique({
+    where: { userId_groupJid: { userId, groupJid: group.groupJid } },
+    select: { status: true },
+  })
+  const preserveStatus = existing?.status === "ativo" || existing?.status === "inativo"
+  const statusPatch =
+    status === "ativo" ? { status: "ativo" } : preserveStatus ? {} : !existing ? { status: "pendente" } : {}
+
   return prisma.whatsAppGroup.upsert({
     where: { userId_groupJid: { userId, groupJid: group.groupJid } },
     create: {
-      ...getGroupCreateData(userId, group, status),
+      ...getGroupCreateData(userId, group, status === "ativo" ? "ativo" : "pendente"),
       lastSyncedAt: now,
     },
     update: {
-      ...getGroupUpdateData(group, status === "ativo" ? { status } : {}),
+      ...getGroupUpdateData(group, statusPatch),
       lastSyncedAt: now,
     },
   })

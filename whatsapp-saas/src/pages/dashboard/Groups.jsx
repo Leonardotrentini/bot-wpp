@@ -144,9 +144,19 @@ export function Groups() {
     })
   }, [])
 
+  const groupCounts = useMemo(
+    () => ({
+      ativos: groups.filter((g) => g.status === 'ativo').length,
+      pendentes: groups.filter((g) => g.status === 'pendente').length,
+      inativos: groups.filter((g) => g.status === 'inativo').length,
+    }),
+    [groups],
+  )
+
   const filtered = useMemo(() => {
     return groups.filter((g) => {
       if (filter === 'ativos' && g.status !== 'ativo') return false
+      if (filter === 'pendentes' && g.status !== 'pendente') return false
       if (filter === 'inativos' && g.status !== 'inativo') return false
       if (q && !g.name.toLowerCase().includes(q.toLowerCase())) return false
       return true
@@ -239,8 +249,9 @@ export function Groups() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2">
           {[
-            { id: 'ativos', label: 'Ativos' },
-            { id: 'inativos', label: 'Inativos' },
+            { id: 'ativos', label: `Ativos (${groupCounts.ativos})` },
+            { id: 'pendentes', label: `Pendentes (${groupCounts.pendentes})` },
+            { id: 'inativos', label: `Inativos (${groupCounts.inativos})` },
           ].map((f) => (
             <button
               key={f.id}
@@ -287,15 +298,26 @@ export function Groups() {
         <Card>
           <div className="py-10 text-center">
             <p className="font-medium text-stone-200">
-              {filter === 'ativos' && groups.some((g) => g.status !== 'ativo')
+              {filter === 'ativos' && groupCounts.pendentes > 0
                 ? 'Nenhum grupo ativo no momento.'
-                : 'Nenhum grupo encontrado ainda.'}
+                : filter === 'pendentes'
+                  ? 'Nenhum grupo pendente.'
+                  : filter === 'inativos'
+                    ? 'Nenhum grupo inativo.'
+                    : 'Nenhum grupo encontrado ainda.'}
             </p>
             <p className="mt-2 text-sm text-stone-400">
-              {filter === 'ativos' && groups.some((g) => g.status !== 'ativo') ? (
+              {filter === 'ativos' && groupCounts.pendentes > 0 ? (
                 <>
-                  Você tem grupos inativos na aba <strong>Inativos</strong>. Selecione um grupo lá e use{' '}
-                  <strong>Marcar ativo</strong>, ou procure novos grupos.
+                  Grupos encontrados ficam em <strong>Pendentes</strong> até você conectar. Abra essa aba, selecione e use{' '}
+                  <strong>Marcar ativo</strong> ou <strong>Conectar e importar</strong>.
+                </>
+              ) : filter === 'pendentes' ? (
+                <>Clique em <strong>Procurar grupos</strong> para mapear sua conta do WhatsApp.</>
+              ) : filter === 'inativos' ? (
+                <>
+                  Use <strong>Marcar inativo</strong> em grupos que não quer mais usar. Grupos só mapeados aparecem em{' '}
+                  <strong>Pendentes</strong>.
                 </>
               ) : (
                 <>
