@@ -1286,6 +1286,8 @@ function getAutomationPayload(a) {
     templateId: a.templateId,
     body: a.body,
     mediaType: a.mediaType,
+    mediaBase64: a.mediaBase64,
+    mediaMime: a.mediaMime,
     mediaName: a.mediaName,
     frequency: a.frequency,
     scheduledAt: a.scheduledAt?.toISOString() || null,
@@ -1608,7 +1610,15 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
 
-    const content = await resolveContentFromBody(req.user.sub, parsed.data)
+    const bodyForContent = { ...parsed.data }
+    const hasNewMedia = bodyForContent.mediaType === "image" || bodyForContent.mediaType === "video"
+    if (!bodyForContent.templateId && hasNewMedia && !bodyForContent.mediaBase64 && existing.mediaBase64) {
+      bodyForContent.mediaBase64 = existing.mediaBase64
+      bodyForContent.mediaMime = existing.mediaMime
+      bodyForContent.mediaName = existing.mediaName || bodyForContent.mediaName
+    }
+
+    const content = await resolveContentFromBody(req.user.sub, bodyForContent)
     const invalid = validateContent(content)
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
 

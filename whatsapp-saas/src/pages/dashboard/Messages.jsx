@@ -73,12 +73,20 @@ function emptyTemplateForm() {
   return { id: null, name: '', body: '', mediaType: 'none', mediaBase64: null, mediaMime: null, mediaName: null }
 }
 
+const emptyInlineMessage = () => ({
+  body: '',
+  mediaType: 'none',
+  mediaBase64: null,
+  mediaMime: null,
+  mediaName: null,
+})
+
 function emptyAutomationForm() {
   return {
     name: '',
     source: 'template',
     templateId: '',
-    body: '',
+    ...emptyInlineMessage(),
     groupIds: [],
     frequency: 'now',
     scheduledAt: '',
@@ -89,7 +97,19 @@ function emptyAutomationForm() {
 }
 
 function emptyCadStep() {
-  return { name: '', source: 'template', templateId: '', body: '', groupIds: [], frequency: 'daily', scheduledAt: '', timeOfDay: '09:00', weekday: 1, status: 'ativa' }
+  return { name: '', source: 'template', templateId: '', ...emptyInlineMessage(), groupIds: [], frequency: 'daily', scheduledAt: '', timeOfDay: '09:00', weekday: 1, status: 'ativa' }
+}
+
+function inlineHasContent(f) {
+  return Boolean(f.body?.trim()) || f.mediaType === 'image' || f.mediaType === 'video'
+}
+
+function appendInlineMedia(payload, f) {
+  payload.body = f.body || ''
+  payload.mediaType = f.mediaType || 'none'
+  payload.mediaBase64 = f.mediaBase64
+  payload.mediaMime = f.mediaMime
+  payload.mediaName = f.mediaName
 }
 
 function fmtDate(iso) {
@@ -140,7 +160,40 @@ function PreviewBubble({ content }) {
       {content.body?.trim() ? (
         <p className="whitespace-pre-wrap text-sm text-stone-100">{content.body}</p>
       ) : (
-        <p className="text-xs italic text-stone-400">(sem legenda)</p>
+        hasMedia && <p className="text-xs italic text-stone-400">(sem legenda)</p>
+      )}
+    </div>
+  )
+}
+
+function MediaAttachmentBlock({ mediaType, mediaBase64, mediaName, onPick, onClear }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-stone-200">Mídia (imagem até 5MB ou vídeo até 16MB)</p>
+      {mediaType === 'none' ? (
+        <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-700 px-4 py-4 text-sm text-stone-400 hover:bg-white/5">
+          Clique para anexar imagem ou vídeo
+          <input type="file" accept="image/*,video/*" className="hidden" onChange={onPick} />
+        </label>
+      ) : (
+        <div className="rounded-lg border border-brand-800 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="inline-flex items-center gap-2 truncate text-xs text-stone-300">
+              {mediaType === 'image' ? <ImageIcon className="h-4 w-4" /> : <Film className="h-4 w-4" />}
+              {mediaName || mediaType}
+            </p>
+            <button type="button" onClick={onClear} className="text-stone-500 hover:text-red-300" aria-label="Remover mídia">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="mt-2">
+            {mediaType === 'image' ? (
+              <img src={mediaBase64} alt="" className="h-28 rounded border border-brand-700 object-cover" />
+            ) : (
+              <video src={mediaBase64} controls className="h-28 rounded border border-brand-700" />
+            )}
+          </div>
+        </div>
       )}
     </div>
   )
@@ -282,9 +335,7 @@ export function Messages({ defaultTab = 'criar' }) {
     setTplModal(true)
   }
 
-  async function onPickMedia(ev) {
-    const file = ev.target.files?.[0]
-    ev.target.value = ''
+  async function attachMediaFromFile(file, apply) {
     if (!file) return
     const kind = fileKind(file)
     if (kind === 'file') {
@@ -297,11 +348,37 @@ export function Messages({ defaultTab = 'criar' }) {
       return
     }
     const dataUrl = await readFileAsDataUrl(file)
-    setTplForm((f) => ({ ...f, mediaType: kind, mediaBase64: dataUrl, mediaMime: file.type, mediaName: file.name }))
+    apply({ mediaType: kind, mediaBase64: dataUrl, mediaMime: file.type, mediaName: file.name })
+  }
+
+  async function onPickMedia(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    await attachMediaFromFile(file, (patch) => setTplForm((f) => ({ ...f, ...patch })))
+  }
+
+  async function onPickAutoMedia(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    await attachMediaFromFile(file, (patch) => setAutoForm((f) => ({ ...f, ...patch })))
+  }
+
+  async function onPickCadMedia(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    await attachMediaFromFile(file, (patch) => setCadStep((f) => ({ ...f, ...patch })))
   }
 
   function clearMedia() {
-    setTplForm((f) => ({ ...f, mediaType: 'none', mediaBase64: null, mediaMime: null, mediaName: null }))
+    setTplForm((f) => ({ ...f, ...emptyInlineMessage() }))
+  }
+
+  function clearAutoMedia() {
+    setAutoForm((f) => ({ ...f, ...emptyInlineMessage() }))
+  }
+
+  function clearCadMedia() {
+    setCadStep((f) => ({ ...f, ...emptyInlineMessage() }))
   }
 
   async function saveTemplate() {
@@ -378,7 +455,11 @@ export function Messages({ defaultTab = 'criar' }) {
       if (!t) return { body: '', mediaType: 'none', mediaBase64: null }
       return { body: t.body, mediaType: t.mediaType, mediaBase64: t.mediaBase64 }
     }
-    return { body: autoForm.body, mediaType: 'none', mediaBase64: null }
+    return {
+      body: autoForm.body,
+      mediaType: autoForm.mediaType || 'none',
+      mediaBase64: autoForm.mediaBase64,
+    }
   }
 
   const filteredGroups = groups.filter((g) => (groupSearch.trim() ? g.name.toLowerCase().includes(groupSearch.toLowerCase()) : true))
@@ -411,6 +492,10 @@ export function Messages({ defaultTab = 'criar' }) {
       source: a.templateId ? 'template' : 'inline',
       templateId: a.templateId || '',
       body: a.body || '',
+      mediaType: a.mediaType || 'none',
+      mediaBase64: a.mediaBase64 || null,
+      mediaMime: a.mediaMime || null,
+      mediaName: a.mediaName || null,
       groupIds: a.groupJids || [],
       frequency: a.frequency === 'now' ? 'once' : a.frequency,
       scheduledAt: toLocalInput(a.scheduledAt),
@@ -427,7 +512,7 @@ export function Messages({ defaultTab = 'criar' }) {
     if (!f.name.trim()) return 'Dê um nome para a automação.'
     if (!f.groupIds.length) return 'Selecione ao menos um grupo.'
     if (f.source === 'template' && !f.templateId) return 'Selecione uma mensagem da biblioteca.'
-    if (f.source === 'inline' && !f.body.trim()) return 'Escreva o texto da mensagem.'
+    if (f.source === 'inline' && !inlineHasContent(f)) return 'Escreva o texto ou anexe uma imagem/vídeo.'
     if (f.frequency === 'once' && !f.scheduledAt) return 'Informe a data e hora do agendamento.'
     return null
   }
@@ -436,7 +521,7 @@ export function Messages({ defaultTab = 'criar' }) {
     const f = autoForm
     const payload = { name: f.name.trim(), groupIds: f.groupIds, frequency: f.frequency }
     if (f.source === 'template') payload.templateId = f.templateId
-    else payload.body = f.body
+    else appendInlineMedia(payload, f)
     if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
     if (f.frequency === 'daily' || f.frequency === 'weekly') payload.timeOfDay = f.timeOfDay
     if (f.frequency === 'weekly') payload.weekday = Number(f.weekday)
@@ -583,19 +668,22 @@ export function Messages({ defaultTab = 'criar' }) {
     const f = cadStep
     if (!f.groupIds.length) return 'Selecione ao menos um grupo.'
     if (f.source === 'template' && !f.templateId) return 'Selecione uma mensagem da biblioteca.'
-    if (f.source === 'inline' && !f.body.trim()) return 'Escreva o texto da mensagem.'
+    if (f.source === 'inline' && !inlineHasContent(f)) return 'Escreva o texto ou anexe uma imagem/vídeo.'
     if (f.frequency === 'once' && !f.scheduledAt) return 'Informe a data e hora.'
     return null
   }
 
   function buildStepPayload() {
     const f = cadStep
-    const base = f.source === 'template' ? templates.find((t) => t.id === f.templateId)?.name || 'Disparo' : f.body.trim().slice(0, 24) || 'Disparo'
+    const base =
+      f.source === 'template'
+        ? templates.find((t) => t.id === f.templateId)?.name || 'Disparo'
+        : f.body.trim().slice(0, 24) || (f.mediaType === 'video' ? 'Vídeo' : f.mediaType === 'image' ? 'Imagem' : 'Disparo')
     const timeLabel = f.frequency === 'once' ? (f.scheduledAt ? f.scheduledAt.replace('T', ' ') : '') : f.timeOfDay
     const name = f.name.trim() || `${base}${timeLabel ? ` • ${timeLabel}` : ''}`
     const payload = { name, cadenceId: activeCadence.id, groupIds: f.groupIds, frequency: f.frequency, status: f.status }
     if (f.source === 'template') payload.templateId = f.templateId
-    else payload.body = f.body
+    else appendInlineMedia(payload, f)
     if (f.frequency === 'once') payload.scheduledAt = f.scheduledAt
     if (f.frequency === 'daily' || f.frequency === 'weekly') payload.timeOfDay = f.timeOfDay
     if (f.frequency === 'weekly') payload.weekday = Number(f.weekday)
@@ -789,7 +877,7 @@ export function Messages({ defaultTab = 'criar' }) {
 
             <Select label="Mensagem" value={autoForm.source} onChange={(e) => setAutoForm((f) => ({ ...f, source: e.target.value }))}>
               <option value="template">Selecionar da biblioteca</option>
-              <option value="inline">Escrever texto rápido</option>
+              <option value="inline">Texto ou mídia (anexo)</option>
             </Select>
 
             {autoForm.source === 'template' ? (
@@ -806,7 +894,22 @@ export function Messages({ defaultTab = 'criar' }) {
                 </Select>
               )
             ) : (
-              <Textarea label="Texto" rows={4} value={autoForm.body} onChange={(e) => setAutoForm((f) => ({ ...f, body: e.target.value }))} placeholder="Olá, comunidade! ..." />
+              <div className="space-y-3">
+                <Textarea
+                  label={autoForm.mediaType === 'none' ? 'Texto' : 'Legenda (opcional)'}
+                  rows={4}
+                  value={autoForm.body}
+                  onChange={(e) => setAutoForm((f) => ({ ...f, body: e.target.value }))}
+                  placeholder="Olá, comunidade! ..."
+                />
+                <MediaAttachmentBlock
+                  mediaType={autoForm.mediaType}
+                  mediaBase64={autoForm.mediaBase64}
+                  mediaName={autoForm.mediaName}
+                  onPick={onPickAutoMedia}
+                  onClear={clearAutoMedia}
+                />
+              </div>
             )}
 
             <div>
@@ -1123,7 +1226,7 @@ export function Messages({ defaultTab = 'criar' }) {
                   <Input label="Nome (opcional)" value={cadStep.name} onChange={(e) => setCadStep((f) => ({ ...f, name: e.target.value }))} placeholder="Gerado automaticamente se vazio" />
                   <Select label="Mensagem" value={cadStep.source} onChange={(e) => setCadStep((f) => ({ ...f, source: e.target.value }))}>
                     <option value="template">Selecionar da biblioteca</option>
-                    <option value="inline">Escrever texto rápido</option>
+                    <option value="inline">Texto ou mídia (anexo)</option>
                   </Select>
                   {cadStep.source === 'template' ? (
                     templates.length === 0 ? (
@@ -1137,7 +1240,22 @@ export function Messages({ defaultTab = 'criar' }) {
                       </Select>
                     )
                   ) : (
-                    <Textarea label="Texto" rows={3} value={cadStep.body} onChange={(e) => setCadStep((f) => ({ ...f, body: e.target.value }))} />
+                    <div className="space-y-3">
+                      <Textarea
+                        label={cadStep.mediaType === 'none' ? 'Texto' : 'Legenda (opcional)'}
+                        rows={3}
+                        value={cadStep.body}
+                        onChange={(e) => setCadStep((f) => ({ ...f, body: e.target.value }))}
+                        placeholder="Olá, comunidade! ..."
+                      />
+                      <MediaAttachmentBlock
+                        mediaType={cadStep.mediaType}
+                        mediaBase64={cadStep.mediaBase64}
+                        mediaName={cadStep.mediaName}
+                        onPick={onPickCadMedia}
+                        onClear={clearCadMedia}
+                      />
+                    </div>
                   )}
 
                   <div>
@@ -1291,34 +1409,13 @@ export function Messages({ defaultTab = 'criar' }) {
         <div className="space-y-4">
           <Input label="Nome" value={tplForm.name} onChange={(e) => setTplForm((f) => ({ ...f, name: e.target.value }))} placeholder="Ex: Promo da semana" />
           <Textarea label={tplForm.mediaType === 'none' ? 'Mensagem' : 'Legenda (opcional)'} rows={5} value={tplForm.body} onChange={(e) => setTplForm((f) => ({ ...f, body: e.target.value }))} placeholder="Escreva sua mensagem..." />
-          <div className="space-y-2">
-            <p className="text-sm text-stone-200">Mídia (imagem até 5MB ou vídeo até 16MB)</p>
-            {tplForm.mediaType === 'none' ? (
-              <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-700 px-4 py-4 text-sm text-stone-400 hover:bg-white/5">
-                Clique para anexar imagem ou vídeo
-                <input type="file" accept="image/*,video/*" className="hidden" onChange={onPickMedia} />
-              </label>
-            ) : (
-              <div className="rounded-lg border border-brand-800 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="inline-flex items-center gap-2 truncate text-xs text-stone-300">
-                    {tplForm.mediaType === 'image' ? <ImageIcon className="h-4 w-4" /> : <Film className="h-4 w-4" />}
-                    {tplForm.mediaName || tplForm.mediaType}
-                  </p>
-                  <button type="button" onClick={clearMedia} className="text-stone-500 hover:text-red-300" aria-label="Remover mídia">
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="mt-2">
-                  {tplForm.mediaType === 'image' ? (
-                    <img src={tplForm.mediaBase64} alt="" className="h-28 rounded border border-brand-700 object-cover" />
-                  ) : (
-                    <video src={tplForm.mediaBase64} controls className="h-28 rounded border border-brand-700" />
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+          <MediaAttachmentBlock
+            mediaType={tplForm.mediaType}
+            mediaBase64={tplForm.mediaBase64}
+            mediaName={tplForm.mediaName}
+            onPick={onPickMedia}
+            onClear={clearMedia}
+          />
         </div>
       </Modal>
 
