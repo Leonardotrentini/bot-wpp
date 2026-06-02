@@ -50,12 +50,21 @@ import {
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, imageMaxLabel, videoMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
 import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
+
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+const FILE_ACCEPT_MEDIA = 'image/*,video/mp4,.mp4'
 const HIST_PAGE_SIZE = 20
+
+function isMp4Video(file) {
+  if (/\.mp4$/i.test(file.name || '')) return true
+  const t = (file.type || '').toLowerCase()
+  return t === 'video/mp4' || t === 'application/mp4'
+}
 
 function fileKind(file) {
   if (file.type.startsWith('image/')) return 'image'
-  if (file.type.startsWith('video/')) return 'video'
+  if (isMp4Video(file)) return 'video'
+  if (file.type.startsWith('video/') || /\.(mov|avi|mkv|webm|m4v)$/i.test(file.name || '')) return 'unsupported-video'
   return 'file'
 }
 
@@ -174,7 +183,6 @@ function PreviewBubble({ content }) {
           src={src}
           mediaName={content.mediaName}
           mediaSize={content.mediaSize}
-          mediaMime={content.mediaMime}
           className="mb-2 max-h-44 w-full rounded-lg bg-black"
         />
       )}
@@ -187,15 +195,17 @@ function PreviewBubble({ content }) {
   )
 }
 
-function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaName, mediaSize, mediaMime, onPick, onClear }) {
+function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaName, mediaSize, onPick, onClear }) {
   const src = mediaPreviewUrl || mediaBase64
   return (
     <div className="space-y-2">
-      <p className="text-sm text-stone-200">Mídia (imagem até {imageMaxLabel} ou vídeo até {videoMaxLabel})</p>
+      <p className="text-sm text-stone-200">
+        Mídia (imagem até {imageMaxLabel} ou vídeo MP4 até {videoMaxLabel})
+      </p>
       {mediaType === 'none' ? (
         <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-700 px-4 py-4 text-sm text-stone-400 hover:bg-white/5">
-          Clique para anexar imagem ou vídeo
-          <input type="file" accept="image/*,video/*" className="hidden" onChange={onPick} />
+          Clique para anexar imagem ou vídeo MP4
+          <input type="file" accept={FILE_ACCEPT_MEDIA} className="hidden" onChange={onPick} />
         </label>
       ) : (
         <div className="rounded-lg border border-brand-800 p-3">
@@ -216,7 +226,6 @@ function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaNa
                 src={src}
                 mediaName={mediaName}
                 mediaSize={mediaSize}
-                mediaMime={mediaMime}
                 compact
                 className="h-28 w-full rounded border border-brand-700 bg-black"
               />
@@ -367,8 +376,12 @@ export function Messages({ defaultTab = 'criar' }) {
   async function attachMediaFromFile(file, apply) {
     if (!file) return
     const kind = fileKind(file)
+    if (kind === 'unsupported-video') {
+      toast.error('Use vídeo em MP4 (H.264). Converta MOV/AVI antes de anexar.')
+      return
+    }
     if (kind === 'file') {
-      toast.error('Tipo não suportado. Use imagem ou vídeo.')
+      toast.error('Tipo não suportado. Use imagem ou vídeo MP4.')
       return
     }
     const max = kind === 'video' ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES
@@ -376,10 +389,8 @@ export function Messages({ defaultTab = 'criar' }) {
       toast.error(`Arquivo grande demais. Limite: ${mediaLimitLabel(kind)}.`)
       return
     }
-    const previewUrl = URL.createObjectURL(file)
-    const mime =
-      file.type ||
-      (kind === 'video' && /\.mov$/i.test(file.name) ? 'video/quicktime' : kind === 'video' ? 'video/mp4' : 'image/jpeg')
+    const previewUrl = kind === 'video' || kind === 'image' ? URL.createObjectURL(file) : null
+    const mime = kind === 'video' ? 'video/mp4' : file.type || 'image/jpeg'
     const dataUrl = await readFileAsDataUrl(file)
     apply({
       mediaType: kind,
@@ -965,7 +976,6 @@ export function Messages({ defaultTab = 'criar' }) {
                   mediaPreviewUrl={autoForm.mediaPreviewUrl}
                   mediaName={autoForm.mediaName}
                   mediaSize={autoForm.mediaSize}
-                  mediaMime={autoForm.mediaMime}
                   onPick={onPickAutoMedia}
                   onClear={clearAutoMedia}
                 />
@@ -1314,7 +1324,6 @@ export function Messages({ defaultTab = 'criar' }) {
                         mediaPreviewUrl={cadStep.mediaPreviewUrl}
                         mediaName={cadStep.mediaName}
                         mediaSize={cadStep.mediaSize}
-                        mediaMime={cadStep.mediaMime}
                         onPick={onPickCadMedia}
                         onClear={clearCadMedia}
                       />
@@ -1478,7 +1487,6 @@ export function Messages({ defaultTab = 'criar' }) {
             mediaPreviewUrl={tplForm.mediaPreviewUrl}
             mediaName={tplForm.mediaName}
             mediaSize={tplForm.mediaSize}
-            mediaMime={tplForm.mediaMime}
             onPick={onPickMedia}
             onClear={clearMedia}
           />

@@ -26,24 +26,17 @@ function VideoFallback({ mediaName, mediaSize, className, compact }) {
       <Film className={compact ? 'h-6 w-6 text-accent-400' : 'h-8 w-8 text-accent-400'} />
       <p className="max-w-full truncate text-xs font-medium text-stone-200">{mediaName || 'Vídeo anexado'}</p>
       {mediaSize ? <p className="text-[10px] text-stone-500">{formatMediaSize(mediaSize)}</p> : null}
-      <p className="max-w-[220px] text-[10px] leading-snug text-stone-500">
-        Prévia indisponível no navegador (.MOV ou arquivo grande). O envio pelo WhatsApp não é afetado.
-      </p>
+      <p className="max-w-[220px] text-[10px] leading-snug text-stone-500">Não foi possível carregar a prévia deste vídeo.</p>
     </div>
   )
 }
 
-function isMovLike(mediaName, mediaMime) {
-  return /\.mov$/i.test(mediaName || '') || mediaMime === 'video/quicktime'
-}
-
-export function VideoMediaPreview({ src, mediaName, mediaSize, mediaMime, className, compact }) {
-  const movPreview = isMovLike(mediaName, mediaMime)
-  const [failed, setFailed] = useState(!src || movPreview)
+export function VideoMediaPreview({ src, mediaName, mediaSize, className, compact }) {
+  const [failed, setFailed] = useState(!src)
 
   useEffect(() => {
-    setFailed(!src || isMovLike(mediaName, mediaMime))
-  }, [src, mediaName, mediaMime])
+    setFailed(!src)
+  }, [src])
 
   if (!src || failed) {
     return <VideoFallback mediaName={mediaName} mediaSize={mediaSize} className={className} compact={compact} />

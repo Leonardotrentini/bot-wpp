@@ -22,8 +22,15 @@ function validateMediaContentSize(content) {
   if (hasMedia && !content.mediaBase64) return "Mídia ausente para o tipo selecionado."
 
   const len = content.mediaBase64.length
-  if (content.mediaType === "video" && len > VIDEO_MAX_BASE64_LEN) {
-    return `Vídeo grande demais. Limite: ${mbLabel(VIDEO_MAX_BYTES)}.`
+  if (content.mediaType === "video") {
+    const mime = (content.mediaMime || "").toLowerCase()
+    const name = content.mediaName || ""
+    if (mime && mime !== "video/mp4" && mime !== "application/mp4" && !/\.mp4$/i.test(name)) {
+      return "Use vídeo em formato MP4."
+    }
+    if (len > VIDEO_MAX_BASE64_LEN) {
+      return `Vídeo grande demais. Limite: ${mbLabel(VIDEO_MAX_BYTES)}.`
+    }
   }
   if (content.mediaType === "image" && len > IMAGE_MAX_BASE64_LEN) {
     return `Imagem grande demais. Limite: ${mbLabel(IMAGE_MAX_BYTES)}.`
