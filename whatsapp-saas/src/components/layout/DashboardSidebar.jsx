@@ -20,7 +20,7 @@ const nav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/dashboard/connect', label: 'Conectar WhatsApp', icon: Smartphone },
   { to: '/dashboard/groups', label: 'Grupos', icon: Users },
-  { to: '/dashboard/automations', label: 'Automações', icon: Zap },
+  { to: '/dashboard/automations', label: 'Automações', icon: Zap, beta: true },
   { to: '/dashboard/members', label: 'Membros', icon: UserCircle2 },
   { to: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/dashboard/integrations', label: 'Integrações', icon: Plug },
@@ -55,9 +55,9 @@ export function DashboardSidebar() {
             key={item.to}
             to={item.to}
             end={item.end}
-            title={item.label}
+            title={item.beta ? `${item.label} (BETA)` : item.label}
             className={({ isActive }) =>
-              `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+              `relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                 isActive
                   ? 'bg-accent-500/10 text-accent-400 border border-accent-500/25 shadow-sm shadow-accent-900/20'
                   : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'
@@ -65,7 +65,19 @@ export function DashboardSidebar() {
             }
           >
             <item.icon className="h-5 w-5 shrink-0" />
-            {!collapsed && <span className="truncate">{item.label}</span>}
+            {!collapsed && (
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="truncate">{item.label}</span>
+                {item.beta && (
+                  <span className="shrink-0 rounded-md border border-amber-500/35 bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-400">
+                    Beta
+                  </span>
+                )}
+              </span>
+            )}
+            {collapsed && item.beta && (
+              <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden />
+            )}
           </NavLink>
         ))}
         {isAdmin && (

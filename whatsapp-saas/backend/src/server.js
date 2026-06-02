@@ -45,6 +45,7 @@ const {
 } = require("./lib/messageMetrics")
 const {
   normalizeEvolutionMessages,
+  collectWebhookMessageRecords,
   filterMessagesForGroup,
   mapEvolutionMessage,
 } = require("./lib/evolutionMessages")
@@ -688,21 +689,20 @@ async function runDiscoverInBackground(userId) {
 async function storeGroupMessages(group, records, { cutoffMs } = {}) {
   let saved = 0
   let inbound = 0
-  let reachedCutoff = false
   let lastMessage = null
   let lastMessageAt = null
 
   const filtered = filterMessagesForGroup(records, group.groupJid)
+  let inWindowCount = 0
 
   for (const record of filtered) {
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue
 
     const ts = mapped.timestamp.getTime()
-    if (cutoffMs && ts < cutoffMs) {
-      reachedCutoff = true
-      continue
-    }
+    if (cutoffMs && ts < cutoffMs) continue
+
+    inWindowCount += 1
 
     await prisma.whatsAppMessage.upsert({
       where: { groupId_messageId: { groupId: group.id, messageId: mapped.messageId } },
@@ -725,7 +725,8 @@ async function storeGroupMessages(group, records, { cutoffMs } = {}) {
     }
   }
 
-  return { saved, inbound, reachedCutoff, lastMessage, lastMessageAt }
+  const allBelowCutoff = filtered.length > 0 && inWindowCount === 0
+  return { saved, inbound, allBelowCutoff, lastMessage, lastMessageAt }
 }
 
 async function importGroupMessages(conn, group, cutoffMs) {
@@ -743,10 +744,11 @@ async function importGroupMessages(conn, group, cutoffMs) {
     const { records } = await fetchGroupMessages(conn.instanceName, group.groupJid, {
       page,
       pageSize: MESSAGE_SYNC_PAGE_SIZE,
+      cutoffMs,
     })
     if (!records.length) break
 
-    const { saved, reachedCutoff, lastMessage, lastMessageAt, inbound } = await storeGroupMessages(group, records, {
+    const { saved, allBelowCutoff, lastMessage, lastMessageAt, inbound } = await storeGroupMessages(group, records, {
       cutoffMs,
     })
     totalSaved += saved
@@ -765,7 +767,7 @@ async function importGroupMessages(conn, group, cutoffMs) {
       },
     })
 
-    if (reachedCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
+    if (allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
     if (page < MESSAGE_SYNC_MAX_PAGES) await wait(MESSAGE_SYNC_PAGE_DELAY_MS)
   }
 
@@ -2258,7 +2260,11 @@ function isValidEvolutionWebhook(req) {
 }
 
 function getWebhookEvent(body) {
-  return (body?.event || body?.type || body?.data?.event || "").toString().toUpperCase()
+  const raw = body?.event || body?.type || body?.data?.event || ""
+  return String(raw)
+    .trim()
+    .toUpperCase()
+    .replace(/[.\-]/g, "_")
 }
 
 function getWebhookInstanceName(body) {
@@ -2334,8 +2340,14 @@ async function storeIncomingMessages(instanceName, body) {
   const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
   if (!conn) return 0
 
-  const records = normalizeEvolutionMessages(getWebhookPayload(body))
-  if (!records.length) return 0
+  const records = collectWebhookMessageRecords(body)
+  if (!records.length) {
+    const event = getWebhookEvent(body)
+    if (event.includes("MESSAGE")) {
+      console.warn(`[webhook] ${event} sem registros parseáveis (${instanceName})`)
+    }
+    return 0
+  }
 
   let saved = 0
   const touchedGroups = new Map()
@@ -2495,7 +2507,7 @@ app.post("/api/evolution/webhook", async (req, res) => {
       await updateConnectionFromWebhook(instanceName, req.body)
     } else if (["GROUPS_UPSERT", "GROUP_UPDATE", "GROUP_PARTICIPANTS_UPDATE"].includes(event)) {
       await updateGroupsFromWebhook(instanceName, req.body)
-    } else if (event === "MESSAGES_UPSERT") {
+    } else if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
       await storeIncomingMessages(instanceName, req.body)
     } else if (event === "MESSAGES_UPDATE") {
       await updateOutboundAckFromWebhook(instanceName, req.body)
@@ -2613,8 +2625,28 @@ app.use((err, _req, res, _next) => {
 
 const port = Number(process.env.PORT || 4000)
 
+async function refreshConnectedInstanceWebhooks() {
+  const webhook = buildEvolutionWebhookUrl()
+  if (!webhook) return
+  const connections = await prisma.whatsAppConnection.findMany({
+    where: { connected: true },
+    select: { instanceName: true },
+  })
+  for (const { instanceName } of connections) {
+    await setInstanceWebhook(instanceName, webhook).catch((err) => {
+      console.warn(`[evolution] webhook ${instanceName}:`, err?.message || err)
+    })
+  }
+  if (connections.length) {
+    console.log(`[evolution] Webhook atualizado em ${connections.length} instância(s) conectada(s).`)
+  }
+}
+
 httpServer.listen(port, () => {
   void ensureDefaultPlans().catch((err) => console.error("[bootstrap] ensureDefaultPlans:", err?.message || err))
+  void refreshConnectedInstanceWebhooks().catch((err) =>
+    console.error("[bootstrap] refreshConnectedInstanceWebhooks:", err?.message || err),
+  )
   console.log(`Backend online na porta ${port}`)
   if (ENABLE_SCHEDULER) {
     setInterval(() => {

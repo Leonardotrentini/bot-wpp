@@ -41,6 +41,7 @@ function normalizeWebhook(input) {
       "GROUP_UPDATE",
       "GROUP_PARTICIPANTS_UPDATE",
       "MESSAGES_UPSERT",
+      "MESSAGES_SET",
       "MESSAGES_UPDATE",
     ],
   }
@@ -274,20 +275,34 @@ async function findContacts(instanceName, where = {}) {
  */
 const { normalizeEvolutionMessages, filterMessagesForGroup } = require("./evolutionMessages")
 
-async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50 } = {}) {
+async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50, cutoffMs } = {}) {
+  const cutoffSec =
+    cutoffMs && Number.isFinite(cutoffMs) ? Math.floor(Number(cutoffMs) / 1000) : null
+
   const bodies = [
     { where: { key: { remoteJid: groupJid } }, page, offset: pageSize },
     { where: { key: { remoteJid: groupJid } }, page, limit: pageSize },
     { where: { key: { remoteJid: groupJid } }, skip: (page - 1) * pageSize, take: pageSize },
+    ...(cutoffSec
+      ? [
+          {
+            where: { key: { remoteJid: groupJid }, messageTimestamp: { gte: cutoffSec } },
+            page,
+            limit: pageSize,
+          },
+        ]
+      : []),
+  ]
+
+  const endpoints = (body) => [
+    () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
   ]
 
   let lastPayload = null
   for (const body of bodies) {
     try {
-      const payload = await firstSuccess([
-        () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-        () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-      ])
+      const payload = await firstSuccess(endpoints(body))
       lastPayload = payload
       const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid)
       if (records.length) return { payload, records }
@@ -299,6 +314,22 @@ async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize =
   if (lastPayload) {
     const records = filterMessagesForGroup(normalizeEvolutionMessages(lastPayload), groupJid)
     if (records.length) return { payload: lastPayload, records }
+  }
+
+  // Evolution costuma ignorar remoteJid no where — busca lote maior e filtra no servidor.
+  const fallbackTake = Math.min(500, pageSize * 4)
+  const fallbackBodies = [
+    { page, limit: fallbackTake },
+    { skip: (page - 1) * fallbackTake, take: fallbackTake },
+  ]
+  for (const body of fallbackBodies) {
+    try {
+      const payload = await firstSuccess(endpoints(body))
+      const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid)
+      if (records.length) return { payload, records }
+    } catch {
+      /* próximo */
+    }
   }
 
   return { payload: lastPayload || {}, records: [] }

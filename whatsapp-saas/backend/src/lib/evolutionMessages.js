@@ -21,7 +21,7 @@ function extractMessageText(message) {
   )
 }
 
-/** Aceita lista, paginação Evolution ou um único evento MESSAGES_UPSERT. */
+/** Aceita lista, paginação Evolution ou um único evento MESSAGES_UPSERT / MESSAGES_SET. */
 function normalizeEvolutionMessages(payload) {
   if (!payload || typeof payload !== "object") return []
   if (Array.isArray(payload)) return payload
@@ -37,6 +37,27 @@ function normalizeEvolutionMessages(payload) {
     return [single]
   }
   return []
+}
+
+/** Extrai registros de webhook (Evolution envia `messages.upsert` com formatos variados). */
+function collectWebhookMessageRecords(body) {
+  const seen = new Set()
+  const out = []
+  const push = (records) => {
+    for (const record of records || []) {
+      const id = record?.key?.id || record?.id
+      const dedupeKey = id ? String(id) : null
+      if (dedupeKey) {
+        if (seen.has(dedupeKey)) continue
+        seen.add(dedupeKey)
+      }
+      out.push(record)
+    }
+  }
+
+  push(normalizeEvolutionMessages(body?.data))
+  push(normalizeEvolutionMessages(body))
+  return out
 }
 
 function messageRemoteJid(record) {
@@ -95,6 +116,7 @@ function toIsoFromEvolutionTimestamp(value) {
 
 module.exports = {
   normalizeEvolutionMessages,
+  collectWebhookMessageRecords,
   filterMessagesForGroup,
   mapEvolutionMessage,
   extractMessageText,
