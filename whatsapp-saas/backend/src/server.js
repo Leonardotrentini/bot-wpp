@@ -243,6 +243,65 @@ function getParticipantApiPayload(participant, groupName) {
   }
 }
 
+function participantTags(participant) {
+  const tags = []
+  if (participant.role === "admin" || participant.role === "superadmin") tags.push("admin")
+  return tags
+}
+
+function mergeGlobalMember(map, participant, groupApi) {
+  const key = participant.participantJid || participant.phone || participant.id
+  if (!key) return
+  const lastAt = participant.lastSyncedAt?.toISOString?.() || new Date().toISOString()
+  const existing = map.get(key)
+  if (!existing) {
+    map.set(key, {
+      id: key,
+      name: participant.name || participant.phone || "Participante",
+      phone: participant.phone || "—",
+      role: participant.role,
+      status: participant.status || "ativo",
+      tags: participantTags(participant),
+      groups: [groupApi.name],
+      groupIds: [groupApi.id],
+      lastActivity: lastAt,
+      avatar: fallbackGroupImage(participant.name || participant.phone || key),
+    })
+    return
+  }
+  if (!existing.groupIds.includes(groupApi.id)) {
+    existing.groupIds.push(groupApi.id)
+    existing.groups.push(groupApi.name)
+  }
+  if (new Date(lastAt).getTime() > new Date(existing.lastActivity).getTime()) {
+    existing.lastActivity = lastAt
+  }
+  if (participant.role === "admin" || participant.role === "superadmin") {
+    if (!existing.tags.includes("admin")) existing.tags.push("admin")
+  }
+}
+
+async function syncParticipantsForGroupRow(conn, groupRow) {
+  const participantsPayload = await fetchGroupParticipants(conn.instanceName, groupRow.groupJid)
+  const participants = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
+  for (const participant of participants) {
+    await prisma.whatsAppGroupParticipant.upsert({
+      where: { groupId_participantJid: { groupId: groupRow.id, participantJid: participant.participantJid } },
+      create: { groupId: groupRow.id, ...participant, lastSyncedAt: new Date() },
+      update: { ...participant, lastSyncedAt: new Date() },
+    })
+  }
+  await prisma.whatsAppGroup.update({
+    where: { id: groupRow.id },
+    data: {
+      memberCount: participants.length || groupRow.memberCount,
+      participantsSyncedAt: new Date(),
+      lastSyncedAt: new Date(),
+    },
+  })
+  return participants.length
+}
+
 function mapEvolutionGroup(group, instanceName) {
   const id = group?.id || group?.jid || group?.groupJid || group?.remoteJid
   const name = group?.subject || group?.name || id || "Grupo sem nome"
@@ -1008,30 +1067,7 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
 
     if (needsParticipantSync && (!conn.groupSyncRetryAfter || conn.groupSyncRetryAfter <= new Date())) {
       try {
-        const participantsPayload = await fetchGroupParticipants(conn.instanceName, groupJid)
-        const participants = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
-        for (const participant of participants) {
-          await prisma.whatsAppGroupParticipant.upsert({
-            where: { groupId_participantJid: { groupId: groupRow.id, participantJid: participant.participantJid } },
-            create: {
-              groupId: groupRow.id,
-              ...participant,
-              lastSyncedAt: new Date(),
-            },
-            update: {
-              ...participant,
-              lastSyncedAt: new Date(),
-            },
-          })
-        }
-        await prisma.whatsAppGroup.update({
-          where: { id: groupRow.id },
-          data: {
-            memberCount: participants.length || groupRow.memberCount,
-            participantsSyncedAt: new Date(),
-            lastSyncedAt: new Date(),
-          },
-        })
+        await syncParticipantsForGroupRow(conn, groupRow)
         participantRows = await prisma.whatsAppGroupParticipant.findMany({
           where: { groupId: groupRow.id },
           orderBy: { name: "asc" },
@@ -1064,6 +1100,140 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
     }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.get("/api/members", authMiddleware, async (req, res) => {
+  try {
+    const groupId = typeof req.query.groupId === "string" ? req.query.groupId.trim() : ""
+    const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : ""
+    const status = typeof req.query.status === "string" ? req.query.status.trim() : ""
+    const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : ""
+    const inactiveDays = req.query.inactiveDays ? Number(req.query.inactiveDays) : 0
+    const activeGroupsOnly = req.query.activeGroupsOnly === "true" || req.query.activeGroupsOnly === "1"
+
+    const groupWhere = { userId: req.user.sub }
+    if (groupId) groupWhere.groupJid = groupId
+
+    const groupRows = await prisma.whatsAppGroup.findMany({
+      where: groupWhere,
+      include: { participants: true },
+      orderBy: { name: "asc" },
+    })
+
+    const map = new Map()
+    for (const row of groupRows) {
+      const groupApi = getGroupApiPayload(row)
+      if (activeGroupsOnly && groupApi.status !== "ativo") continue
+      for (const p of row.participants) {
+        mergeGlobalMember(map, p, groupApi)
+      }
+    }
+
+    let members = [...map.values()]
+
+    if (activeGroupsOnly) {
+      const activeIds = new Set(
+        (await prisma.whatsAppGroup.findMany({ where: { userId: req.user.sub, status: "ativo" }, select: { groupJid: true } })).map(
+          (g) => g.groupJid,
+        ),
+      )
+      members = members
+        .map((m) => {
+          const pairs = m.groupIds.map((id, i) => ({ id, name: m.groups[i] })).filter((p) => activeIds.has(p.id))
+          return {
+            ...m,
+            groupIds: pairs.map((p) => p.id),
+            groups: pairs.map((p) => p.name),
+          }
+        })
+        .filter((m) => m.groupIds.length > 0)
+    }
+
+    if (groupId) {
+      members = members.filter((m) => m.groupIds.includes(groupId))
+    }
+    if (status) members = members.filter((m) => m.status === status)
+    if (tag) members = members.filter((m) => m.tags.includes(tag))
+    if (inactiveDays > 0) {
+      const now = Date.now()
+      members = members.filter((m) => {
+        const last = new Date(m.lastActivity).getTime()
+        if (Number.isNaN(last)) return false
+        return (now - last) / (1000 * 60 * 60 * 24) >= inactiveDays
+      })
+    }
+    if (q) {
+      members = members.filter(
+        (m) => m.name.toLowerCase().includes(q) || String(m.phone).toLowerCase().includes(q),
+      )
+    }
+
+    members.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
+
+    const groups = await readCachedGroups(req.user.sub)
+    const groupsWithParticipants = await prisma.whatsAppGroup.count({
+      where: { userId: req.user.sub, participantsSyncedAt: { not: null } },
+    })
+
+    res.json({
+      members,
+      groups,
+      total: members.length,
+      meta: {
+        groupsTotal: groups.length,
+        groupsWithParticipants,
+      },
+    })
+  } catch (err) {
+    if (err?.code === "WHATSAPP_NOT_CONNECTED") {
+      return res.status(409).json({
+        error: "WHATSAPP_NOT_CONNECTED",
+        message: err.message,
+        members: [],
+        groups: [],
+      })
+    }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.post("/api/members/sync-participants", authMiddleware, async (req, res) => {
+  try {
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    if (!conn.connected) {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: "Conecte o WhatsApp antes de sincronizar." })
+    }
+
+    const maxGroups = Number(req.body?.maxGroups || 8)
+    const rows = await prisma.whatsAppGroup.findMany({
+      where: { userId: req.user.sub, status: "ativo" },
+      orderBy: { participantsSyncedAt: "asc" },
+      take: maxGroups,
+    })
+
+    let synced = 0
+    let failed = 0
+    for (const row of rows) {
+      try {
+        await syncParticipantsForGroupRow(conn, row)
+        synced += 1
+        await wait(400)
+      } catch (err) {
+        if (isRateLimitError(err)) {
+          return res.status(429).json({
+            error: "EVOLUTION_RATE_LIMITED",
+            message: "WhatsApp limitou a consulta. Tente novamente em alguns minutos.",
+            synced,
+          })
+        }
+        failed += 1
+      }
+    }
+
+    res.json({ synced, failed, attempted: rows.length })
+  } catch (err) {
     return handleEvolutionError(res, err)
   }
 })

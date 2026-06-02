@@ -89,16 +89,16 @@ export const mockGroupMembersByGroup = {
 }
 
 export const mockMembersGlobal = [
-  { id: 'm1', name: 'João Silva', phone: '+55 (11) 98765-4321', groups: ['Alunos Turma 2024'], tags: ['aluno', 'premium'], status: 'ativo', lastActivity: '2026-04-27T14:00:00', avatar: avatar('João Silva') },
-  { id: 'm2', name: 'Maria Santos', phone: '+55 (21) 99123-8899', groups: ['Alunos Turma 2024'], tags: ['aluno'], status: 'ativo', lastActivity: '2026-04-27T13:30:00', avatar: avatar('Maria Santos') },
-  { id: 'm3', name: 'Pedro Oliveira', phone: '+55 (11) 97777-1122', groups: ['Alunos Turma 2024'], tags: [], status: 'inativo', lastActivity: '2026-04-10T09:00:00', avatar: avatar('Pedro Oliveira') },
-  { id: 'm4', name: 'Ana Costa', phone: '+55 (47) 98888-3344', groups: ['Alunos Turma 2024'], tags: ['moderador'], status: 'ativo', lastActivity: '2026-04-27T11:00:00', avatar: avatar('Ana Costa') },
-  { id: 'm5', name: 'Fernanda Lima', phone: '+55 (11) 96543-2211', groups: ['Comunidade VIP'], tags: ['vip'], status: 'ativo', lastActivity: '2026-04-27T14:15:00', avatar: avatar('Fernanda Lima') },
-  { id: 'm6', name: 'Ricardo Souza', phone: '+55 (31) 93456-7890', groups: ['Comunidade VIP'], tags: ['vip'], status: 'ativo', lastActivity: '2026-04-27T12:00:00', avatar: avatar('Ricardo Souza') },
-  { id: 'm7', name: 'Lucas Almeida', phone: '+55 (11) 91234-5678', groups: ['Suporte Clientes', 'Alunos Turma 2024'], tags: ['cliente'], status: 'ativo', lastActivity: '2026-04-27T10:00:00', avatar: avatar('Lucas Almeida') },
-  { id: 'm8', name: 'Camila Rocha', phone: '+55 (61) 99876-1234', groups: ['Suporte Clientes'], tags: ['suporte'], status: 'ativo', lastActivity: '2026-04-26T18:00:00', avatar: avatar('Camila Rocha') },
-  { id: 'm9', name: 'Bruno Ferreira', phone: '+55 (85) 98765-0000', groups: ['Lançamento Produto X'], tags: ['lead'], status: 'inativo', lastActivity: '2026-04-05T08:00:00', avatar: avatar('Bruno Ferreira') },
-  { id: 'm10', name: 'Patricia Gomes', phone: '+55 (11) 97700-8899', groups: ['Time Interno RH'], tags: ['interno'], status: 'ativo', lastActivity: '2026-04-27T09:30:00', avatar: avatar('Patricia Gomes') },
+  { id: 'm1', name: 'João Silva', phone: '+55 (11) 98765-4321', groups: ['Alunos Turma 2024'], groupIds: ['g1'], tags: ['aluno', 'premium'], status: 'ativo', lastActivity: '2026-04-27T14:00:00', avatar: avatar('João Silva') },
+  { id: 'm2', name: 'Maria Santos', phone: '+55 (21) 99123-8899', groups: ['Alunos Turma 2024'], groupIds: ['g1'], tags: ['aluno'], status: 'ativo', lastActivity: '2026-04-27T13:30:00', avatar: avatar('Maria Santos') },
+  { id: 'm3', name: 'Pedro Oliveira', phone: '+55 (11) 97777-1122', groups: ['Alunos Turma 2024'], groupIds: ['g1'], tags: [], status: 'inativo', lastActivity: '2026-04-10T09:00:00', avatar: avatar('Pedro Oliveira') },
+  { id: 'm4', name: 'Ana Costa', phone: '+55 (47) 98888-3344', groups: ['Alunos Turma 2024'], groupIds: ['g1'], tags: ['moderador'], status: 'ativo', lastActivity: '2026-04-27T11:00:00', avatar: avatar('Ana Costa') },
+  { id: 'm5', name: 'Fernanda Lima', phone: '+55 (11) 96543-2211', groups: ['Comunidade VIP'], groupIds: ['g2'], tags: ['vip'], status: 'ativo', lastActivity: '2026-04-27T14:15:00', avatar: avatar('Fernanda Lima') },
+  { id: 'm6', name: 'Ricardo Souza', phone: '+55 (31) 93456-7890', groups: ['Comunidade VIP'], groupIds: ['g2'], tags: ['vip'], status: 'ativo', lastActivity: '2026-04-27T12:00:00', avatar: avatar('Ricardo Souza') },
+  { id: 'm7', name: 'Lucas Almeida', phone: '+55 (11) 91234-5678', groups: ['Suporte Clientes', 'Alunos Turma 2024'], groupIds: ['g3', 'g1'], tags: ['cliente'], status: 'ativo', lastActivity: '2026-04-27T10:00:00', avatar: avatar('Lucas Almeida') },
+  { id: 'm8', name: 'Camila Rocha', phone: '+55 (61) 99876-1234', groups: ['Suporte Clientes'], groupIds: ['g3'], tags: ['suporte'], status: 'ativo', lastActivity: '2026-04-26T18:00:00', avatar: avatar('Camila Rocha') },
+  { id: 'm9', name: 'Bruno Ferreira', phone: '+55 (85) 98765-0000', groups: ['Lançamento Produto X'], groupIds: ['g4'], tags: ['lead'], status: 'inativo', lastActivity: '2026-04-05T08:00:00', avatar: avatar('Bruno Ferreira') },
+  { id: 'm10', name: 'Patricia Gomes', phone: '+55 (11) 97700-8899', groups: ['Time Interno RH'], groupIds: ['g5'], tags: ['interno'], status: 'ativo', lastActivity: '2026-04-27T09:30:00', avatar: avatar('Patricia Gomes') },
 ]
 
 export const mockDashboardMetrics = {

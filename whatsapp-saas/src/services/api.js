@@ -281,8 +281,39 @@ export async function getAutomations() {
   return mockResponse({ automations: [] })
 }
 
-export async function getMembers() {
-  return mockResponse({ members: mockMembersGlobal })
+export async function getMembers(params = {}) {
+  if (resolveUseRealApi()) return apiClient.get('/members', { params })
+  await delay()
+  let members = [...mockMembersGlobal]
+  const activeOnly = params.activeGroupsOnly === '1' || params.activeGroupsOnly === true
+  const activeIds = new Set(mockGroups.filter((g) => g.status === 'ativo').map((g) => g.id))
+  if (activeOnly) {
+    members = members
+      .map((m) => {
+        const ids = (m.groupIds || []).filter((id) => activeIds.has(id))
+        const names = ids.map((id) => mockGroups.find((g) => g.id === id)?.name).filter(Boolean)
+        return { ...m, groupIds: ids, groups: names }
+      })
+      .filter((m) => m.groupIds.length > 0)
+  }
+  if (params.groupId) members = members.filter((m) => (m.groupIds || []).includes(params.groupId))
+  if (params.status) members = members.filter((m) => m.status === params.status)
+  if (params.tag) members = members.filter((m) => (m.tags || []).includes(params.tag))
+  if (params.q) {
+    const q = String(params.q).toLowerCase()
+    members = members.filter((m) => m.name.toLowerCase().includes(q) || m.phone.includes(q))
+  }
+  return mockResponse({
+    members,
+    groups: mockGroups,
+    total: members.length,
+    meta: { groupsTotal: mockGroups.length, groupsWithParticipants: mockGroups.length },
+  })
+}
+
+export async function syncMembersParticipants(maxGroups = 8) {
+  if (resolveUseRealApi()) return apiClient.post('/members/sync-participants', { maxGroups })
+  return mockResponse({ synced: mockGroups.filter((g) => g.status === 'ativo').length, failed: 0, attempted: maxGroups })
 }
 
 export async function getMemberDetails(id) {
