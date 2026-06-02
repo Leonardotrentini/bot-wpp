@@ -102,11 +102,12 @@ export function Analytics() {
 
   const totalMessages = filteredGroupComparison.reduce((sum, g) => sum + g.messages, 0)
   const totalMembers = filteredGroupComparison.reduce((sum, g) => sum + g.members, 0)
-  const weightedEngagement =
+  /** % de participantes com status "ativo" nos grupos (LEADS), ponderado pelo tamanho do grupo. */
+  const activeLeadsPct =
     totalMembers > 0
       ? filteredGroupComparison.reduce((sum, g) => sum + g.engagement * g.members, 0) / totalMembers
       : data.responseRate
-  const activeMembers = Math.round(totalMembers * (weightedEngagement / 100))
+  const activeMembers = Math.round(totalMembers * (activeLeadsPct / 100))
   const inactiveMembers = Math.max(totalMembers - activeMembers, 0)
 
   const topEngagedMessages = (data.topMessages || []).filter((msg) => {
@@ -260,8 +261,8 @@ export function Analytics() {
           <p className="mt-2 text-2xl font-bold text-stone-50">{totalMessages.toLocaleString('pt-BR')}</p>
         </Card>
         <Card>
-          <p className="text-sm text-stone-400">Taxa de resposta</p>
-          <p className="mt-2 text-2xl font-bold text-accent-400">{weightedEngagement.toFixed(1)}%</p>
+          <p className="text-sm text-stone-400">% de LEADS ativos</p>
+          <p className="mt-2 text-2xl font-bold text-accent-400">{activeLeadsPct.toFixed(1)}%</p>
         </Card>
         <Card>
           <p className="text-sm text-stone-400">Membros ativos / inativos</p>
