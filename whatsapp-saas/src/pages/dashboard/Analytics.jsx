@@ -178,10 +178,17 @@ export function Analytics() {
           <strong>Conectar e importar</strong> para baixar o histórico recente do WhatsApp.
         </p>
       )}
-      {data.meta?.hasActivity && !data.meta?.messagesImported && (data.meta?.outboundCount || 0) > 0 && (
+      {data.meta?.onlyPlatformOutbound && (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
+          Só há mensagens <strong>enviadas por você pela plataforma</strong> no período — nenhuma mensagem de membros foi
+          importada ainda. Em <strong>Grupos</strong>, use <strong>Reimportar 2 dias</strong> e confirme que o grupo está
+          conectado; mensagens novas dos membros passam a entrar automaticamente pelo webhook.
+        </p>
+      )}
+      {data.meta?.hasActivity && !data.meta?.onlyPlatformOutbound && !data.meta?.hasInboundMessages && (data.meta?.outboundCount || 0) > 0 && (
         <p className="rounded-xl border border-brand-700/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
-          Métricas incluem <strong>{data.meta.outboundCount}</strong> mensagem(ns) enviada(s) pela plataforma. Para ver
-          respostas dos membros, sincronize o histórico em <strong>Grupos</strong>.
+          Métricas incluem <strong>{data.meta.outboundCount}</strong> envio(s) pela plataforma. Reimporte em{' '}
+          <strong>Grupos</strong> para trazer mensagens dos membros.
         </p>
       )}
 
@@ -352,7 +359,9 @@ export function Analytics() {
                           ? `${msg.replies} resposta(s) após esta mensagem`
                           : msg.isOutbound
                             ? 'Enviada pela plataforma'
-                            : 'Mensagem do grupo'}
+                            : msg.fromMe
+                              ? 'Sua mensagem no grupo'
+                              : 'Mensagem de membro'}
                       </p>
                     </div>
                   ))

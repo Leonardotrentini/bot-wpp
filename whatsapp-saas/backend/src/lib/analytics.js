@@ -165,6 +165,17 @@ function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
   const used = new Set()
   const picked = []
 
+  const inboundScored = scored.filter((item) => !item.message.fromMe)
+  const minInbound = Math.min(6, limit)
+
+  for (const item of inboundScored) {
+    if (picked.filter((p) => !p.message.fromMe).length >= minInbound) break
+    if (picked.length >= limit) break
+    if (used.has(item.message.id)) continue
+    used.add(item.message.id)
+    picked.push(item)
+  }
+
   for (const item of scored) {
     if (picked.length >= limit) break
     if (used.has(item.message.id)) continue
@@ -175,7 +186,10 @@ function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
   if (picked.length < limit) {
     const fillers = normalized
       .filter((m) => !used.has(m.id) && String(m.body || "").trim().length >= 2)
-      .sort((a, b) => b.timestamp - a.timestamp)
+      .sort((a, b) => {
+        if (Boolean(a.fromMe) !== Boolean(b.fromMe)) return a.fromMe ? 1 : -1
+        return b.timestamp - a.timestamp
+      })
     for (const m of fillers) {
       if (picked.length >= limit) break
       used.add(m.id)
@@ -191,10 +205,11 @@ function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
       title: truncateBody(m.body),
       group: groupIdToName.get(m.groupId) || "Grupo",
       senderName: m.senderName || (m.fromMe ? "Você" : "Membro"),
+      fromMe: Boolean(m.fromMe),
       replies: item.replies,
       reactions: 0,
       engagementRate: item.replies > 0 ? Math.min(99, item.replies * 12 + 5) : 0,
-      isOutbound: Boolean(m.fromMe && isPlatformOnly),
+      isOutbound: isPlatformOnly,
       at: new Date(m.timestamp).toISOString(),
     }
   })
@@ -224,6 +239,8 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
 
   const totalMessages = messages.length
   const inbound = messages.filter((m) => !m.fromMe)
+  const inboundCount = inbound.length
+  const outboundOnlyCount = messages.filter((m) => String(m.id).startsWith("outbound-")).length
 
   const senderSet = new Set()
   const senderNames = new Map()
@@ -327,11 +344,14 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
       groupsCount: groups.length,
       activeGroupsOnly: true,
       messagesImported: importedCount > 0,
+      inboundCount,
       outboundCount,
+      hasInboundMessages: inboundCount > 0,
       hasActivity: totalMessages > 0,
       messageRetentionDays: retentionDays,
       rangeStart: start.toISOString(),
       rangeEnd: end.toISOString(),
+      onlyPlatformOutbound: inboundCount === 0 && outboundOnlyCount > 0,
     },
   }
 }

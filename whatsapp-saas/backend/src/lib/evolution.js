@@ -272,16 +272,36 @@ async function findContacts(instanceName, where = {}) {
  * Busca mensagens de um grupo (Evolution v2 `POST /chat/findMessages/{instance}`).
  * Ordena por timestamp desc; paginado para limitar o volume por chamada.
  */
+const { normalizeEvolutionMessages, filterMessagesForGroup } = require("./evolutionMessages")
+
 async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50 } = {}) {
-  const body = {
-    where: { key: { remoteJid: groupJid } },
-    page,
-    offset: pageSize,
+  const bodies = [
+    { where: { key: { remoteJid: groupJid } }, page, offset: pageSize },
+    { where: { key: { remoteJid: groupJid } }, page, limit: pageSize },
+    { where: { key: { remoteJid: groupJid } }, skip: (page - 1) * pageSize, take: pageSize },
+  ]
+
+  let lastPayload = null
+  for (const body of bodies) {
+    try {
+      const payload = await firstSuccess([
+        () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+        () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+      ])
+      lastPayload = payload
+      const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid)
+      if (records.length) return { payload, records }
+    } catch {
+      /* tenta próximo formato de body */
+    }
   }
-  return firstSuccess([
-    () => requestEvolution(`/chat/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-    () => requestEvolution(`/message/findMessages/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-  ])
+
+  if (lastPayload) {
+    const records = filterMessagesForGroup(normalizeEvolutionMessages(lastPayload), groupJid)
+    if (records.length) return { payload: lastPayload, records }
+  }
+
+  return { payload: lastPayload || {}, records: [] }
 }
 
 async function sendText(instanceName, number, text) {

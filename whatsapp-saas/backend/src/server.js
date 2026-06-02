@@ -37,6 +37,11 @@ const {
   isInstanceAlreadyExistsError,
 } = require("./lib/evolution")
 const { buildAnalytics, buildDashboard } = require("./lib/analytics.js")
+const {
+  normalizeEvolutionMessages,
+  filterMessagesForGroup,
+  mapEvolutionMessage,
+} = require("./lib/evolutionMessages")
 const adminRoutes = require("./routes/admin")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
@@ -444,52 +449,6 @@ const {
   digitsOnly,
 } = require("./lib/participantIdentity.js")
 
-function normalizeEvolutionMessages(payload) {
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload?.messages?.records)) return payload.messages.records
-  if (Array.isArray(payload?.messages)) return payload.messages
-  if (Array.isArray(payload?.records)) return payload.records
-  if (Array.isArray(payload?.data?.messages?.records)) return payload.data.messages.records
-  if (Array.isArray(payload?.data)) return payload.data
-  return []
-}
-
-function extractMessageText(message) {
-  if (!message || typeof message !== "object") return ""
-  return (
-    message.conversation ||
-    message.extendedTextMessage?.text ||
-    message.imageMessage?.caption ||
-    message.videoMessage?.caption ||
-    message.documentMessage?.caption ||
-    message.buttonsResponseMessage?.selectedDisplayText ||
-    message.listResponseMessage?.title ||
-    message.templateButtonReplyMessage?.selectedDisplayText ||
-    ""
-  )
-}
-
-function mapEvolutionMessage(record) {
-  const key = record?.key || {}
-  const messageId = key.id || record?.id
-  const timestampRaw = record?.messageTimestamp || record?.messageTimestampMs || record?.timestamp
-  const iso = toIsoFromEvolutionTimestamp(timestampRaw)
-  const fromMe = Boolean(key.fromMe)
-  const senderJid = key.participant || key.remoteJid || record?.participant || null
-  const body = extractMessageText(record?.message) || record?.body || ""
-
-  return {
-    messageId: messageId ? String(messageId) : null,
-    fromMe,
-    senderJid: senderJid ? String(senderJid) : null,
-    senderName: fromMe ? "Você" : record?.pushName || (senderJid ? String(senderJid).split("@")[0] : null),
-    type: record?.messageType || "text",
-    body: body ? String(body).slice(0, 4000) : "",
-    timestamp: iso ? new Date(iso) : new Date(),
-    raw: serializeJson(record),
-  }
-}
-
 async function getUserWhatsAppConnection(userId) {
   const existing = await prisma.whatsAppConnection.findUnique({ where: { userId } })
   if (!existing?.instanceName) {
@@ -722,11 +681,14 @@ async function runDiscoverInBackground(userId) {
 
 async function storeGroupMessages(group, records, { cutoffMs } = {}) {
   let saved = 0
+  let inbound = 0
   let reachedCutoff = false
   let lastMessage = null
   let lastMessageAt = null
 
-  for (const record of records) {
+  const filtered = filterMessagesForGroup(records, group.groupJid)
+
+  for (const record of filtered) {
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue
 
@@ -739,9 +701,17 @@ async function storeGroupMessages(group, records, { cutoffMs } = {}) {
     await prisma.whatsAppMessage.upsert({
       where: { groupId_messageId: { groupId: group.id, messageId: mapped.messageId } },
       create: { userId: group.userId, groupId: group.id, ...mapped },
-      update: { body: mapped.body, type: mapped.type, senderName: mapped.senderName, raw: mapped.raw },
+      update: {
+        body: mapped.body,
+        type: mapped.type,
+        fromMe: mapped.fromMe,
+        senderJid: mapped.senderJid,
+        senderName: mapped.senderName,
+        raw: mapped.raw,
+      },
     })
     saved += 1
+    if (!mapped.fromMe) inbound += 1
 
     if (!lastMessageAt || ts > lastMessageAt.getTime()) {
       lastMessageAt = mapped.timestamp
@@ -749,7 +719,7 @@ async function storeGroupMessages(group, records, { cutoffMs } = {}) {
     }
   }
 
-  return { saved, reachedCutoff, lastMessage, lastMessageAt }
+  return { saved, inbound, reachedCutoff, lastMessage, lastMessageAt }
 }
 
 async function importGroupMessages(conn, group, cutoffMs) {
@@ -759,19 +729,22 @@ async function importGroupMessages(conn, group, cutoffMs) {
   })
 
   let totalSaved = 0
+  let inboundSaved = 0
   let latestMessage = null
   let latestAt = null
 
   for (let page = 1; page <= MESSAGE_SYNC_MAX_PAGES; page += 1) {
-    const payload = await fetchGroupMessages(conn.instanceName, group.groupJid, {
+    const { records } = await fetchGroupMessages(conn.instanceName, group.groupJid, {
       page,
       pageSize: MESSAGE_SYNC_PAGE_SIZE,
     })
-    const records = normalizeEvolutionMessages(payload)
     if (!records.length) break
 
-    const { saved, reachedCutoff, lastMessage, lastMessageAt } = await storeGroupMessages(group, records, { cutoffMs })
+    const { saved, reachedCutoff, lastMessage, lastMessageAt, inbound } = await storeGroupMessages(group, records, {
+      cutoffMs,
+    })
     totalSaved += saved
+    inboundSaved += inbound
     if (lastMessageAt && (!latestAt || lastMessageAt.getTime() > latestAt.getTime())) {
       latestAt = lastMessageAt
       latestMessage = lastMessage
@@ -802,6 +775,12 @@ async function importGroupMessages(conn, group, cutoffMs) {
       ...(latestAt ? { lastMessageAt: latestAt } : {}),
     },
   })
+
+  if (totalSaved > 0 && inboundSaved === 0) {
+    console.warn(
+      `[msg-import] grupo ${group.groupJid}: ${totalSaved} mensagens salvas, nenhuma de outros membros (só suas/envios).`,
+    )
+  }
 
   return totalSaved
 }
@@ -2268,7 +2247,14 @@ async function storeIncomingMessages(instanceName, body) {
     await prisma.whatsAppMessage.upsert({
       where: { groupId_messageId: { groupId: group.id, messageId: mapped.messageId } },
       create: { userId: conn.userId, groupId: group.id, ...mapped },
-      update: { body: mapped.body, type: mapped.type, senderName: mapped.senderName, raw: mapped.raw },
+      update: {
+        body: mapped.body,
+        type: mapped.type,
+        fromMe: mapped.fromMe,
+        senderJid: mapped.senderJid,
+        senderName: mapped.senderName,
+        raw: mapped.raw,
+      },
     })
     saved += 1
 
@@ -2281,6 +2267,10 @@ async function storeIncomingMessages(instanceName, body) {
         messagesLastSyncAt: new Date(),
       },
     })
+  }
+
+  if (saved > 0) {
+    console.log(`[webhook] ${saved} mensagem(ns) de grupo gravadas (${instanceName})`)
   }
 
   return saved
