@@ -17,7 +17,7 @@ import {
 } from 'recharts'
 import { Card } from '../../components/common/Card.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { Input } from '../../components/common/Input.jsx'
+import { DateRangeCalendar } from '../../components/common/DateRangeCalendar.jsx'
 import { getAnalytics } from '../../services/api.js'
 
 const PIE_COLORS = ['#eab308', '#3b82f6', '#22c55e', '#a855f7', '#f97316']
@@ -28,7 +28,13 @@ export function Analytics() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [selectedGroups, setSelectedGroups] = useState([])
-  const [customRange, setCustomRange] = useState({ start: '', end: '' })
+  const [customRange, setCustomRange] = useState(() => {
+    const end = new Date()
+    const start = new Date()
+    start.setDate(start.getDate() - 6)
+    const fmt = (d) => d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+    return { start: fmt(start), end: fmt(end) }
+  })
   const [visibleSections, setVisibleSections] = useState({
     engagementByGroup: true,
     topMessages: true,
@@ -53,9 +59,15 @@ export function Analytics() {
   }, [period, customRange.start, customRange.end, toast])
 
   useEffect(() => {
-    if (period === 'custom' && !customRange.start) return
+    if (period === 'custom') return
     loadAnalytics()
-  }, [loadAnalytics, period, customRange.start])
+  }, [loadAnalytics, period])
+
+  useEffect(() => {
+    if (period === 'custom' && customRange.start && customRange.end) {
+      loadAnalytics()
+    }
+  }, [period, customRange.start, customRange.end, loadAnalytics])
 
   if (loading) {
     return (
@@ -118,7 +130,7 @@ export function Analytics() {
             { id: 'hoje', label: 'Hoje' },
             { id: '7d', label: '7 dias' },
             { id: '30d', label: '30 dias' },
-            { id: 'custom', label: 'Custom' },
+            { id: 'custom', label: 'Personalizado' },
           ].map((p) => (
             <button
               key={p.id}
@@ -134,31 +146,23 @@ export function Analytics() {
         </div>
       </div>
       {period === 'custom' && (
-        <Card>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Input
-              label="Data inicial"
-              type="date"
-              value={customRange.start}
-              onChange={(e) => setCustomRange((prev) => ({ ...prev, start: e.target.value }))}
-            />
-            <Input
-              label="Data final"
-              type="date"
-              value={customRange.end}
-              onChange={(e) => setCustomRange((prev) => ({ ...prev, end: e.target.value }))}
-            />
+        <Card className="space-y-4">
+          <DateRangeCalendar
+            start={customRange.start}
+            end={customRange.end}
+            maxDate={new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })}
+            onChange={setCustomRange}
+          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={loadAnalytics}
+              disabled={!customRange.start}
+              className="rounded-xl border border-accent-500/30 bg-accent-500/15 px-4 py-2 text-sm font-medium text-accent-400 transition hover:bg-accent-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Aplicar período
+            </button>
           </div>
-          <p className="mt-2 text-xs text-stone-500">
-            Intervalo selecionado: {customRange.start || '...'} até {customRange.end || 'hoje'}.
-          </p>
-          <button
-            type="button"
-            onClick={loadAnalytics}
-            className="mt-3 rounded-xl border border-accent-500/30 bg-accent-500/10 px-4 py-2 text-sm font-medium text-accent-400 hover:bg-accent-500/15"
-          >
-            Aplicar período
-          </button>
         </Card>
       )}
 
