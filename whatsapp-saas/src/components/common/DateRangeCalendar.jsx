@@ -44,12 +44,13 @@ function formatShort(ymd) {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
 }
 
-export function DateRangeCalendar({ start = '', end = '', onChange, onApply, maxDate }) {
+export function DateRangeCalendar({ start = '', end = '', onChange, onApply, maxDate, minDate }) {
   const today = useMemo(() => {
     const t = maxDate ? parseYmd(maxDate) : new Date()
     return t || new Date()
   }, [maxDate])
   const todayYmd = toYmd(today)
+  const minYmd = minDate || null
 
   const initialView = parseYmd(end) || parseYmd(start) || today
   const [viewYear, setViewYear] = useState(initialView.getFullYear())
@@ -83,6 +84,7 @@ export function DateRangeCalendar({ start = '', end = '', onChange, onApply, max
   function pickDay(day) {
     const ymd = toYmd(day)
     if (ymd > todayYmd) return
+    if (minYmd && ymd < minYmd) return
 
     if (!startDate || (startDate && endDate)) {
       onChange?.({ start: ymd, end: '' })
@@ -150,7 +152,7 @@ export function DateRangeCalendar({ start = '', end = '', onChange, onApply, max
             return <span key={`e-${idx}`} className="h-7" aria-hidden />
           }
           const ymd = toYmd(day)
-          const disabled = ymd > todayYmd
+          const disabled = ymd > todayYmd || (minYmd && ymd < minYmd)
           const isStart = isSameDay(day, startDate)
           const isEnd = isSameDay(day, endDate)
           const inRange = isInRange(day, startDate, endDate)

@@ -98,10 +98,12 @@ export function Dashboard() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <h2 className="text-lg font-semibold text-stone-100 font-heading mb-4">Mensagens (últimos 7 dias)</h2>
+          <h2 className="text-lg font-semibold text-stone-100 font-heading mb-4">
+            Mensagens (últimos {data.meta?.messageRetentionDays ?? 2} dias)
+          </h2>
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data.messagesLast7Days}>
+              <AreaChart data={data.messagesByDay || data.messagesLast7Days}>
                 <defs>
                   <linearGradient id="gfColor" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#eab308" stopOpacity={0.35} />

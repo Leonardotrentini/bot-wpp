@@ -6,7 +6,7 @@ import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { discoverGroups, getGroups, selectGroups, setGroupsStatus } from '../../services/api.js'
+import { discoverGroups, getGroups, selectGroups, setGroupsStatus, syncGroups } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 const MESSAGE_SYNC_LABELS = {
@@ -65,6 +65,20 @@ export function Groups() {
     } catch (e) {
       const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível procurar grupos.'
       toast.error(typeof msg === 'string' ? msg : 'Não foi possível procurar grupos.')
+    } finally {
+      setActionLoading(false)
+    }
+  }, [applyData, toast])
+
+  const startReimport = useCallback(async () => {
+    setActionLoading(true)
+    try {
+      const { data } = await syncGroups()
+      applyData(data)
+      toast.info(data.import?.message || 'Reimportação dos últimos 2 dias iniciada.')
+    } catch (e) {
+      const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível reimportar.'
+      toast.error(typeof msg === 'string' ? msg : 'Não foi possível reimportar.')
     } finally {
       setActionLoading(false)
     }
@@ -192,6 +206,16 @@ export function Groups() {
           >
             <Download className={`h-4 w-4 ${importActive ? 'animate-pulse' : ''}`} />
             {importActive ? 'Importando…' : `Conectar e importar (${selected.size})`}
+          </Button>
+          <Button
+            variant="secondary"
+            className="gap-2 shrink-0"
+            onClick={startReimport}
+            disabled={loading || actionLoading || busy || inCooldown}
+            title={`Baixa de novo as mensagens dos últimos ${imp?.backfillDays || 2} dias nos grupos conectados`}
+          >
+            <RefreshCw className={`h-4 w-4 ${importActive ? 'animate-spin' : ''}`} />
+            Reimportar {imp?.backfillDays || 2} dias
           </Button>
         </div>
       </div>

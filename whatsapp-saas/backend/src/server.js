@@ -45,8 +45,15 @@ const PARTICIPANTS_SYNC_MIN_INTERVAL_MS = Number(process.env.PARTICIPANTS_SYNC_M
 const GROUP_SYNC_ITEM_DELAY_MS = Number(process.env.GROUP_SYNC_ITEM_DELAY_MS || 350)
 const activeGroupSyncs = new Set()
 
+const {
+  MESSAGE_RETENTION_DAYS,
+  getRetentionCutoffMs,
+  getRetentionCutoffDate,
+  pruneUserMessagesBeyondRetention,
+} = require("./lib/messageRetention")
+
 // Importação de mensagens: 1 grupo por vez, só os últimos N dias, com pausas para não estourar o WhatsApp.
-const MESSAGE_BACKFILL_DAYS = Number(process.env.MESSAGE_BACKFILL_DAYS || 2)
+const MESSAGE_BACKFILL_DAYS = MESSAGE_RETENTION_DAYS
 const MESSAGE_SYNC_PAGE_SIZE = Number(process.env.MESSAGE_SYNC_PAGE_SIZE || 50)
 const MESSAGE_SYNC_MAX_PAGES = Number(process.env.MESSAGE_SYNC_MAX_PAGES || 10)
 const MESSAGE_SYNC_PAGE_DELAY_MS = Number(process.env.MESSAGE_SYNC_PAGE_DELAY_MS || 1500)
@@ -809,7 +816,11 @@ async function runMessageImport(userId) {
       orderBy: { name: "asc" },
     })
     const total = monitoredGroups.length
-    const cutoffMs = Date.now() - MESSAGE_BACKFILL_DAYS * 24 * 60 * 60 * 1000
+    const cutoffMs = getRetentionCutoffMs()
+
+    await pruneUserMessagesBeyondRetention(userId).catch((err) => {
+      console.warn("[msg-import] prune:", err?.message || err)
+    })
 
     if (!total) {
       await updateConnectionSync(userId, {
@@ -865,6 +876,8 @@ async function runMessageImport(userId) {
 
       if (done < total) await wait(MESSAGE_SYNC_GROUP_DELAY_MS)
     }
+
+    await pruneUserMessagesBeyondRetention(userId).catch(() => {})
 
     await updateConnectionSync(userId, {
       msgImportStatus: "READY",
@@ -1011,8 +1024,9 @@ app.get("/api/groups/:id/messages", authMiddleware, async (req, res) => {
     if (!group) return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado no cache." })
 
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100))
+    const retentionStart = getRetentionCutoffDate()
     const rows = await prisma.whatsAppMessage.findMany({
-      where: { groupId: group.id },
+      where: { groupId: group.id, timestamp: { gte: retentionStart } },
       orderBy: { timestamp: "desc" },
       take: limit,
     })
@@ -1336,7 +1350,7 @@ app.post("/api/members/sync-participants", authMiddleware, async (req, res) => {
 
 app.get("/api/analytics", authMiddleware, async (req, res) => {
   try {
-    const period = typeof req.query.period === "string" ? req.query.period : "7d"
+    const period = typeof req.query.period === "string" ? req.query.period : "2d"
     const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined
     const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined
     const data = await buildAnalytics(req.user.sub, period, startDate, endDate)
@@ -2249,6 +2263,7 @@ async function storeIncomingMessages(instanceName, body) {
 
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue
+    if (mapped.timestamp.getTime() < getRetentionCutoffMs()) continue
 
     await prisma.whatsAppMessage.upsert({
       where: { groupId_messageId: { groupId: group.id, messageId: mapped.messageId } },

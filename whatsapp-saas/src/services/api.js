@@ -323,7 +323,7 @@ export async function getMemberDetails(id) {
   return mockResponse({ member: m })
 }
 
-export async function getAnalytics(period = '7d', { startDate, endDate } = {}) {
+export async function getAnalytics(period = '2d', { startDate, endDate } = {}) {
   if (resolveUseRealApi()) {
     const params = { period }
     if (startDate) params.startDate = startDate

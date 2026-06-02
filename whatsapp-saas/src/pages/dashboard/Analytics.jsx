@@ -24,17 +24,18 @@ const PIE_COLORS = ['#eab308', '#3b82f6', '#22c55e', '#a855f7', '#f97316']
 
 export function Analytics() {
   const toast = useToast()
-  const [period, setPeriod] = useState('7d')
+  const [period, setPeriod] = useState('2d')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [selectedGroups, setSelectedGroups] = useState([])
   const [customRange, setCustomRange] = useState(() => {
     const end = new Date()
     const start = new Date()
-    start.setDate(start.getDate() - 6)
+    start.setDate(start.getDate() - 1)
     const fmt = (d) => d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
     return { start: fmt(start), end: fmt(end) }
   })
+
   const [visibleSections, setVisibleSections] = useState({
     engagementByGroup: true,
     topMessages: true,
@@ -113,6 +114,13 @@ export function Analytics() {
     return !gid || idSet.has(gid)
   })
 
+  const retentionDays = data.meta?.messageRetentionDays ?? 2
+  const retentionMinDate = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() - retentionDays)
+    return d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+  })()
+
   function toggleGroup(groupId) {
     setSelectedGroups((prev) => (prev.includes(groupId) ? prev.filter((id) => id !== groupId) : [...prev, groupId]))
   }
@@ -124,13 +132,17 @@ export function Analytics() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <h2 className="text-xl font-semibold text-stone-50">Analytics</h2>
+        <div>
+          <h2 className="text-xl font-semibold text-stone-50">Analytics</h2>
+          <p className="mt-1 text-xs text-stone-500">
+            Dados de mensagens dos últimos {retentionDays} dias (importados em Grupos + envios pela plataforma).
+          </p>
+        </div>
         <div className="flex flex-col items-start gap-2 sm:items-end">
           <div className="flex flex-wrap gap-1.5">
             {[
               { id: 'hoje', label: 'Hoje' },
-              { id: '7d', label: '7 dias' },
-              { id: '30d', label: '30 dias' },
+              { id: '2d', label: `${retentionDays} dias` },
               { id: 'custom', label: 'Personalizado' },
             ].map((p) => (
               <button
@@ -151,6 +163,7 @@ export function Analytics() {
             <DateRangeCalendar
               start={customRange.start}
               end={customRange.end}
+              minDate={retentionMinDate}
               maxDate={new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })}
               onChange={setCustomRange}
               onApply={loadAnalytics}
@@ -161,8 +174,8 @@ export function Analytics() {
 
       {data.meta && !data.meta.hasActivity && (
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
-          Nenhuma mensagem no período. Envie pelo app ou, em <strong>Grupos</strong>, sincronize o histórico do WhatsApp para
-          incluir conversas antigas nos gráficos.
+          Nenhuma mensagem nos últimos {retentionDays} dias. Em <strong>Grupos</strong>, use{' '}
+          <strong>Conectar e importar</strong> para baixar o histórico recente do WhatsApp.
         </p>
       )}
       {data.meta?.hasActivity && !data.meta?.messagesImported && (data.meta?.outboundCount || 0) > 0 && (

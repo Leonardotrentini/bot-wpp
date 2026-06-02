@@ -1,4 +1,5 @@
 const { prisma } = require("./prisma")
+const { MESSAGE_RETENTION_DAYS, clampRangeToRetention } = require("./messageRetention")
 
 const PT_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
 const OUTBOUND_OK_STATUSES = ["enviado", "entregue", "lido"]
@@ -70,19 +71,20 @@ async function loadUnifiedGroupMessages(userId, groups, start, end) {
 }
 
 function periodToRange(period, startDate, endDate) {
-  const end = endDate ? new Date(`${endDate}T23:59:59.999-03:00`) : new Date()
+  const now = new Date()
+  const end = endDate ? new Date(`${endDate}T23:59:59.999-03:00`) : now
   let start
   if (period === "hoje") {
     start = new Date(`${end.toISOString().slice(0, 10)}T00:00:00.000-03:00`)
-  } else if (period === "30d") {
-    start = new Date(end.getTime() - 30 * 86400000)
   } else if (period === "custom" && startDate) {
     start = new Date(`${startDate}T00:00:00.000-03:00`)
+  } else if (period === "7d" || period === "30d") {
+    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
   } else {
-    start = new Date(end.getTime() - 7 * 86400000)
+    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
   }
   if (start > end) start = new Date(end.getTime() - 86400000)
-  return { start, end }
+  return clampRangeToRetention(start, end, now)
 }
 
 function dayKeyInSp(date) {
@@ -198,8 +200,8 @@ function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
   })
 }
 
-async function buildAnalytics(userId, period = "7d", startDate, endDate) {
-  const { start, end } = periodToRange(period, startDate, endDate)
+async function buildAnalytics(userId, period = "2d", startDate, endDate) {
+  const { start, end, retentionDays } = periodToRange(period, startDate, endDate)
 
   const groups = await prisma.whatsAppGroup.findMany({
     where: { userId, status: "ativo" },
@@ -327,6 +329,7 @@ async function buildAnalytics(userId, period = "7d", startDate, endDate) {
       messagesImported: importedCount > 0,
       outboundCount,
       hasActivity: totalMessages > 0,
+      messageRetentionDays: retentionDays,
       rangeStart: start.toISOString(),
       rangeEnd: end.toISOString(),
     },
@@ -347,7 +350,13 @@ function emptyAnalytics(period) {
     topMembers: [],
     topMessages: [],
     groupComparison: [],
-    meta: { groupsCount: 0, messagesImported: false, outboundCount: 0, hasActivity: false },
+    meta: {
+      groupsCount: 0,
+      messagesImported: false,
+      outboundCount: 0,
+      hasActivity: false,
+      messageRetentionDays: MESSAGE_RETENTION_DAYS,
+    },
   }
 }
 
@@ -360,7 +369,11 @@ async function buildDashboard(userId) {
 
   const now = new Date()
   const todayStart = new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000-03:00`)
-  const last7Start = new Date(now.getTime() - 7 * 86400000)
+  const { start: retentionStart } = clampRangeToRetention(
+    new Date(now.getTime() - MESSAGE_RETENTION_DAYS * 86400000),
+    now,
+    now,
+  )
   const last24h = new Date(now.getTime() - 86400000)
 
   const groupDbIds = groups.map((g) => g.id)
@@ -373,7 +386,7 @@ async function buildDashboard(userId) {
     status: { in: OUTBOUND_OK_STATUSES },
   })
 
-  const [messagesTodayWa, messagesTodayOut, messagesLast7Wa, messagesLast7Out, topGroupsWa, topGroupsOut, recentOutbound, recentAutomations] =
+  const [messagesTodayWa, messagesTodayOut, messagesInWindowWa, messagesInWindowOut, topGroupsWa, topGroupsOut, recentOutbound, recentAutomations] =
     await Promise.all([
       groupDbIds.length
         ? prisma.whatsAppMessage.count({
@@ -383,13 +396,13 @@ async function buildDashboard(userId) {
       groupJids.length ? prisma.outboundMessage.count({ where: outboundWhere(todayStart) }) : 0,
       groupDbIds.length
         ? prisma.whatsAppMessage.findMany({
-            where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: last7Start } },
+            where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: retentionStart } },
             select: { timestamp: true },
           })
         : [],
       groupJids.length
         ? prisma.outboundMessage.findMany({
-            where: outboundWhere(last7Start),
+            where: outboundWhere(retentionStart),
             select: { sentAt: true },
           })
         : [],
@@ -436,19 +449,19 @@ async function buildDashboard(userId) {
   const messagesToday = messagesTodayWa + messagesTodayOut
 
   const dayBuckets = new Map()
-  for (const m of messagesLast7Wa) {
+  for (const m of messagesInWindowWa) {
     const dk = dayKeyInSp(m.timestamp)
     dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
   }
-  for (const m of messagesLast7Out) {
+  for (const m of messagesInWindowOut) {
     const dk = dayKeyInSp(m.sentAt)
     dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
   }
-  const messagesLast7Days = []
-  const cursor = new Date(last7Start)
+  const messagesByDay = []
+  const cursor = new Date(retentionStart)
   while (cursor <= now) {
     const key = dayKeyInSp(cursor)
-    messagesLast7Days.push({
+    messagesByDay.push({
       day: PT_DAYS[cursor.getDay()],
       count: dayBuckets.get(key) || 0,
     })
@@ -508,14 +521,16 @@ async function buildDashboard(userId) {
     totalMembers,
     messagesToday,
     engagementRate,
-    messagesLast7Days,
+    messagesByDay,
+    messagesLast7Days: messagesByDay,
     topGroups,
     recentActivities: recentActivities.slice(0, 6).map(({ id, text, time }) => ({ id, text, time })),
     meta: {
       whatsappConnected: groups.length > 0,
-      hasImportedMessages: messagesLast7Wa.length + messagesLast7Out.length > 0,
+      hasImportedMessages: messagesInWindowWa.length + messagesInWindowOut.length > 0,
+      messageRetentionDays: MESSAGE_RETENTION_DAYS,
     },
   }
 }
 
-module.exports = { buildAnalytics, buildDashboard, periodToRange }
+module.exports = { buildAnalytics, buildDashboard, periodToRange, MESSAGE_RETENTION_DAYS }
