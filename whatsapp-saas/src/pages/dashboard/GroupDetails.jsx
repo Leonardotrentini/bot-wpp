@@ -158,7 +158,6 @@ export function GroupDetails() {
   const [tagsToRemove, setTagsToRemove] = useState(() => new Set())
   const [inlineNewTag, setInlineNewTag] = useState('')
   const [statusRules, setStatusRules] = useState(() => defaultStatusRules())
-  const [playbookName, setPlaybookName] = useState('Onboarding D0-D7')
   const [newAdmin, setNewAdmin] = useState('')
   const [x1Automation, setX1Automation] = useState(() => defaultX1Automation())
   const catalogExtrasRef = useRef([])
@@ -547,17 +546,14 @@ export function GroupDetails() {
     }
   }
 
-  const executeBulkAction = (action) => {
+  const executeMoveBulk = () => {
     if (selected.size === 0) {
       toast.error('Selecione membros para executar ação em massa.')
       return
     }
-    const msg =
-      action === 'move'
-        ? `${selected.size} membro(s) movidos para "Comunidade VIP" (simulado).`
-        : `${selected.size} membro(s) adicionados ao playbook "${playbookName}" (simulado).`
+    const msg = `${selected.size} membro(s) movidos para "Comunidade VIP" (simulado).`
     toast.success(msg)
-    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: `bulk.${action}`, details: msg }, ...auditLogRef.current].slice(0, 50)
+    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'bulk.move', details: msg }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
     persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
   }
@@ -942,19 +938,7 @@ export function GroupDetails() {
             <Button size="sm" variant="outline" className="gap-1" onClick={() => setBulkStatus('inativo')}>
               Marcar inativo
             </Button>
-            <Select
-              className="max-w-[180px]"
-              value={playbookName}
-              onChange={(e) => setPlaybookName(e.target.value)}
-            >
-              <option>Onboarding D0-D7</option>
-              <option>Reativação 7 dias</option>
-              <option>Oferta atacado 48h</option>
-            </Select>
-            <Button size="sm" variant="secondary" onClick={() => executeBulkAction('playbook')}>
-              Aplicar playbook
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => executeBulkAction('move')}>
+            <Button size="sm" variant="outline" onClick={executeMoveBulk}>
               Mover de grupo
             </Button>
           </div>
