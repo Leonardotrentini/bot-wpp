@@ -46,10 +46,6 @@ function mergeParticipantStatus(current, incoming) {
   return "ativo"
 }
 
-function isLeadParticipant(p) {
-  return p.role !== "admin" && p.role !== "superadmin"
-}
-
 /** Novos leads, saídas e % ativos no período (participantes únicos por JID). */
 function computeLeadMetrics(groups, start, end) {
   const seenNew = new Set()
@@ -63,7 +59,7 @@ function computeLeadMetrics(groups, start, end) {
 
     for (const p of g.participants || []) {
       const jid = p.participantJid
-      if (!jid || !isLeadParticipant(p)) continue
+      if (!jid) continue
 
       if (isInRange(p.createdAt, effectiveStart, end)) seenNew.add(jid)
       if (isInRange(p.leftAt, start, end)) seenExit.add(jid)

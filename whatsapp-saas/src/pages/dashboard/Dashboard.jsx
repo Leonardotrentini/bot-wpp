@@ -228,8 +228,8 @@ export function Dashboard() {
       value: `${Number(activeLeadsPct).toFixed(1)}%`,
       hint:
         (data.inactiveLeads ?? 0) > 0
-          ? `${data.activeLeads ?? 0} membro(s) ativo(s) · ${data.inactiveLeads} inativo(s) (sem admins)`
-          : `${data.activeLeads ?? 0} membro(s) ativo(s) (sem admins)`,
+          ? `${data.activeLeads ?? 0} membro(s) ativo(s) · ${data.inactiveLeads} inativo(s)`
+          : `${data.activeLeads ?? 0} membro(s) ativo(s)`,
       icon: Users,
     },
   ]
