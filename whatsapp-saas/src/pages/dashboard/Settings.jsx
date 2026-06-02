@@ -1,110 +1,110 @@
-import { useState } from 'react'
-import { Tabs } from '../../components/common/Tabs.jsx'
+import { useEffect, useRef, useState } from 'react'
 import { Card } from '../../components/common/Card.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Button } from '../../components/common/Button.jsx'
-import { Toggle } from '../../components/common/Toggle.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
+import { updateProfile } from '../../services/api.js'
 import { mockUser } from '../../utils/mockData.js'
 
 export function Settings() {
   const toast = useToast()
-  const { user } = useAuth()
-  const [tab, setTab] = useState('perfil')
-  const [notif, setNotif] = useState({ email: true, push: false, whatsapp: true })
-  const [teamEmail, setTeamEmail] = useState('')
+  const { user, setCurrentUser } = useAuth()
+  const photoInputRef = useRef(null)
+  const [form, setForm] = useState({
+    name: user?.name || '',
+    email: user?.email || '',
+    phone: user?.phone || '',
+    newPassword: '',
+    avatar: user?.avatar || mockUser.avatar,
+  })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    setForm((prev) => ({
+      ...prev,
+      name: user?.name || '',
+      email: user?.email || '',
+      phone: user?.phone || '',
+      avatar: user?.avatar || prev.avatar || mockUser.avatar,
+    }))
+  }, [user?.name, user?.email, user?.phone, user?.avatar])
+
+  const onField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }))
+
+  const onPickPhoto = (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione uma imagem válida.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('A foto deve ter no máximo 2MB.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => onField('avatar', String(reader.result || ''))
+    reader.onerror = () => toast.error('Não foi possível ler a imagem.')
+    reader.readAsDataURL(file)
+  }
+
+  const saveProfile = async () => {
+    const name = form.name.trim()
+    const email = form.email.trim().toLowerCase()
+    const phone = form.phone.trim()
+    const newPassword = form.newPassword.trim()
+
+    if (name.length < 2) return toast.error('Nome deve ter pelo menos 2 caracteres.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error('Informe um e-mail válido.')
+    if (newPassword && newPassword.length < 6) return toast.error('A nova senha deve ter no mínimo 6 caracteres.')
+
+    try {
+      setSaving(true)
+      const data = await updateProfile({
+        name,
+        email,
+        phone: phone || null,
+        avatar: form.avatar || null,
+        ...(newPassword ? { newPassword } : {}),
+      })
+      if (data?.user) {
+        localStorage.setItem('vg_auth', JSON.stringify(data.user))
+        setCurrentUser(data.user)
+      }
+      setForm((prev) => ({ ...prev, newPassword: '' }))
+      toast.success('Perfil atualizado com sucesso.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar perfil.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="space-y-6 max-w-3xl">
-      <Tabs
-        tabs={[
-          { id: 'perfil', label: 'Perfil' },
-          { id: 'plano', label: 'Plano' },
-          { id: 'notif', label: 'Notificações' },
-          { id: 'equipe', label: 'Equipe' },
-        ]}
-        active={tab}
-        onChange={setTab}
-      />
-
-      {tab === 'perfil' && (
-        <Card className="space-y-4">
-          <div className="flex items-center gap-4">
-            <img src={user?.avatar || mockUser.avatar} alt="" className="h-16 w-16 rounded-2xl border border-brand-700" />
-            <Button variant="secondary" size="sm" onClick={() => toast.info('Upload simulado.')}>Alterar foto</Button>
-          </div>
-          <Input label="Nome" defaultValue={user?.name} />
-          <Input label="E-mail" type="email" defaultValue={user?.email} />
-          <Input label="Telefone" defaultValue={user?.phone} />
-          <Input label="Nova senha" type="password" placeholder="Deixe em branco para manter" />
-          <Button onClick={() => toast.success('Perfil atualizado (simulado).')}>Salvar</Button>
-        </Card>
-      )}
-
-      {tab === 'plano' && (
-        <Card className="space-y-4">
-          <p className="text-sm text-stone-400">Plano atual</p>
-          <p className="text-2xl font-bold text-accent-400">{user?.plan || 'Pro'}</p>
-          <div className="grid gap-3 sm:grid-cols-3 mt-4">
-            {[
-              { k: 'Grupos', v: '8 / 15' },
-              { k: 'Membros', v: '2.847 / 10.000' },
-              { k: 'Mensagens/mês', v: '42k / 200k' },
-            ].map((x) => (
-              <div key={x.k} className="rounded-xl border border-brand-800 p-3">
-                <p className="text-xs text-stone-500">{x.k}</p>
-                <p className="text-lg font-semibold text-stone-50 mt-1">{x.v}</p>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2 pt-4">
-            <Button variant="secondary" onClick={() => toast.info('Fluxo de upgrade simulado.')}>Upgrade</Button>
-            <Button variant="outline" onClick={() => toast.info('Downgrade simulado.')}>Downgrade</Button>
-          </div>
-        </Card>
-      )}
-
-      {tab === 'notif' && (
-        <Card className="space-y-6">
-          <Toggle checked={notif.email} onChange={(v) => setNotif((n) => ({ ...n, email: v }))} label="Notificações por e-mail" />
-          <Toggle checked={notif.push} onChange={(v) => setNotif((n) => ({ ...n, push: v }))} label="Push no navegador" />
-          <Toggle checked={notif.whatsapp} onChange={(v) => setNotif((n) => ({ ...n, whatsapp: v }))} label="Alertas no WhatsApp" />
-          <Button onClick={() => toast.success('Preferências salvas.')}>Salvar</Button>
-        </Card>
-      )}
-
-      {tab === 'equipe' && (
-        <Card className="space-y-4">
-          <p className="text-sm text-stone-400">Convide membros da equipe e defina permissões (admin, editor, leitura).</p>
-          <Input label="E-mail do convidado" type="email" value={teamEmail} onChange={(e) => setTeamEmail(e.target.value)} placeholder="colega@empresa.com.br" />
-          <SelectPerm />
-          <Button onClick={() => { toast.success('Convite enviado (simulado).'); setTeamEmail('') }}>Adicionar membro</Button>
-          <ul className="mt-6 divide-y divide-brand-800 border-t border-brand-800 pt-4 text-sm">
-            <li className="flex justify-between py-2">
-              <span className="text-stone-50">{user?.email}</span>
-              <span className="text-accent-400">Admin</span>
-            </li>
-            <li className="flex justify-between py-2 text-stone-400">
-              <span>maria@empresa.com.br</span>
-              <span>Editor</span>
-            </li>
-          </ul>
-        </Card>
-      )}
+      <Card className="space-y-4">
+        <div className="flex items-center gap-4">
+          <img src={form.avatar || mockUser.avatar} alt="" className="h-16 w-16 rounded-2xl border border-brand-700 object-cover" />
+          <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={onPickPhoto} />
+          <Button variant="secondary" size="sm" onClick={() => photoInputRef.current?.click()}>
+            Alterar foto
+          </Button>
+        </div>
+        <Input label="Nome" value={form.name} onChange={(e) => onField('name', e.target.value)} />
+        <Input label="E-mail" type="email" value={form.email} onChange={(e) => onField('email', e.target.value)} />
+        <Input label="Telefone" value={form.phone} onChange={(e) => onField('phone', e.target.value)} />
+        <Input
+          label="Nova senha"
+          type="password"
+          value={form.newPassword}
+          onChange={(e) => onField('newPassword', e.target.value)}
+          placeholder="Deixe em branco para manter"
+        />
+        <Button onClick={saveProfile} disabled={saving}>
+          {saving ? 'Salvando...' : 'Salvar'}
+        </Button>
+      </Card>
     </div>
-  )
-}
-
-function SelectPerm() {
-  return (
-    <label className="block w-full">
-      <span className="mb-1.5 block text-sm font-medium text-stone-300">Permissão</span>
-      <select className="w-full rounded-xl border border-brand-700 bg-brand-900/50 px-4 py-2.5 text-sm text-stone-50 outline-none focus:border-accent-500/60">
-        <option value="admin">Admin</option>
-        <option value="editor">Editor</option>
-        <option value="read">Somente leitura</option>
-      </select>
-    </label>
   )
 }

@@ -1,8 +1,10 @@
 const express = require("express")
 const { z } = require("zod")
+const bcrypt = require("bcryptjs")
 const { prisma } = require("../lib/prisma")
 const { authMiddleware } = require("../lib/auth")
 const { requireAdmin } = require("../lib/adminAuth")
+const { ensureDefaultPlans } = require("../lib/ensureBillingDefaults")
 
 const router = express.Router()
 
@@ -81,6 +83,58 @@ router.patch("/users/:id", authMiddleware, requireAdmin, async (req, res) => {
   })
 
   res.json({ user: { ...user, createdAt: user.createdAt.toISOString() } })
+})
+
+router.post("/users", authMiddleware, requireAdmin, async (req, res) => {
+  const schema = z.object({
+    name: z.string().trim().min(2),
+    email: z.string().trim().email(),
+    password: z.string().min(6),
+    role: z.enum(["USER", "ADMIN"]).optional().default("USER"),
+  })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: "VALIDATION_ERROR",
+      message: parsed.error.issues?.[0]?.message || "Dados inválidos.",
+    })
+  }
+
+  const { name, email, password, role } = parsed.data
+  const exists = await prisma.user.findUnique({ where: { email } })
+  if (exists) {
+    return res.status(409).json({ error: "EMAIL_IN_USE", message: "E-mail já cadastrado." })
+  }
+
+  await ensureDefaultPlans()
+  const freePlan = await prisma.plan.findUnique({ where: { slug: "free" } })
+  if (!freePlan) {
+    return res.status(503).json({
+      error: "NO_DEFAULT_PLAN",
+      message: "Não foi possível criar o plano padrão. Verifique a base de dados.",
+    })
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10)
+  const created = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        name,
+        email,
+        passwordHash,
+        role,
+      },
+      select: { id: true, name: true, email: true, role: true, createdAt: true },
+    })
+    await tx.subscription.create({
+      data: { userId: user.id, planId: freePlan.id, status: "ACTIVE" },
+    })
+    return user
+  })
+
+  res.status(201).json({
+    user: { ...created, createdAt: created.createdAt.toISOString(), plan: { id: freePlan.id, name: freePlan.name, slug: freePlan.slug } },
+  })
 })
 
 router.get("/plans", authMiddleware, requireAdmin, async (_req, res) => {

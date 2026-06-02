@@ -134,7 +134,14 @@ app.post("/api/auth/register", async (req, res) => {
 
   const token = signToken(user)
   return res.status(201).json({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone || "",
+      avatar: user.avatarUrl || null,
+      role: user.role,
+    },
     token,
   })
 })
@@ -156,7 +163,14 @@ app.post("/api/auth/login", async (req, res) => {
 
   const token = signToken(user)
   return res.json({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone || "",
+      avatar: user.avatarUrl || null,
+      role: user.role,
+    },
     token,
   })
 })
@@ -181,10 +195,73 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
       id: user.id,
       name: user.name,
       email: user.email,
+      phone: user.phone || "",
+      avatar: user.avatarUrl || null,
       role: user.role,
       plan: sub ? { id: sub.plan.id, name: sub.plan.name, slug: sub.plan.slug, maxGroups: sub.plan.maxGroups } : null,
     },
   })
+})
+
+app.put("/api/auth/profile", authMiddleware, async (req, res) => {
+  const schema = z.object({
+    name: z.string().trim().min(2).optional(),
+    email: z.string().trim().email().optional(),
+    phone: z.string().trim().max(32).optional().nullable(),
+    avatar: z.string().max(1_000_000).optional().nullable(),
+    newPassword: z.string().min(6).max(128).optional(),
+  })
+  const parsed = schema.safeParse(req.body || {})
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: "VALIDATION_ERROR",
+      message: parsed.error.issues?.[0]?.message || "Dados inválidos.",
+    })
+  }
+
+  const payload = parsed.data
+  if (!Object.values(payload).some((v) => v !== undefined)) {
+    return res.status(400).json({ error: "VALIDATION_ERROR", message: "Nenhum campo informado para atualizar." })
+  }
+
+  try {
+    if (payload.email) {
+      const emailInUse = await prisma.user.findFirst({
+        where: { email: payload.email, id: { not: req.user.sub } },
+        select: { id: true },
+      })
+      if (emailInUse) {
+        return res.status(409).json({ error: "EMAIL_IN_USE", message: "Este e-mail já está em uso." })
+      }
+    }
+
+    const data = {}
+    if (payload.name !== undefined) data.name = payload.name
+    if (payload.email !== undefined) data.email = payload.email
+    if (payload.phone !== undefined) data.phone = payload.phone || null
+    if (payload.avatar !== undefined) data.avatarUrl = payload.avatar || null
+    if (payload.newPassword) data.passwordHash = await bcrypt.hash(payload.newPassword, 10)
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.sub },
+      data,
+      select: { id: true, name: true, email: true, phone: true, avatarUrl: true, role: true },
+    })
+
+    return res.json({
+      user: {
+        id: updated.id,
+        name: updated.name,
+        email: updated.email,
+        phone: updated.phone || "",
+        avatar: updated.avatarUrl || null,
+        role: updated.role,
+      },
+    })
+  } catch (err) {
+    console.error("auth profile update:", err)
+    return res.status(500).json({ error: "INTERNAL_ERROR", message: "Falha ao atualizar perfil." })
+  }
 })
 
 function fallbackGroupImage(seed) {
@@ -1345,16 +1422,17 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
 app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
   try {
     const groupJid = decodeURIComponent(req.params.id)
+    const jsonRecord = () => z.record(z.string(), z.unknown())
     const schema = z
       .object({
-        settings: z.record(z.any()).optional(),
-        governance: z.record(z.any()).optional(),
-        statusRules: z.record(z.any()).optional(),
-        routines: z.array(z.any()).optional(),
-        x1Automation: z.record(z.any()).optional(),
-        auditLog: z.array(z.any()).optional(),
-        snapshots: z.array(z.any()).optional(),
-        catalogExtras: z.array(z.any()).optional(),
+        settings: jsonRecord().optional(),
+        governance: jsonRecord().optional(),
+        statusRules: jsonRecord().optional(),
+        routines: z.array(z.unknown()).optional(),
+        x1Automation: jsonRecord().optional(),
+        auditLog: z.array(z.unknown()).optional(),
+        snapshots: z.array(z.unknown()).optional(),
+        catalogExtras: z.array(z.unknown()).optional(),
       })
       .refine((val) => Object.values(val).some((x) => x !== undefined), {
         message: "Informe ao menos uma seção para salvar.",
@@ -1407,7 +1485,18 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
       },
     })
   } catch (err) {
-    return handleEvolutionError(res, err)
+    if (err?.code?.startsWith?.("P")) {
+      console.error("group config save:", err)
+      return res.status(500).json({
+        error: "DATABASE_ERROR",
+        message: "Não foi possível salvar as configurações do grupo. Verifique se a base de dados está atualizada.",
+      })
+    }
+    console.error("group config save:", err)
+    return res.status(500).json({
+      error: "INTERNAL_ERROR",
+      message: err?.message || "Falha ao salvar configurações do grupo.",
+    })
   }
 })
 

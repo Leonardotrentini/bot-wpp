@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Shield } from 'lucide-react'
+import { Shield, UserPlus } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Spinner } from '../../components/common/Spinner.jsx'
-import { getAdminUsers, patchAdminUser } from '../../services/api.js'
+import { Input } from '../../components/common/Input.jsx'
+import { Modal } from '../../components/common/Modal.jsx'
+import { createAdminUser, getAdminUsers, patchAdminUser } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
 export function Admin() {
@@ -15,6 +17,14 @@ export function Admin() {
   const [q, setQ] = useState('')
   const [appliedQ, setAppliedQ] = useState('')
   const [savingId, setSavingId] = useState(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [createForm, setCreateForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'USER',
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -47,6 +57,38 @@ export function Admin() {
     }
   }
 
+  function resetCreateForm() {
+    setCreateForm({ name: '', email: '', password: '', role: 'USER' })
+  }
+
+  async function onCreateUser() {
+    const name = createForm.name.trim()
+    const email = createForm.email.trim().toLowerCase()
+    const password = createForm.password
+    if (name.length < 2) return toast.error('Nome deve ter pelo menos 2 caracteres.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error('Informe um login (e-mail) válido.')
+    if (password.length < 6) return toast.error('Senha deve ter pelo menos 6 caracteres.')
+
+    setCreating(true)
+    try {
+      await createAdminUser({
+        name,
+        email,
+        password,
+        role: createForm.role,
+      })
+      toast.success('Usuário criado com sucesso.')
+      setCreateOpen(false)
+      resetCreateForm()
+      setPage(1)
+      await load()
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Falha ao criar usuário.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -60,6 +102,10 @@ export function Admin() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" type="button" onClick={() => setCreateOpen(true)}>
+            <UserPlus className="h-4 w-4" />
+            Novo usuário
+          </Button>
           <input
             type="search"
             placeholder="Pesquisar e-mail ou nome…"
@@ -146,6 +192,67 @@ export function Admin() {
           </Button>
         </div>
       )}
+
+      <Modal
+        isOpen={createOpen}
+        onClose={() => {
+          if (creating) return
+          setCreateOpen(false)
+        }}
+        title="Adicionar novo usuário"
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={creating}
+              onClick={() => {
+                setCreateOpen(false)
+                resetCreateForm()
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button type="button" disabled={creating} onClick={onCreateUser}>
+              {creating ? 'Criando...' : 'Criar usuário'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Input
+            label="Nome"
+            value={createForm.name}
+            onChange={(e) => setCreateForm((prev) => ({ ...prev, name: e.target.value }))}
+            placeholder="Nome completo"
+          />
+          <Input
+            label="Login (e-mail)"
+            type="email"
+            value={createForm.email}
+            onChange={(e) => setCreateForm((prev) => ({ ...prev, email: e.target.value }))}
+            placeholder="usuario@empresa.com"
+          />
+          <Input
+            label="Senha"
+            type="password"
+            value={createForm.password}
+            onChange={(e) => setCreateForm((prev) => ({ ...prev, password: e.target.value }))}
+            placeholder="Mínimo 6 caracteres"
+          />
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-stone-300">Função</span>
+            <select
+              value={createForm.role}
+              onChange={(e) => setCreateForm((prev) => ({ ...prev, role: e.target.value }))}
+              className="w-full rounded-xl border border-brand-700 bg-brand-900/50 px-4 py-2.5 text-sm text-stone-50 outline-none focus:border-accent-500/60"
+            >
+              <option value="USER">USER</option>
+              <option value="ADMIN">ADMIN</option>
+            </select>
+          </label>
+        </div>
+      </Modal>
     </div>
   )
 }

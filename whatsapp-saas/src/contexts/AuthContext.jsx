@@ -8,6 +8,12 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => loadSessionFromStorage())
 
   const login = (u) => setUser(u)
+  const setCurrentUser = (updater) => {
+    setUser((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      return next
+    })
+  }
   const logout = () => {
     apiLogout()
     setUser(null)
@@ -29,6 +35,7 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       login,
+      setCurrentUser,
       logout,
       isAuthenticated: !!user,
       isAdmin: user?.role === 'ADMIN',

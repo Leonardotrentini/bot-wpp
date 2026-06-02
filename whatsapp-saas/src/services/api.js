@@ -78,6 +78,20 @@ export async function fetchMe() {
   return data
 }
 
+export async function updateProfile(payload = {}) {
+  if (resolveUseRealApi()) {
+    const { data } = await apiClient.put('/auth/profile', payload)
+    sessionUser = { ...(sessionUser || {}), ...(data?.user || {}) }
+    localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+    return data
+  }
+  await delay()
+  sessionUser = { ...(sessionUser || mockUser), ...payload }
+  if (payload.newPassword) delete sessionUser.newPassword
+  localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+  return { user: sessionUser }
+}
+
 export async function getAdminUsers(params = {}) {
   if (!resolveUseRealApi()) {
     await delay()
@@ -105,6 +119,25 @@ export async function getAdminUsers(params = {}) {
 export async function patchAdminUser(userId, body) {
   if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
   return apiClient.patch(`/admin/users/${userId}`, body)
+}
+
+export async function createAdminUser(body) {
+  if (!resolveUseRealApi()) {
+    await delay()
+    return {
+      data: {
+        user: {
+          id: `u-${Date.now()}`,
+          name: body?.name || 'Novo usuário',
+          email: body?.email || 'novo@exemplo.com',
+          role: body?.role || 'USER',
+          createdAt: new Date().toISOString(),
+          plan: { name: 'Grátis', slug: 'free' },
+        },
+      },
+    }
+  }
+  return apiClient.post('/admin/users', body)
 }
 
 export function loadSessionFromStorage() {
