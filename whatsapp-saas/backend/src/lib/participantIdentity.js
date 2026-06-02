@@ -77,6 +77,8 @@ function displayNameFromParticipant(participant, phoneDigits) {
     participant?.displayName,
     participant?.contactName,
     participant?.shortName,
+    participant?.profileName,
+    participant?.wa_name,
   ]
   for (const f of fields) {
     const n = String(f || "").trim()
@@ -112,9 +114,8 @@ function mapEvolutionParticipant(participant) {
 
   let name = displayName
   if (!name) {
-    if (phoneDigits) name = formatPhoneBr(phoneDigits)
-    else if (isLid) name = "Contato (número oculto no grupo)"
-    else name = "Participante"
+    if (isLid) name = "Contato (número oculto no grupo)"
+    else name = null
   }
 
   const phone = phoneDigits ? formatPhoneBr(phoneDigits) : "—"
@@ -156,9 +157,36 @@ function buildContactIndex(contacts) {
   const index = new Map()
   for (const c of contacts) {
     const keys = [c?.id, c?.remoteJid, c?.jid, c?.lid].filter(Boolean).map(String)
+    const pd = resolvePhoneDigits(c) || phoneDigitsFromJid(c?.id || c?.remoteJid)
+    if (pd) keys.push(`digits:${pd}`)
     for (const k of keys) index.set(k, c)
   }
   return index
+}
+
+function hasRealDisplayName(participant) {
+  const n = String(participant?.name || "").trim()
+  if (!n) return false
+  if (n === "Participante" || n === "Sem nome" || n.includes("número oculto")) return false
+  if (participant.phoneDigits && digitsOnly(n) === participant.phoneDigits) return false
+  if (looksLikeInternalIdName(n, participant.phoneDigits)) return false
+  return true
+}
+
+function finalizeParticipantName(participant) {
+  if (hasRealDisplayName(participant)) return participant.name
+  if (participant.isLid) return participant.name || "Contato (número oculto no grupo)"
+  if (participant.phoneDigits) return "Sem nome"
+  return participant.name || "Participante"
+}
+
+function lookupContact(index, participant) {
+  if (!index?.size) return null
+  return (
+    index.get(participant.participantJid) ||
+    (participant.phoneDigits ? index.get(`digits:${participant.phoneDigits}`) : null) ||
+    null
+  )
 }
 
 module.exports = {
@@ -168,4 +196,11 @@ module.exports = {
   buildContactIndex,
   formatPhoneBr,
   jidDomain,
+  hasRealDisplayName,
+  finalizeParticipantName,
+  lookupContact,
+  resolvePhoneDigits,
+  phoneDigitsFromJid,
+  displayNameFromParticipant,
+  digitsOnly,
 }

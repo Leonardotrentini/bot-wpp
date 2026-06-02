@@ -25,6 +25,7 @@ const {
   fetchAllGroups,
   fetchGroupParticipants,
   findContacts,
+  fetchProfile,
   fetchGroupMessages,
   sendText,
   sendMedia,
@@ -233,7 +234,7 @@ function getGroupApiPayload(group) {
 function getParticipantApiPayload(participant, groupName) {
   return {
     id: participant.participantJid,
-    name: participant.name || participant.phone || "Participante",
+    name: participant.name || "Sem nome",
     phone: participant.phone || "—",
     role: participant.role,
     status: participant.status,
@@ -289,10 +290,39 @@ function mergeGlobalMember(map, participant, groupApi) {
   }
 }
 
-async function syncParticipantsForGroupRow(conn, groupRow) {
-  const participantsPayload = await fetchGroupParticipants(conn.instanceName, groupRow.groupJid)
-  let mapped = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
+async function loadSenderNamesFromGroupMessages(groupId) {
+  const rows = await prisma.whatsAppMessage.findMany({
+    where: {
+      groupId,
+      fromMe: false,
+      senderName: { not: null },
+      NOT: { senderName: "" },
+    },
+    select: { senderJid: true, senderName: true },
+    orderBy: { timestamp: "desc" },
+    take: 8000,
+  })
+  const byJid = new Map()
+  for (const row of rows) {
+    const n = String(row.senderName || "").trim()
+    if (!n || n === "Você") continue
+    if (row.senderJid && !byJid.has(row.senderJid)) byJid.set(row.senderJid, n)
+    const pd = phoneDigitsFromJid(row.senderJid)
+    if (pd && !byJid.has(`digits:${pd}`)) byJid.set(`digits:${pd}`, n)
+  }
+  return byJid
+}
 
+function applyMessageDisplayName(participant, messageNames) {
+  if (!messageNames?.size || hasRealDisplayName(participant)) return participant
+  const fromMsg =
+    messageNames.get(participant.participantJid) ||
+    (participant.phoneDigits ? messageNames.get(`digits:${participant.phoneDigits}`) : null)
+  if (!fromMsg || digitsOnly(fromMsg) === participant.phoneDigits) return participant
+  return { ...participant, name: fromMsg }
+}
+
+async function enrichParticipantsWithNames(conn, groupRow, mapped) {
   let contactIndex = null
   try {
     const contactsPayload = await findContacts(conn.instanceName, {})
@@ -301,15 +331,43 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
     console.warn("[members] findContacts:", err?.message || err)
   }
 
-  if (contactIndex?.size) {
-    mapped = mapped.map((p) => {
-      if (!p.isLid && p.phoneDigits) return p
-      const hit = contactIndex.get(p.participantJid)
-      return hit ? enrichParticipantFromContact(p, hit) : p
-    })
+  const messageNames = await loadSenderNamesFromGroupMessages(groupRow.id)
+
+  const enriched = []
+  let profileLookups = 0
+  const PROFILE_LOOKUP_MAX = 40
+
+  for (let p of mapped) {
+    const hit = lookupContact(contactIndex, p)
+    if (hit) p = enrichParticipantFromContact(p, hit)
+
+    p = applyMessageDisplayName(p, messageNames)
+
+    if (!hasRealDisplayName(p) && p.phoneDigits && profileLookups < PROFILE_LOOKUP_MAX) {
+      try {
+        const profile = await fetchProfile(conn.instanceName, p.phoneDigits)
+        const profileName = displayNameFromParticipant(profile?.profile || profile, p.phoneDigits)
+        if (profileName) p = { ...p, name: profileName }
+        profileLookups += 1
+        await wait(250)
+      } catch {
+        /* ignore profile errors */
+      }
+    }
+
+    p = { ...p, name: finalizeParticipantName(p) }
+    enriched.push(p)
   }
 
-  for (const participant of mapped) {
+  return enriched
+}
+
+async function syncParticipantsForGroupRow(conn, groupRow) {
+  const participantsPayload = await fetchGroupParticipants(conn.instanceName, groupRow.groupJid)
+  const mapped = normalizeEvolutionParticipants(participantsPayload, groupRow.raw).map(mapEvolutionParticipant)
+  const enriched = await enrichParticipantsWithNames(conn, groupRow, mapped)
+
+  for (const participant of enriched) {
     const data = {
       name: participant.name,
       phone: participant.phone,
@@ -332,7 +390,7 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
       lastSyncedAt: new Date(),
     },
   })
-  return participants.length
+  return enriched.length
 }
 
 function mapEvolutionGroup(group, instanceName) {
@@ -371,6 +429,12 @@ const {
   enrichParticipantFromContact,
   normalizeContactList,
   buildContactIndex,
+  hasRealDisplayName,
+  finalizeParticipantName,
+  lookupContact,
+  displayNameFromParticipant,
+  phoneDigitsFromJid,
+  digitsOnly,
 } = require("./lib/participantIdentity.js")
 
 function normalizeEvolutionMessages(payload) {

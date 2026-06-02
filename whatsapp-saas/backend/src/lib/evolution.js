@@ -242,6 +242,16 @@ async function fetchGroupParticipants(instanceName, groupJid) {
   )
 }
 
+/** Perfil do contato (nome exibido no WhatsApp). */
+async function fetchProfile(instanceName, number) {
+  const digits = String(number || "").replace(/\D/g, "")
+  const body = { number: digits }
+  return firstSuccess([
+    () => requestEvolution(`/chat/fetchProfile/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/chat/fetchProfile/${encodeURIComponent(instanceName)}`, { method: "POST", body: { number: `${digits}@s.whatsapp.net` } }),
+  ])
+}
+
 /** Lista contatos da instância (pushName / número quando disponível). */
 async function findContacts(instanceName, where = {}) {
   return firstSuccess([
@@ -310,6 +320,7 @@ module.exports = {
   fetchAllGroups,
   fetchGroupParticipants,
   findContacts,
+  fetchProfile,
   fetchGroupMessages,
   sendText,
   sendMedia,
