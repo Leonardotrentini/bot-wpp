@@ -39,6 +39,7 @@ import {
   updateAutomation,
   deleteAutomation,
   getMessageHistory,
+  getGroupMessageActivity,
   getSendJob,
   getCadences,
   createCadence,
@@ -244,6 +245,8 @@ export function Messages({ defaultTab = 'criar' }) {
   const [templates, setTemplates] = useState([])
   const [automations, setAutomations] = useState([])
   const [history, setHistory] = useState([])
+  const [groupActivity, setGroupActivity] = useState([])
+  const [activityMeta, setActivityMeta] = useState(null)
   const [histTotal, setHistTotal] = useState(0)
   const [histOffset, setHistOffset] = useState(0)
   const [histFilter, setHistFilter] = useState({ status: '', group: '' })
@@ -282,6 +285,15 @@ export function Messages({ defaultTab = 'criar' }) {
   const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
   const refreshCadences = useCallback(() => getCadences().then((r) => setCadences(r.data.cadences || [])), [])
 
+  const refreshGroupActivity = useCallback(
+    () =>
+      getGroupMessageActivity(40).then((r) => {
+        setGroupActivity(r.data.items || [])
+        setActivityMeta(r.data.meta || null)
+      }),
+    [],
+  )
+
   const refreshHistory = useCallback(
     (offset = 0) => {
       const params = { limit: HIST_PAGE_SIZE, offset }
@@ -307,6 +319,7 @@ export function Messages({ defaultTab = 'criar' }) {
       refreshAutomations(),
       refreshCadences(),
       refreshHistory(0),
+      refreshGroupActivity(),
     ]).finally(() => setLoadingInit(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -1105,7 +1118,48 @@ export function Messages({ defaultTab = 'criar' }) {
 
             <Card>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h3 className="font-semibold text-stone-50">Histórico de envios</h3>
+                <div>
+                  <h3 className="font-semibold text-stone-50">
+                    Atividade dos grupos (últimos {activityMeta?.messageRetentionDays ?? 2} dias)
+                  </h3>
+                  <p className="mt-0.5 text-xs text-stone-500">Importadas do WhatsApp + envios pela plataforma (sem duplicar).</p>
+                </div>
+              </div>
+              {activityMeta?.onlyPlatformOutbound && (
+                <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200/90">
+                  Ainda só há envios pela plataforma. Reimporte em Grupos para trazer mensagens dos membros.
+                </p>
+              )}
+              {groupActivity.length === 0 ? (
+                <p className="text-sm text-stone-400">Nenhuma mensagem no período.</p>
+              ) : (
+                <ul className="mb-6 divide-y divide-brand-800">
+                  {groupActivity.map((m) => (
+                    <li key={m.id} className="flex flex-wrap justify-between gap-2 py-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-stone-50">
+                          {m.senderName} · {m.group}
+                        </p>
+                        {m.body && <p className="mt-0.5 line-clamp-2 text-xs text-stone-400">{m.body}</p>}
+                      </div>
+                      <div className="shrink-0 text-right text-xs text-stone-500">
+                        <p>{fmtDate(m.sentAt)}</p>
+                        <p className="mt-1 text-accent-400/80">
+                          {m.isPlatformOutbound ? 'Plataforma' : m.fromMe ? 'Você' : 'Membro'}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+
+            <Card>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-semibold text-stone-50">Histórico de envios (plataforma)</h3>
+                  <p className="mt-0.5 text-xs text-stone-500">Somente mensagens disparadas por você neste app.</p>
+                </div>
                 <div className="flex gap-2">
                   <Input className="h-9 w-32 text-sm" placeholder="Grupo" value={histFilter.group} onChange={(e) => setHistFilter((f) => ({ ...f, group: e.target.value }))} />
                   <Select className="h-9 w-auto text-sm" value={histFilter.status} onChange={(e) => setHistFilter((f) => ({ ...f, status: e.target.value }))}>

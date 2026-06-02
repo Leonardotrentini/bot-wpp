@@ -270,6 +270,11 @@ export async function getMessageHistory(params = {}) {
   return mockResponse({ items: mockMessageHistory, total: mockMessageHistory.length, limit: 50, offset: 0 })
 }
 
+export async function getGroupMessageActivity(limit = 40) {
+  if (resolveUseRealApi()) return apiClient.get('/messages/activity', { params: { limit } })
+  return mockResponse({ items: [], meta: { messageRetentionDays: 2 } })
+}
+
 export async function createAutomation(payload) {
   if (resolveUseRealApi()) return apiClient.post('/automations', payload)
   await delay()

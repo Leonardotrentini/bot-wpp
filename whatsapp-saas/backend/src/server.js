@@ -38,6 +38,12 @@ const {
 } = require("./lib/evolution")
 const { buildAnalytics, buildDashboard } = require("./lib/analytics.js")
 const {
+  loadUnifiedMessages,
+  computeGroupOverview,
+  retentionRange,
+  buildMetricsMeta,
+} = require("./lib/messageMetrics")
+const {
   normalizeEvolutionMessages,
   filterMessagesForGroup,
   mapEvolutionMessage,
@@ -1168,7 +1174,7 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       })
     }
 
-    const group = getGroupApiPayload(groupRow)
+    const groupBase = getGroupApiPayload(groupRow)
 
     let contactIndex = null
     try {
@@ -1206,20 +1212,29 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
           status: mapped.status,
           lastSyncedAt: p.lastSyncedAt,
         },
-        group.name,
+        groupBase.name,
       )
     })
-    const activity = [
-      { day: "Seg", count: 0 },
-      { day: "Ter", count: 0 },
-      { day: "Qua", count: 0 },
-      { day: "Qui", count: 0 },
-      { day: "Sex", count: 0 },
-      { day: "Sáb", count: 0 },
-      { day: "Dom", count: 0 },
-    ]
 
-    res.json({ group, members, activity, settings: null })
+    const now = new Date()
+    const { start, end, retentionDays } = retentionRange(now)
+    const { messages } = await loadUnifiedMessages(req.user.sub, [groupRow], start, end)
+    const overview = computeGroupOverview(messages, groupRow.id, start, end)
+    const activeCount = groupRow.participants.filter((p) => p.status === "ativo").length
+    const group = {
+      ...groupBase,
+      messagesPerDay: overview.messagesPerDay,
+      peakHour: overview.peakHour,
+      activeMembers: activeCount || groupRow.memberCount,
+    }
+
+    res.json({
+      group,
+      members,
+      activity: overview.activity,
+      settings: null,
+      meta: { messageRetentionDays: retentionDays },
+    })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
@@ -1779,6 +1794,7 @@ app.get("/api/messages/history", authMiddleware, async (req, res) => {
     total,
     limit,
     offset,
+    source: "platform_outbound",
     items: rows.map((m) => ({
       id: m.id,
       group: m.groupName,
@@ -1789,6 +1805,44 @@ app.get("/api/messages/history", authMiddleware, async (req, res) => {
       sentAt: m.sentAt.toISOString(),
     })),
   })
+})
+
+app.get("/api/messages/activity", authMiddleware, async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 40))
+    const groups = await prisma.whatsAppGroup.findMany({
+      where: { userId: req.user.sub, status: "ativo" },
+      select: { id: true, groupJid: true, name: true },
+    })
+    const now = new Date()
+    const { start, end, retentionDays } = retentionRange(now)
+    const { messages, importedCount, outboundCount } = await loadUnifiedMessages(
+      req.user.sub,
+      groups,
+      start,
+      end,
+    )
+    const nameByGroupId = new Map(groups.map((g) => [g.id, g.name]))
+    const items = [...messages]
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, limit)
+      .map((m) => ({
+        id: m.id,
+        group: nameByGroupId.get(m.groupId) || "Grupo",
+        body: m.body || "",
+        fromMe: Boolean(m.fromMe),
+        senderName: m.senderName || (m.fromMe ? "Você" : "Membro"),
+        isPlatformOutbound: String(m.id).startsWith("outbound-"),
+        sentAt: new Date(m.timestamp).toISOString(),
+      }))
+    res.json({
+      items,
+      meta: buildMetricsMeta({ messages, importedCount, outboundCount, start, end, retentionDays }),
+    })
+  } catch (err) {
+    console.error("[messages/activity]", err)
+    res.status(500).json({ error: "ACTIVITY_FAILED", message: err?.message || "Falha ao carregar atividade." })
+  }
 })
 
 app.get("/api/automations", authMiddleware, async (req, res) => {

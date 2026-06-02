@@ -74,12 +74,22 @@ export function Dashboard() {
   const metrics = [
     { label: 'Grupos gerenciados', value: data.totalGroups, icon: LayoutGrid },
     { label: 'Total de membros', value: data.totalMembers.toLocaleString('pt-BR'), icon: Users },
-    { label: 'Mensagens hoje', value: data.messagesToday.toLocaleString('pt-BR'), icon: MessageSquare },
+    {
+      label: 'Mensagens desde meia-noite',
+      value: data.messagesToday.toLocaleString('pt-BR'),
+      icon: MessageSquare,
+    },
     { label: 'Taxa de engajamento', value: `${data.engagementRate}%`, icon: TrendingUp },
   ]
 
   return (
     <div className="space-y-8">
+      {data.meta?.onlyPlatformOutbound && (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
+          Métricas incluem só envios pela plataforma. Em <strong>Grupos</strong>, use <strong>Reimportar 2 dias</strong>{' '}
+          para incluir mensagens dos membros.
+        </p>
+      )}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {metrics.map((m) => (
           <Card key={m.label}>
@@ -117,7 +127,7 @@ export function Dashboard() {
                   contentStyle={{ background: '#0f1812', border: '1px solid #2d4a38', borderRadius: '12px' }}
                   labelStyle={{ color: '#fafaf9' }}
                 />
-                <Area type="monotone" dataKey="count" stroke="#eab308" fill="url(#gfColor)" strokeWidth={2} />
+                <Area type="monotone" dataKey="msgs" stroke="#eab308" fill="url(#gfColor)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           </div>

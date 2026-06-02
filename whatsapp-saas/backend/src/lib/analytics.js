@@ -1,101 +1,15 @@
 const { prisma } = require("./prisma")
-const { MESSAGE_RETENTION_DAYS, clampRangeToRetention } = require("./messageRetention")
-
-const PT_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
-const OUTBOUND_OK_STATUSES = ["enviado", "entregue", "lido"]
-
-async function loadUnifiedGroupMessages(userId, groups, start, end) {
-  const groupDbIds = groups.map((g) => g.id)
-  const groupJids = groups.map((g) => g.groupJid)
-  const jidToDbId = new Map(groups.map((g) => [g.groupJid, g.id]))
-
-  const [imported, outbound] = await Promise.all([
-    prisma.whatsAppMessage.findMany({
-      where: {
-        userId,
-        groupId: { in: groupDbIds },
-        timestamp: { gte: start, lte: end },
-      },
-      select: {
-        id: true,
-        groupId: true,
-        timestamp: true,
-        fromMe: true,
-        senderJid: true,
-        senderName: true,
-        body: true,
-      },
-      orderBy: { timestamp: "asc" },
-    }),
-    groupJids.length
-      ? prisma.outboundMessage.findMany({
-          where: {
-            userId,
-            groupJid: { in: groupJids },
-            sentAt: { gte: start, lte: end },
-            status: { in: OUTBOUND_OK_STATUSES },
-          },
-          select: { id: true, groupJid: true, groupName: true, body: true, sentAt: true },
-          orderBy: { sentAt: "asc" },
-        })
-      : [],
-  ])
-
-  const importedKeys = new Set()
-  for (const m of imported) {
-    if (!m.fromMe) continue
-    const day = dayKeyInSp(m.timestamp)
-    importedKeys.add(`${m.groupId}:${String(m.body || "").trim().toLowerCase()}:${day}`)
-  }
-
-  const merged = [...imported]
-  for (const o of outbound) {
-    const groupId = jidToDbId.get(o.groupJid)
-    if (!groupId) continue
-    const day = dayKeyInSp(o.sentAt)
-    const key = `${groupId}:${String(o.body || "").trim().toLowerCase()}:${day}`
-    if (importedKeys.has(key)) continue
-    merged.push({
-      id: `outbound-${o.id}`,
-      groupId,
-      timestamp: o.sentAt,
-      fromMe: true,
-      senderJid: null,
-      senderName: "Você",
-      body: o.body || "",
-    })
-  }
-
-  merged.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-  return { messages: merged, importedCount: imported.length, outboundCount: outbound.length }
-}
-
-function periodToRange(period, startDate, endDate) {
-  const now = new Date()
-  const end = endDate ? new Date(`${endDate}T23:59:59.999-03:00`) : now
-  let start
-  if (period === "hoje") {
-    start = new Date(`${end.toISOString().slice(0, 10)}T00:00:00.000-03:00`)
-  } else if (period === "custom" && startDate) {
-    start = new Date(`${startDate}T00:00:00.000-03:00`)
-  } else if (period === "7d" || period === "30d") {
-    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
-  } else {
-    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
-  }
-  if (start > end) start = new Date(end.getTime() - 86400000)
-  return clampRangeToRetention(start, end, now)
-}
-
-function dayKeyInSp(date) {
-  return date.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" })
-}
-
-function hourInSp(date) {
-  return Number(
-    date.toLocaleString("en-US", { timeZone: "America/Sao_Paulo", hour: "numeric", hour12: false }),
-  )
-}
+const {
+  MESSAGE_RETENTION_DAYS,
+  loadUnifiedMessages,
+  messagesByDaySeries,
+  messagesByHourBuckets,
+  buildMetricsMeta,
+  periodToRange,
+  countMessagesToday,
+  topGroupsByMessageCount,
+  retentionRange,
+} = require("./messageMetrics")
 
 function timeAgoPt(iso) {
   const diff = Date.now() - new Date(iso).getTime()
@@ -132,13 +46,15 @@ function scoreMessagesEngagement(messages, windowMs = 60 * 60 * 1000) {
   }
   const scores = []
   for (const list of byGroup.values()) {
-    list.sort((a, b) => a.timestamp - b.timestamp)
+    list.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
     for (let i = 0; i < list.length; i++) {
       const base = list[i]
       const body = String(base.body || "").trim()
       let replies = 0
       for (let j = i + 1; j < list.length; j++) {
-        if (list[j].timestamp - base.timestamp > windowMs) break
+        const bt = new Date(list[j].timestamp).getTime()
+        const at = new Date(base.timestamp).getTime()
+        if (bt - at > windowMs) break
         if (isEngagementAfter(base, list[j])) replies++
       }
       const score = replies * 100 + Math.min(body.length, 80)
@@ -230,17 +146,10 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
     return emptyAnalytics(period)
   }
 
-  const { messages, importedCount, outboundCount } = await loadUnifiedGroupMessages(
-    userId,
-    groups,
-    start,
-    end,
-  )
+  const { messages, importedCount, outboundCount } = await loadUnifiedMessages(userId, groups, start, end)
 
   const totalMessages = messages.length
   const inbound = messages.filter((m) => !m.fromMe)
-  const inboundCount = inbound.length
-  const outboundOnlyCount = messages.filter((m) => String(m.id).startsWith("outbound-")).length
 
   const senderSet = new Set()
   const senderNames = new Map()
@@ -295,26 +204,12 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
       ? Number(((newMembersInPeriod / totalUniqueMembers) * 100).toFixed(1))
       : 0
 
-  const dayBuckets = new Map()
-  const hourBuckets = Array.from({ length: 24 }, (_, h) => ({ hour: `${h}h`, count: 0 }))
-
-  for (const m of messages) {
-    const dk = dayKeyInSp(m.timestamp)
-    dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
-    const h = hourInSp(m.timestamp)
-    if (h >= 0 && h < 24) hourBuckets[h].count++
-  }
-
-  const messagesByDay = [...dayBuckets.keys()]
-    .sort()
-    .map((key) => {
-      const d = new Date(`${key}T12:00:00-03:00`)
-      return {
-        day: PT_DAYS[d.getDay()],
-        full: key,
-        count: dayBuckets.get(key) || 0,
-      }
-    })
+  const daySeries = messagesByDaySeries(messages, start, end)
+  const messagesByDay = daySeries.map((d) => ({
+    day: d.day,
+    full: d.full,
+    count: d.msgs,
+  }))
 
   const topMembers = [...senderMsgCount.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -335,7 +230,7 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
     inactiveMembers: Math.max(totalUniqueMembers - activeMembers, 0),
     memberGrowthPct,
     messagesByDay,
-    messagesByHour: hourBuckets,
+    messagesByHour: messagesByHourBuckets(messages),
     engagementByGroup,
     topMembers,
     topMessages,
@@ -343,15 +238,7 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
     meta: {
       groupsCount: groups.length,
       activeGroupsOnly: true,
-      messagesImported: importedCount > 0,
-      inboundCount,
-      outboundCount,
-      hasInboundMessages: inboundCount > 0,
-      hasActivity: totalMessages > 0,
-      messageRetentionDays: retentionDays,
-      rangeStart: start.toISOString(),
-      rangeEnd: end.toISOString(),
-      onlyPlatformOutbound: inboundCount === 0 && outboundOnlyCount > 0,
+      ...buildMetricsMeta({ messages, importedCount, outboundCount, start, end, retentionDays }),
     },
   }
 }
@@ -388,71 +275,9 @@ async function buildDashboard(userId) {
   })
 
   const now = new Date()
-  const todayStart = new Date(`${now.toISOString().slice(0, 10)}T00:00:00.000-03:00`)
-  const { start: retentionStart } = clampRangeToRetention(
-    new Date(now.getTime() - MESSAGE_RETENTION_DAYS * 86400000),
-    now,
-    now,
-  )
-  const last24h = new Date(now.getTime() - 86400000)
+  const { start, end, retentionDays } = retentionRange(now)
 
-  const groupDbIds = groups.map((g) => g.id)
-  const groupJids = groups.map((g) => g.groupJid)
-
-  const outboundWhere = (from) => ({
-    userId,
-    groupJid: { in: groupJids },
-    sentAt: { gte: from },
-    status: { in: OUTBOUND_OK_STATUSES },
-  })
-
-  const [messagesTodayWa, messagesTodayOut, messagesInWindowWa, messagesInWindowOut, topGroupsWa, topGroupsOut, recentOutbound, recentAutomations] =
-    await Promise.all([
-      groupDbIds.length
-        ? prisma.whatsAppMessage.count({
-            where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: todayStart } },
-          })
-        : 0,
-      groupJids.length ? prisma.outboundMessage.count({ where: outboundWhere(todayStart) }) : 0,
-      groupDbIds.length
-        ? prisma.whatsAppMessage.findMany({
-            where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: retentionStart } },
-            select: { timestamp: true },
-          })
-        : [],
-      groupJids.length
-        ? prisma.outboundMessage.findMany({
-            where: outboundWhere(retentionStart),
-            select: { sentAt: true },
-          })
-        : [],
-      groupDbIds.length
-        ? prisma.whatsAppMessage.groupBy({
-            by: ["groupId"],
-            where: { userId, groupId: { in: groupDbIds }, timestamp: { gte: last24h } },
-            _count: { id: true },
-          })
-        : [],
-      groupJids.length
-        ? prisma.outboundMessage.groupBy({
-            by: ["groupJid"],
-            where: outboundWhere(last24h),
-            _count: { id: true },
-          })
-        : [],
-      prisma.outboundMessage.findMany({
-        where: { userId },
-        orderBy: { sentAt: "desc" },
-        take: 4,
-        select: { id: true, groupName: true, body: true, sentAt: true, status: true },
-      }),
-      prisma.automation.findMany({
-        where: { userId },
-        orderBy: { updatedAt: "desc" },
-        take: 3,
-        select: { id: true, name: true, status: true, updatedAt: true },
-      }),
-    ])
+  const { messages, importedCount, outboundCount } = await loadUnifiedMessages(userId, groups, start, end)
 
   const uniqueMembers = new Set()
   let activeCount = 0
@@ -466,48 +291,33 @@ async function buildDashboard(userId) {
   const engagementRate =
     totalMembers > 0 ? Number(((activeCount / totalMembers) * 100).toFixed(1)) : 0
 
-  const messagesToday = messagesTodayWa + messagesTodayOut
+  const messagesToday = countMessagesToday(messages, now)
+  const messagesByDay = messagesByDaySeries(messages, start, end)
+  const last24h = new Date(now.getTime() - 86400000)
+  const topGroups = topGroupsByMessageCount(messages, groups, last24h)
 
-  const dayBuckets = new Map()
-  for (const m of messagesInWindowWa) {
-    const dk = dayKeyInSp(m.timestamp)
-    dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
-  }
-  for (const m of messagesInWindowOut) {
-    const dk = dayKeyInSp(m.sentAt)
-    dayBuckets.set(dk, (dayBuckets.get(dk) || 0) + 1)
-  }
-  const messagesByDay = []
-  const cursor = new Date(retentionStart)
-  while (cursor <= now) {
-    const key = dayKeyInSp(cursor)
-    messagesByDay.push({
-      day: PT_DAYS[cursor.getDay()],
-      count: dayBuckets.get(key) || 0,
-    })
-    cursor.setDate(cursor.getDate() + 1)
-  }
+  const [recentOutbound, recentAutomations, recentInbound] = await Promise.all([
+    prisma.outboundMessage.findMany({
+      where: { userId },
+      orderBy: { sentAt: "desc" },
+      take: 4,
+      select: { id: true, groupName: true, body: true, sentAt: true, status: true },
+    }),
+    prisma.automation.findMany({
+      where: { userId },
+      orderBy: { updatedAt: "desc" },
+      take: 3,
+      select: { id: true, name: true, status: true, updatedAt: true },
+    }),
+    Promise.resolve(
+      [...messages]
+        .filter((m) => !m.fromMe)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, 3),
+    ),
+  ])
 
-  const groupByDbId = new Map(groups.map((g) => [g.id, g]))
-  const msg24hByJid = new Map()
-  for (const row of topGroupsWa) {
-    const g = groupByDbId.get(row.groupId)
-    if (g) msg24hByJid.set(g.groupJid, (msg24hByJid.get(g.groupJid) || 0) + row._count.id)
-  }
-  for (const row of topGroupsOut) {
-    msg24hByJid.set(row.groupJid, (msg24hByJid.get(row.groupJid) || 0) + row._count.id)
-  }
-  const topGroups = [...msg24hByJid.entries()]
-    .map(([jid, count]) => {
-      const g = groups.find((x) => x.groupJid === jid)
-      return {
-        id: jid,
-        name: g?.name || jid,
-        messages24h: count,
-      }
-    })
-    .sort((a, b) => b.messages24h - a.messages24h)
-    .slice(0, 5)
+  const groupNameById = new Map(groups.map((g) => [g.id, g.name]))
 
   const recentActivities = []
   for (const o of recentOutbound) {
@@ -516,6 +326,16 @@ async function buildDashboard(userId) {
       text: `Mensagem enviada para ${o.groupName}: ${(o.body || "").slice(0, 48)}${(o.body || "").length > 48 ? "…" : ""}`,
       time: timeAgoPt(o.sentAt),
       at: o.sentAt.toISOString(),
+    })
+  }
+  for (const m of recentInbound) {
+    const gName = groupNameById.get(m.groupId) || "Grupo"
+    const who = m.senderName || "Membro"
+    recentActivities.push({
+      id: `in-${m.id}`,
+      text: `${who} em ${gName}: ${truncateBody(m.body, 40)}`,
+      time: timeAgoPt(m.timestamp),
+      at: new Date(m.timestamp).toISOString(),
     })
   }
   for (const a of recentAutomations) {
@@ -547,10 +367,9 @@ async function buildDashboard(userId) {
     recentActivities: recentActivities.slice(0, 6).map(({ id, text, time }) => ({ id, text, time })),
     meta: {
       whatsappConnected: groups.length > 0,
-      hasImportedMessages: messagesInWindowWa.length + messagesInWindowOut.length > 0,
-      messageRetentionDays: MESSAGE_RETENTION_DAYS,
+      ...buildMetricsMeta({ messages, importedCount, outboundCount, start, end, retentionDays }),
     },
   }
 }
 
-module.exports = { buildAnalytics, buildDashboard, periodToRange, MESSAGE_RETENTION_DAYS }
+module.exports = { buildAnalytics, buildDashboard, periodToRange, MESSAGE_RETENTION_DAYS, timeAgoPt }
