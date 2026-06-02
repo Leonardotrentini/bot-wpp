@@ -699,6 +699,7 @@ async function storeGroupMessages(group, records, { cutoffMs } = {}) {
   for (const record of filtered) {
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue
+    if (!mapped.timestamp || Number.isNaN(mapped.timestamp.getTime())) continue
 
     const ts = mapped.timestamp.getTime()
     if (cutoffMs && ts < cutoffMs) continue
@@ -770,7 +771,7 @@ async function importGroupMessages(conn, group, cutoffMs) {
       },
     })
 
-    if (source === "scan" || allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
+    if (allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
     if (page < MESSAGE_SYNC_MAX_PAGES) await wait(MESSAGE_SYNC_PAGE_DELAY_MS)
   }
 
@@ -2410,6 +2411,7 @@ async function storeIncomingMessages(instanceName, body) {
 
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue
+    if (!mapped.timestamp || Number.isNaN(mapped.timestamp.getTime())) continue
     if (mapped.timestamp.getTime() < getRetentionCutoffMs()) continue
 
     await prisma.whatsAppMessage.upsert({

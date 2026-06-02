@@ -110,11 +110,23 @@ function filterMessagesForGroup(records, groupJid) {
   })
 }
 
+function extractTimestampRaw(record) {
+  const key = record?.key || {}
+  return (
+    record?.messageTimestamp ??
+    record?.messageTimestampMs ??
+    key?.messageTimestamp ??
+    record?.timestamp ??
+    record?.createdAt ??
+    record?.updatedAt ??
+    null
+  )
+}
+
 function mapEvolutionMessage(record) {
   const key = record?.key || {}
   const messageId = key.id || record?.id
-  const timestampRaw = record?.messageTimestamp || record?.messageTimestampMs || record?.timestamp
-  const iso = toIsoFromEvolutionTimestamp(timestampRaw)
+  const iso = toIsoFromEvolutionTimestamp(extractTimestampRaw(record))
   const fromMe = Boolean(key.fromMe ?? record?.fromMe ?? false)
   const remoteJid = messageRemoteJid(record)
   const isGroup = remoteJid && String(remoteJid).endsWith("@g.us")
@@ -135,20 +147,38 @@ function mapEvolutionMessage(record) {
     senderName,
     type: record?.messageType || "text",
     body: body ? String(body).slice(0, 4000) : "",
-    timestamp: iso ? new Date(iso) : new Date(),
+    timestamp: iso ? new Date(iso) : null,
     raw: serializeJson(record),
   }
 }
 
 function toIsoFromEvolutionTimestamp(value) {
   if (value == null) return null
-  const n = Number(value)
-  if (!Number.isFinite(n)) {
-    const d = new Date(value)
-    return Number.isNaN(d.getTime()) ? null : d.toISOString()
+
+  if (typeof value === "object") {
+    if (value.$date != null) return toIsoFromEvolutionTimestamp(value.$date)
+    if (typeof value.toNumber === "function") return toIsoFromEvolutionTimestamp(value.toNumber())
+    const low = value.low ?? value._low
+    const high = value.high ?? value._high
+    if (low != null) {
+      const n = Number(high) * 4294967296 + Number(low)
+      if (Number.isFinite(n)) return toIsoFromEvolutionTimestamp(n)
+    }
   }
-  const ms = n < 1e12 ? n * 1000 : n
-  return new Date(ms).toISOString()
+
+  const n = Number(value)
+  if (Number.isFinite(n) && n > 0) {
+    let ms
+    if (n < 1e11) ms = n * 1000
+    else if (n < 1e14) ms = n
+    else ms = Math.floor(n / 1000)
+    const d = new Date(ms)
+    if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 2020) return d.toISOString()
+  }
+
+  const d = new Date(value)
+  if (!Number.isNaN(d.getTime()) && d.getFullYear() >= 2020) return d.toISOString()
+  return null
 }
 
 module.exports = {
