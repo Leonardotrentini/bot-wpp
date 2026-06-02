@@ -206,9 +206,9 @@ export function Dashboard() {
 
   const metrics = [
     {
-      label: 'Grupos conectados',
+      label: 'Grupos ativos',
       value: String(connectedCount),
-      hint: data.connectedGroupsLabel || undefined,
+      hint: data.connectedGroupsLabel ? `${data.connectedGroupsLabel} (monitorando)` : undefined,
       icon: LayoutGrid,
     },
     {
@@ -224,12 +224,12 @@ export function Dashboard() {
       icon: UserMinus,
     },
     {
-      label: '% dos leads ativos',
+      label: '% de membros ativos',
       value: `${Number(activeLeadsPct).toFixed(1)}%`,
       hint:
         (data.inactiveLeads ?? 0) > 0
-          ? `${data.activeLeads ?? 0} ativo(s) · ${data.inactiveLeads} inativo(s) (admins não entram na conta)`
-          : `${data.activeLeads ?? 0} lead(s) ativos (admins não entram na conta)`,
+          ? `${data.activeLeads ?? 0} membro(s) ativo(s) · ${data.inactiveLeads} inativo(s) (sem admins)`
+          : `${data.activeLeads ?? 0} membro(s) ativo(s) (sem admins)`,
       icon: Users,
     },
   ]
