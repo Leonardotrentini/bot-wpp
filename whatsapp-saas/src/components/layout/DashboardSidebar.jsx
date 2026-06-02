@@ -4,7 +4,6 @@ import {
   Users,
   UserCircle2,
   Zap,
-  BarChart3,
   Plug,
   Settings,
   ChevronLeft,
@@ -17,12 +16,11 @@ import { useAuth } from '../../contexts/AuthContext.jsx'
 import { BrandLogo } from '../common/BrandLogo.jsx'
 
 const nav = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/dashboard', label: 'Visão geral', icon: LayoutDashboard, end: true },
   { to: '/dashboard/connect', label: 'Conectar WhatsApp', icon: Smartphone },
   { to: '/dashboard/groups', label: 'Grupos', icon: Users },
   { to: '/dashboard/automations', label: 'Automações', icon: Zap, beta: true },
   { to: '/dashboard/members', label: 'Membros', icon: UserCircle2 },
-  { to: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/dashboard/integrations', label: 'Integrações', icon: Plug },
   { to: '/dashboard/settings', label: 'Configurações', icon: Settings },
 ]

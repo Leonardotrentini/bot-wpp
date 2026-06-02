@@ -342,10 +342,15 @@ export async function getAnalytics(period = '2d', { startDate, endDate } = {}) {
   return mockResponse({ ...mockAnalytics, period })
 }
 
-export async function getDashboardSummary() {
-  if (resolveUseRealApi()) return apiClient.get('/dashboard')
+export async function getOverview() {
+  if (resolveUseRealApi()) return apiClient.get('/overview')
   await delay()
   return mockResponse(mockDashboardMetrics)
+}
+
+/** @deprecated use getOverview */
+export async function getDashboardSummary() {
+  return getOverview()
 }
 
 export async function getIntegrations() {

@@ -5,13 +5,12 @@ import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 
 const titles = {
-  '/dashboard': 'Dashboard',
+  '/dashboard': 'Visão geral',
   '/dashboard/connect': 'Conectar WhatsApp',
   '/dashboard/groups': 'Grupos',
   '/dashboard/messages': 'Mensagens',
   '/dashboard/automations': 'Automações',
   '/dashboard/members': 'Membros',
-  '/dashboard/analytics': 'Analytics',
   '/dashboard/integrations': 'Integrações',
   '/dashboard/settings': 'Configurações',
   '/dashboard/admin': 'Administração',

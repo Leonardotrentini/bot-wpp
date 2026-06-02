@@ -71,7 +71,30 @@ function truncateBody(text, max = 72) {
   return t.length > max ? `${t.slice(0, max)}…` : t
 }
 
-function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
+async function loadReactionsMap(userId, messages) {
+  const keys = new Map()
+  for (const m of messages) {
+    if (!m.messageId) continue
+    keys.set(`${m.groupId}:${m.messageId}`, { groupId: m.groupId, messageId: m.messageId })
+  }
+  if (!keys.size) return new Map()
+  const groupIds = [...new Set([...keys.values()].map((k) => k.groupId))]
+  const messageIds = [...new Set([...keys.values()].map((k) => k.messageId))]
+  const rows = await prisma.messageEngagement.findMany({
+    where: { userId, groupId: { in: groupIds }, messageId: { in: messageIds } },
+    select: { groupId: true, messageId: true, reactionsCount: true },
+  })
+  return new Map(rows.map((r) => [`${r.groupId}:${r.messageId}`, r.reactionsCount]))
+}
+
+function readCountForMessage(m) {
+  if (!m.fromMe) return 0
+  if (m.outboundStatus === "lido") return 1
+  return 0
+}
+
+async function buildTopEngagedMessages(userId, messages, groupIdToName, limit = 12) {
+  const reactionMap = await loadReactionsMap(userId, messages)
   const normalized = messages.map((m) => ({
     ...m,
     timestamp: new Date(m.timestamp).getTime(),
@@ -116,6 +139,12 @@ function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
   return picked.map((item, idx) => {
     const m = item.message
     const isPlatformOnly = String(m.id).startsWith("outbound-")
+    const reactions =
+      m.messageId && reactionMap.has(`${m.groupId}:${m.messageId}`)
+        ? reactionMap.get(`${m.groupId}:${m.messageId}`)
+        : 0
+    const reads = readCountForMessage(m)
+    const interactions = item.replies + reactions
     return {
       id: m.id || `top-${idx}`,
       title: truncateBody(m.body),
@@ -123,8 +152,10 @@ function buildTopEngagedMessages(messages, groupIdToName, limit = 12) {
       senderName: m.senderName || (m.fromMe ? "Você" : "Membro"),
       fromMe: Boolean(m.fromMe),
       replies: item.replies,
-      reactions: 0,
-      engagementRate: item.replies > 0 ? Math.min(99, item.replies * 12 + 5) : 0,
+      reactions,
+      reads,
+      interactions,
+      engagementRate: interactions > 0 ? Math.min(99, interactions * 10 + 5) : 0,
       isOutbound: isPlatformOnly,
       at: new Date(m.timestamp).toISOString(),
     }
@@ -220,7 +251,7 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate) {
     }))
 
   const groupIdToName = new Map(groups.map((g) => [g.id, g.name]))
-  const topMessages = buildTopEngagedMessages(messages, groupIdToName, 12)
+  const topMessages = await buildTopEngagedMessages(userId, messages, groupIdToName, 12)
 
   return {
     period,
@@ -356,11 +387,14 @@ async function buildDashboard(userId) {
   }
   recentActivities.sort((a, b) => new Date(b.at) - new Date(a.at))
 
+  const activeLeadsPct = engagementRate
+
   return {
     totalGroups: groups.length,
     totalMembers,
     messagesToday,
     engagementRate,
+    activeLeadsPct,
     messagesByDay,
     messagesLast7Days: messagesByDay,
     topGroups,
@@ -372,4 +406,31 @@ async function buildDashboard(userId) {
   }
 }
 
-module.exports = { buildAnalytics, buildDashboard, periodToRange, MESSAGE_RETENTION_DAYS, timeAgoPt }
+/** Visão geral unificada (Dashboard + Analytics enxuto). */
+async function buildOverview(userId) {
+  const dashboard = await buildDashboard(userId)
+  const analytics = await buildAnalytics(userId, "2d")
+
+  return {
+    ...dashboard,
+    totalMessagesInPeriod: analytics.totalMessages,
+    activeLeadsPct: dashboard.activeLeadsPct ?? dashboard.engagementRate,
+    topMembers: (analytics.topMembers || []).slice(0, 8),
+    topMessages: analytics.topMessages || [],
+    groupComparison: (analytics.groupComparison || []).slice(0, 10),
+    meta: {
+      ...dashboard.meta,
+      ...analytics.meta,
+      hasInboundMessages: analytics.meta?.hasInboundMessages,
+    },
+  }
+}
+
+module.exports = {
+  buildAnalytics,
+  buildDashboard,
+  buildOverview,
+  periodToRange,
+  MESSAGE_RETENTION_DAYS,
+  timeAgoPt,
+}

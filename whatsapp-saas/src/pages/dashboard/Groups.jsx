@@ -124,7 +124,11 @@ export function Groups() {
       const { data } = await setGroupsStatus(groupIds, status)
       applyData(data)
       setSelected(new Set())
-      toast.success(`${groupIds.length} grupo(s) marcado(s) como ${status}.`)
+      if (status === 'ativo' && data.import?.message) {
+        toast.info(data.import.message)
+      } else {
+        toast.success(`${groupIds.length} grupo(s) marcado(s) como ${status}.`)
+      }
     } catch (e) {
       const msg = e?.response?.data?.message || e?.response?.data?.error || e?.message || 'Não foi possível atualizar o status.'
       toast.error(typeof msg === 'string' ? msg : 'Não foi possível atualizar o status.')

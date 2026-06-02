@@ -46,6 +46,7 @@ async function loadUnifiedMessages(userId, groups, start, end) {
       select: {
         id: true,
         groupId: true,
+        messageId: true,
         timestamp: true,
         fromMe: true,
         senderJid: true,
@@ -62,7 +63,15 @@ async function loadUnifiedMessages(userId, groups, start, end) {
             sentAt: { gte: start, lte: end },
             status: { in: OUTBOUND_OK_STATUSES },
           },
-          select: { id: true, groupJid: true, groupName: true, body: true, sentAt: true },
+          select: {
+            id: true,
+            groupJid: true,
+            groupName: true,
+            body: true,
+            sentAt: true,
+            providerMessageId: true,
+            status: true,
+          },
           orderBy: { sentAt: "asc" },
         })
       : [],
@@ -86,11 +95,13 @@ async function loadUnifiedMessages(userId, groups, start, end) {
       id: `outbound-${o.id}`,
       groupId,
       groupJid: o.groupJid,
+      messageId: o.providerMessageId || null,
       timestamp: o.sentAt,
       fromMe: true,
       senderJid: null,
       senderName: "Você",
       body: o.body || "",
+      outboundStatus: o.status,
     })
   }
 

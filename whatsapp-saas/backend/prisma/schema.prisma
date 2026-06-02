@@ -159,6 +159,18 @@ model WhatsAppMessage {
   @@index([timestamp])
 }
 
+model MessageEngagement {
+  id             String   @id @default(cuid())
+  userId         String
+  groupId        String
+  messageId      String
+  reactionsCount Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([groupId, messageId])
+  @@index([userId])
+}
+
 model MessageTemplate {
   id          String   @id @default(cuid())
   userId      String

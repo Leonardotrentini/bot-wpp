@@ -6,6 +6,20 @@ function serializeJson(value) {
   }
 }
 
+function isReactionRecord(record) {
+  const t = String(record?.messageType || "").toLowerCase()
+  if (t.includes("reaction")) return true
+  return Boolean(record?.message?.reactionMessage)
+}
+
+/** ID da mensagem alvo de uma reação (emoji). */
+function extractReactionTargetMessageId(record) {
+  const rm = record?.message?.reactionMessage
+  if (!rm) return null
+  const id = rm?.key?.id || rm?.text?.key?.id
+  return id ? String(id) : null
+}
+
 function extractMessageText(message) {
   if (!message || typeof message !== "object") return ""
   return (
@@ -191,4 +205,6 @@ module.exports = {
   toIsoFromEvolutionTimestamp,
   jidsMatch,
   normalizeJid,
+  isReactionRecord,
+  extractReactionTargetMessageId,
 }

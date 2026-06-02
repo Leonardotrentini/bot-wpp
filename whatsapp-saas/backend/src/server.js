@@ -36,7 +36,7 @@ const {
   pickPhone,
   isInstanceAlreadyExistsError,
 } = require("./lib/evolution")
-const { buildAnalytics, buildDashboard } = require("./lib/analytics.js")
+const { buildAnalytics, buildDashboard, buildOverview } = require("./lib/analytics.js")
 const {
   loadUnifiedMessages,
   computeGroupOverview,
@@ -49,6 +49,8 @@ const {
   filterMessagesForGroup,
   mapEvolutionMessage,
   jidsMatch,
+  isReactionRecord,
+  extractReactionTargetMessageId,
 } = require("./lib/evolutionMessages")
 const adminRoutes = require("./routes/admin")
 
@@ -799,6 +801,41 @@ async function importGroupMessages(conn, group, cutoffMs) {
   return { totalSaved, inboundSaved, evolutionRecords }
 }
 
+/** Marca grupos como monitorados e agenda import dos últimos N dias (sem desligar outros). */
+async function queueMessageImportForGroups(userId, groupJids, { message } = {}) {
+  const unique = [...new Set((groupJids || []).filter(Boolean))]
+  if (!unique.length) return null
+
+  await prisma.whatsAppGroup.updateMany({
+    where: { userId, groupJid: { in: unique } },
+    data: {
+      monitoringEnabled: true,
+      status: "ativo",
+      messageSyncStatus: "QUEUED",
+      messageSyncProgress: 0,
+    },
+  })
+
+  const defaultMessage = `Importação de ${unique.length} grupo(s) agendada (últimos ${MESSAGE_BACKFILL_DAYS} dias). Novas mensagens entram pelo webhook.`
+
+  if (activeMessageImports.has(userId)) {
+    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+    return conn
+  }
+
+  const conn = await updateConnectionSync(userId, {
+    msgImportStatus: "QUEUED",
+    msgImportTotal: unique.length,
+    msgImportDone: 0,
+    msgImportMessage: message || defaultMessage,
+    msgImportError: null,
+    msgImportRetryAfter: null,
+  })
+
+  void runMessageImport(userId, { onlyGroupJids: unique })
+  return conn
+}
+
 async function runMessageImport(userId, { onlyGroupJids } = {}) {
   if (activeMessageImports.has(userId)) return
   activeMessageImports.add(userId)
@@ -957,33 +994,7 @@ app.post("/api/groups/select", authMiddleware, async (req, res) => {
     }
 
     const { groupIds } = parsed.data
-    // groupIds vêm como groupJid (id exposto na API). Marca monitoramento e reseta os demais.
-    await prisma.whatsAppGroup.updateMany({
-      where: { userId: req.user.sub, groupJid: { in: groupIds } },
-      data: { monitoringEnabled: true, messageSyncStatus: "QUEUED", messageSyncProgress: 0, status: "ativo" },
-    })
-    await prisma.whatsAppGroup.updateMany({
-      where: { userId: req.user.sub, groupJid: { notIn: groupIds } },
-      data: { monitoringEnabled: false },
-    })
-
-    if (activeMessageImports.has(req.user.sub)) {
-      const cachedGroups = await readCachedGroups(req.user.sub)
-      const current = await getUserWhatsAppConnection(req.user.sub)
-      return res.status(202).json({ groups: cachedGroups, import: getImportPayload(current) })
-    }
-
-    const queuedConn = await updateConnectionSync(req.user.sub, {
-      msgImportStatus: "QUEUED",
-      msgImportTotal: groupIds.length,
-      msgImportDone: 0,
-      msgImportMessage: `Importação de ${groupIds.length} grupo(s) agendada (últimos ${MESSAGE_BACKFILL_DAYS} dias).`,
-      msgImportError: null,
-      msgImportRetryAfter: null,
-    })
-
-    void runMessageImport(req.user.sub)
-
+    const queuedConn = await queueMessageImportForGroups(req.user.sub, groupIds)
     const cachedGroups = await readCachedGroups(req.user.sub)
     return res.status(202).json({ groups: cachedGroups, import: getImportPayload(queuedConn) })
   } catch (err) {
@@ -1009,7 +1020,7 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
     const { groupIds, status } = parsed.data
     const data =
       status === "ativo"
-        ? { status: "ativo", monitoringEnabled: true }
+        ? { status: "ativo", monitoringEnabled: true, messageSyncStatus: "QUEUED", messageSyncProgress: 0 }
         : status === "inativo"
           ? { status: "inativo", monitoringEnabled: false }
           : { status: "pendente", monitoringEnabled: false }
@@ -1019,11 +1030,24 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
       data,
     })
 
+    let importConn = conn
+    if (status === "ativo") {
+      if (!conn.connected) {
+        return res.status(409).json({
+          error: "WHATSAPP_NOT_CONNECTED",
+          message: "Conecte o WhatsApp antes de ativar grupos e importar mensagens.",
+        })
+      }
+      importConn = await queueMessageImportForGroups(req.user.sub, groupIds, {
+        message: `${groupIds.length} grupo(s) ativo(s): importando últimos ${MESSAGE_BACKFILL_DAYS} dias.`,
+      })
+    }
+
     const cachedGroups = await readCachedGroups(req.user.sub)
-    return res.json({
+    return res.status(status === "ativo" ? 202 : 200).json({
       groups: cachedGroups,
       sync: getSyncPayload(conn, cachedGroups.length),
-      import: getImportPayload(conn),
+      import: getImportPayload(importConn || conn),
     })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
@@ -1450,15 +1474,18 @@ app.get("/api/analytics", authMiddleware, async (req, res) => {
   }
 })
 
-app.get("/api/dashboard", authMiddleware, async (req, res) => {
+async function handleOverview(req, res) {
   try {
-    const data = await buildDashboard(req.user.sub)
+    const data = await buildOverview(req.user.sub)
     res.json(data)
   } catch (err) {
-    console.error("[dashboard]", err)
-    res.status(500).json({ error: "DASHBOARD_FAILED", message: err?.message || "Falha ao carregar dashboard." })
+    console.error("[overview]", err)
+    res.status(500).json({ error: "OVERVIEW_FAILED", message: err?.message || "Falha ao carregar visão geral." })
   }
-})
+}
+
+app.get("/api/overview", authMiddleware, handleOverview)
+app.get("/api/dashboard", authMiddleware, handleOverview)
 
 // ===================== Mensagens reais + biblioteca + automações =====================
 
@@ -2418,6 +2445,25 @@ async function storeIncomingMessages(instanceName, body) {
       touchedGroups.set(groupJid, group)
     }
     if (!group) continue
+
+    if (isReactionRecord(record)) {
+      const targetId = extractReactionTargetMessageId(record)
+      if (targetId) {
+        await prisma.messageEngagement
+          .upsert({
+            where: { groupId_messageId: { groupId: group.id, messageId: targetId } },
+            create: {
+              userId: conn.userId,
+              groupId: group.id,
+              messageId: targetId,
+              reactionsCount: 1,
+            },
+            update: { reactionsCount: { increment: 1 } },
+          })
+          .catch(() => {})
+      }
+      continue
+    }
 
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue

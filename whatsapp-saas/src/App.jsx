@@ -11,7 +11,6 @@ import { Groups } from './pages/dashboard/Groups.jsx'
 import { GroupDetails } from './pages/dashboard/GroupDetails.jsx'
 import { Messages } from './pages/dashboard/Messages.jsx'
 import { Members } from './pages/dashboard/Members.jsx'
-import { Analytics } from './pages/dashboard/Analytics.jsx'
 import { Integrations } from './pages/dashboard/Integrations.jsx'
 import { Settings } from './pages/dashboard/Settings.jsx'
 import { Admin } from './pages/dashboard/Admin.jsx'
@@ -58,7 +57,7 @@ export default function App() {
         <Route path="messages" element={<Messages defaultTab="criar" />} />
         <Route path="automations" element={<Messages defaultTab="automacoes" />} />
         <Route path="members" element={<Members />} />
-        <Route path="analytics" element={<Analytics />} />
+        <Route path="analytics" element={<Navigate to="/dashboard" replace />} />
         <Route path="integrations" element={<Integrations />} />
         <Route path="settings" element={<Settings />} />
         <Route
