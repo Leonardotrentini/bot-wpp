@@ -228,8 +228,8 @@ export function Dashboard() {
       value: `${Number(activeLeadsPct).toFixed(1)}%`,
       hint:
         data.eligibleLeads != null
-          ? `${data.activeLeads ?? 0} ativos de ${data.eligibleLeads} elegíveis (exclui saídas e inativos)`
-          : 'Exclui quem saiu ou está inativo',
+          ? `${data.activeLeads ?? 0} ativos de ${data.eligibleLeads} leads (exclui apenas saídas)`
+          : 'Exclui quem saiu',
       icon: Users,
     },
   ]

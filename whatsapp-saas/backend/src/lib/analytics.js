@@ -71,20 +71,17 @@ function computeLeadMetrics(groups, start, end) {
 
   let active = 0
   let excludedLeft = 0
-  let excludedInactive = 0
   for (const [, p] of byJid) {
     if (p.status === "saiu" || p.leftAt) {
       excludedLeft++
       continue
     }
-    if (p.status === "inativo") {
-      excludedInactive++
-      continue
-    }
     if (p.status === "ativo") active++
   }
 
-  const eligible = byJid.size - excludedLeft - excludedInactive
+  // MVP: % considera leads ativos versus todos que não saíram.
+  // Membros "inativos" entram no denominador para refletir a proporção real.
+  const eligible = byJid.size - excludedLeft
   const activeLeadsPct = eligible > 0 ? Number(((active / eligible) * 100).toFixed(1)) : 0
 
   return {
