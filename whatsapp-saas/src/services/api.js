@@ -190,6 +190,11 @@ export async function getGroupDetails(id) {
   return mockResponse({ group, members, activity, settings: { ...mockGroupSettings } })
 }
 
+export async function updateGroupConfig(groupId, payload = {}) {
+  if (resolveUseRealApi()) return apiClient.put(`/groups/${encodeURIComponent(groupId)}/config`, payload)
+  return mockResponse({ ok: true, ...payload })
+}
+
 export async function setGroupParticipantsStatus(groupId, participantIds = [], status = 'ativo') {
   if (resolveUseRealApi()) {
     return apiClient.post(`/groups/${encodeURIComponent(groupId)}/participants/status`, { participantIds, status })

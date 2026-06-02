@@ -34,7 +34,7 @@ import { Badge } from '../../components/common/Badge.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
 import { Select } from '../../components/common/Select.jsx'
-import { getGroupDetails, setGroupParticipantsStatus } from '../../services/api.js'
+import { getGroupDetails, setGroupParticipantsStatus, updateGroupConfig } from '../../services/api.js'
 import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { avatar, mockGroupSettings } from '../../utils/mockData.js'
@@ -274,53 +274,76 @@ export function GroupDetails() {
     let aud = defaultAudit()
     let snp = defaultSnapshots()
     let x1 = defaultX1Automation()
-    try {
-      const raw = localStorage.getItem(membersStorageKey(id))
-      if (raw) {
-        const saved = JSON.parse(raw)
-        if ((saved?.v === 5 || saved?.v === 4 || saved?.v === 3 || saved?.v === 2) && Array.isArray(saved.members)) {
-          const byId = new Map(saved.members.map((x) => [x.id, x]))
-          initial = base.map((m) => {
-            if (!byId.has(m.id)) return m
-            const s = byId.get(m.id)
-            return {
-              ...m,
-              tags: [...(s.tags || [])],
-              lastActivity: s.lastActivity || m.lastActivity,
-              persona: s.persona || m.persona,
-              status: s.status === 'inativo' || s.status === 'ativo' ? s.status : m.status,
-            }
-          })
-          if (Array.isArray(saved.catalogExtras)) extras = saved.catalogExtras.map(normalizeTag).filter(Boolean)
-          if ((saved.v === 3 || saved.v === 4) && saved.statusRules && typeof saved.statusRules === 'object') {
-            rules = { ...defaultStatusRules(), ...saved.statusRules }
-          }
-          if ((saved.v === 4 || saved.v === 5) && saved.governance && typeof saved.governance === 'object') {
-            gov = { ...defaultGovernance(), ...saved.governance }
-          }
-          if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.routines)) rts = saved.routines
-          if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.auditLog)) aud = saved.auditLog
-          if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.snapshots)) snp = saved.snapshots
-          if (saved.v === 5 && saved.x1Automation && typeof saved.x1Automation === 'object') {
-            x1 = { ...defaultX1Automation(), ...saved.x1Automation }
-          }
-        } else if (Array.isArray(saved) && saved.length) {
-          const byId = new Map(saved.map((x) => [x.id, x]))
-          initial = base.map((m) => {
-            if (!byId.has(m.id)) return m
-            const s = byId.get(m.id)
-            return {
-              ...m,
-              tags: [...(s.tags || [])],
-              lastActivity: s.lastActivity || m.lastActivity,
-              persona: s.persona || m.persona,
-            }
-          })
-        }
-      }
-    } catch {
-      /* use API */
+    let groupSettings = { ...mockGroupSettings }
+
+    if (payload?.settings && typeof payload.settings === 'object') {
+      groupSettings = { ...groupSettings, ...payload.settings }
     }
+    if (payload?.config && typeof payload.config === 'object') {
+      if (Array.isArray(payload.config.catalogExtras)) extras = payload.config.catalogExtras.map(normalizeTag).filter(Boolean)
+      if (payload.config.statusRules && typeof payload.config.statusRules === 'object') {
+        rules = { ...defaultStatusRules(), ...payload.config.statusRules }
+      }
+      if (payload.config.governance && typeof payload.config.governance === 'object') {
+        gov = { ...defaultGovernance(), ...payload.config.governance }
+      }
+      if (Array.isArray(payload.config.routines)) rts = payload.config.routines
+      if (Array.isArray(payload.config.auditLog)) aud = payload.config.auditLog
+      if (Array.isArray(payload.config.snapshots)) snp = payload.config.snapshots
+      if (payload.config.x1Automation && typeof payload.config.x1Automation === 'object') {
+        x1 = { ...defaultX1Automation(), ...payload.config.x1Automation }
+      }
+    }
+    if (!resolveUseRealApi()) {
+      try {
+        const raw = localStorage.getItem(membersStorageKey(id))
+        if (raw) {
+          const saved = JSON.parse(raw)
+          if ((saved?.v === 5 || saved?.v === 4 || saved?.v === 3 || saved?.v === 2) && Array.isArray(saved.members)) {
+            const byId = new Map(saved.members.map((x) => [x.id, x]))
+            initial = base.map((m) => {
+              if (!byId.has(m.id)) return m
+              const s = byId.get(m.id)
+              return {
+                ...m,
+                tags: [...(s.tags || [])],
+                lastActivity: s.lastActivity || m.lastActivity,
+                persona: s.persona || m.persona,
+                status: s.status === 'inativo' || s.status === 'ativo' ? s.status : m.status,
+              }
+            })
+            if (Array.isArray(saved.catalogExtras)) extras = saved.catalogExtras.map(normalizeTag).filter(Boolean)
+            if ((saved.v === 3 || saved.v === 4) && saved.statusRules && typeof saved.statusRules === 'object') {
+              rules = { ...defaultStatusRules(), ...saved.statusRules }
+            }
+            if ((saved.v === 4 || saved.v === 5) && saved.governance && typeof saved.governance === 'object') {
+              gov = { ...defaultGovernance(), ...saved.governance }
+            }
+            if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.routines)) rts = saved.routines
+            if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.auditLog)) aud = saved.auditLog
+            if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.snapshots)) snp = saved.snapshots
+            if (saved.v === 5 && saved.x1Automation && typeof saved.x1Automation === 'object') {
+              x1 = { ...defaultX1Automation(), ...saved.x1Automation }
+            }
+          } else if (Array.isArray(saved) && saved.length) {
+            const byId = new Map(saved.map((x) => [x.id, x]))
+            initial = base.map((m) => {
+              if (!byId.has(m.id)) return m
+              const s = byId.get(m.id)
+              return {
+                ...m,
+                tags: [...(s.tags || [])],
+                lastActivity: s.lastActivity || m.lastActivity,
+                persona: s.persona || m.persona,
+              }
+            })
+          }
+        }
+      } catch {
+        /* use API */
+      }
+    }
+    setSettings(groupSettings)
     setMembers(initial)
     setSelected(new Set())
     setCatalogExtras(extras)
@@ -674,7 +697,35 @@ export function GroupDetails() {
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'governance.save', details: 'Regras de governança atualizadas' }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
     persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+    if (resolveUseRealApi() && id) {
+      void updateGroupConfig(id, {
+        governance,
+        statusRules,
+        routines,
+        auditLog: nextAudit,
+        snapshots,
+        catalogExtras,
+      }).catch((e) => {
+        toast.error(e?.response?.data?.message || 'Falha ao salvar governança no servidor.')
+      })
+    }
     toast.success('Governança salva.')
+  }
+
+  const saveBasicSettings = () => {
+    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'group.settings_save', details: 'Configurações básicas salvas' }, ...auditLogRef.current].slice(0, 50)
+    setAuditLog(nextAudit)
+    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots, x1Automation)
+    if (resolveUseRealApi() && id) {
+      void updateGroupConfig(id, {
+        settings,
+        statusRules,
+        auditLog: nextAudit,
+      }).catch((e) => {
+        toast.error(e?.response?.data?.message || 'Falha ao salvar configurações no servidor.')
+      })
+    }
+    toast.success('Configurações básicas salvas.')
   }
 
   const addAdmin = () => {
@@ -715,6 +766,11 @@ export function GroupDetails() {
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'x1.settings_save', details: 'Automação de entrada/saída atualizada' }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
     persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots, safe)
+    if (resolveUseRealApi() && id) {
+      void updateGroupConfig(id, { x1Automation: safe, auditLog: nextAudit }).catch((e) => {
+        toast.error(e?.response?.data?.message || 'Falha ao salvar automação X1 no servidor.')
+      })
+    }
     toast.success('Automação X1 salva.')
   }
 
@@ -1551,14 +1607,7 @@ export function GroupDetails() {
               </div>
               <Toggle checked={settings.allowMedia} onChange={(v) => setSettings((s) => ({ ...s, allowMedia: v }))} />
             </div>
-            <Button
-              onClick={() => {
-                const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'group.settings_save', details: 'Configurações básicas salvas' }, ...auditLogRef.current].slice(0, 50)
-                setAuditLog(nextAudit)
-                persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots, x1Automation)
-                toast.success('Configurações básicas salvas.')
-              }}
-            >
+            <Button onClick={saveBasicSettings}>
               Salvar configurações básicas
             </Button>
           </Card>

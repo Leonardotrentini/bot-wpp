@@ -129,6 +129,14 @@ model WhatsAppGroup {
   messagesSyncedCount  Int                        @default(0)
   messagesLastSyncAt   DateTime?
   activatedAt          DateTime?
+  groupSettings        Json?
+  groupGovernance      Json?
+  groupStatusRules     Json?
+  groupRoutines        Json?
+  groupX1Automation    Json?
+  groupAuditLog        Json?
+  groupSnapshots       Json?
+  groupCatalogExtras   Json?
   createdAt            DateTime                   @default(now())
   updatedAt            DateTime                   @updatedAt
   participants         WhatsAppGroupParticipant[]

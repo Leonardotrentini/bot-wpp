@@ -1322,13 +1322,91 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       group,
       members,
       activity: overview.activity,
-      settings: null,
+      settings: groupRow.groupSettings || null,
+      config: {
+        governance: groupRow.groupGovernance || null,
+        statusRules: groupRow.groupStatusRules || null,
+        routines: groupRow.groupRoutines || null,
+        x1Automation: groupRow.groupX1Automation || null,
+        auditLog: groupRow.groupAuditLog || null,
+        snapshots: groupRow.groupSnapshots || null,
+        catalogExtras: groupRow.groupCatalogExtras || null,
+      },
       meta: { messageRetentionDays: retentionDays },
     })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
     }
+    return handleEvolutionError(res, err)
+  }
+})
+
+app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
+  try {
+    const groupJid = decodeURIComponent(req.params.id)
+    const schema = z
+      .object({
+        settings: z.record(z.any()).optional(),
+        governance: z.record(z.any()).optional(),
+        statusRules: z.record(z.any()).optional(),
+        routines: z.array(z.any()).optional(),
+        x1Automation: z.record(z.any()).optional(),
+        auditLog: z.array(z.any()).optional(),
+        snapshots: z.array(z.any()).optional(),
+        catalogExtras: z.array(z.any()).optional(),
+      })
+      .refine((val) => Object.values(val).some((x) => x !== undefined), {
+        message: "Informe ao menos uma seção para salvar.",
+      })
+
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: parsed.error.issues?.[0]?.message || "Payload inválido.",
+      })
+    }
+
+    const data = {}
+    if (parsed.data.settings !== undefined) data.groupSettings = parsed.data.settings
+    if (parsed.data.governance !== undefined) data.groupGovernance = parsed.data.governance
+    if (parsed.data.statusRules !== undefined) data.groupStatusRules = parsed.data.statusRules
+    if (parsed.data.routines !== undefined) data.groupRoutines = parsed.data.routines
+    if (parsed.data.x1Automation !== undefined) data.groupX1Automation = parsed.data.x1Automation
+    if (parsed.data.auditLog !== undefined) data.groupAuditLog = parsed.data.auditLog
+    if (parsed.data.snapshots !== undefined) data.groupSnapshots = parsed.data.snapshots
+    if (parsed.data.catalogExtras !== undefined) data.groupCatalogExtras = parsed.data.catalogExtras
+
+    const row = await prisma.whatsAppGroup.update({
+      where: { userId_groupJid: { userId: req.user.sub, groupJid } },
+      data,
+      select: {
+        groupSettings: true,
+        groupGovernance: true,
+        groupStatusRules: true,
+        groupRoutines: true,
+        groupX1Automation: true,
+        groupAuditLog: true,
+        groupSnapshots: true,
+        groupCatalogExtras: true,
+      },
+    })
+
+    return res.json({
+      ok: true,
+      settings: row.groupSettings || null,
+      config: {
+        governance: row.groupGovernance || null,
+        statusRules: row.groupStatusRules || null,
+        routines: row.groupRoutines || null,
+        x1Automation: row.groupX1Automation || null,
+        auditLog: row.groupAuditLog || null,
+        snapshots: row.groupSnapshots || null,
+        catalogExtras: row.groupCatalogExtras || null,
+      },
+    })
+  } catch (err) {
     return handleEvolutionError(res, err)
   }
 })
