@@ -26,6 +26,7 @@ import { Textarea } from '../../components/common/Textarea.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
+import { Toggle } from '../../components/common/Toggle.jsx'
 import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import {
   getGroups,
@@ -155,6 +156,49 @@ function frequencyLabel(a) {
   if (a.frequency === 'daily') return `Diariamente • ${a.timeOfDay}`
   if (a.frequency === 'weekly') return `Toda ${WEEKDAYS[a.weekday ?? 0]} • ${a.timeOfDay}`
   return a.frequency
+}
+
+function cadenceActionableMembers(members) {
+  return members.filter((m) => m.frequency !== 'now' && m.status !== 'concluida')
+}
+
+function getCadenceActiveState(members) {
+  const actionable = cadenceActionableMembers(members)
+  if (actionable.length === 0) {
+    if (members.length === 0) return { active: false, disabled: true, reason: 'empty' }
+    if (members.every((m) => m.status === 'concluida')) return { active: false, disabled: true, reason: 'done' }
+    return { active: false, disabled: true, reason: 'none' }
+  }
+  return { active: actionable.some((m) => m.status === 'ativa'), disabled: false, reason: null }
+}
+
+function cadenceStatusHint(state) {
+  if (state.reason === 'empty') return 'Adicione automações para ativar'
+  if (state.reason === 'done') return 'Todos os disparos concluídos'
+  if (state.reason === 'none') return 'Nenhum disparo agendado'
+  return state.active ? 'Cadência ativa' : 'Cadência pausada'
+}
+
+function CadenceActiveToggle({ members, onChange, className = '' }) {
+  const state = getCadenceActiveState(members)
+  const label = state.disabled
+    ? state.reason === 'done'
+      ? 'Concluída'
+      : 'Inativa'
+    : state.active
+      ? 'Ativa'
+      : 'Pausada'
+  return (
+    <div className={`flex flex-col items-end gap-1 ${className}`}>
+      <Toggle
+        checked={state.active}
+        disabled={state.disabled}
+        label={label}
+        onChange={(next) => onChange(next)}
+      />
+      <span className="text-[11px] text-stone-500">{cadenceStatusHint(state)}</span>
+    </div>
+  )
 }
 
 function statusBadge(status) {
@@ -807,7 +851,7 @@ export function Messages({ defaultTab = 'criar' }) {
     try {
       const res = await setCadenceStatus(c.id, status)
       setAutomations(res.data.automations || [])
-      toast.success(status === 'ativa' ? 'Automações ativadas.' : 'Automações pausadas.')
+      toast.success(status === 'ativa' ? 'Cadência ativada.' : 'Cadência pausada.')
     } catch {
       toast.error('Falha ao atualizar a cadência.')
     }
@@ -1219,7 +1263,7 @@ export function Messages({ defaultTab = 'criar' }) {
       {tab === 'cadencia' && cadView === 'list' && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-stone-400">Agrupe automações em cadências (ex.: “Segunda-feira”) e ative ou pause todas de uma vez.</p>
+            <p className="text-sm text-stone-400">Organize disparos em cadências e use o interruptor para ativar ou pausar cada uma.</p>
             <Button className="gap-2" onClick={openNewCadence}>
               <Plus className="h-4 w-4" /> Nova cadência
             </Button>
@@ -1239,29 +1283,39 @@ export function Messages({ defaultTab = 'criar' }) {
             <div className="space-y-4">
               {cadences.map((c) => {
                 const members = automations.filter((a) => a.cadenceId === c.id)
+                const cadenceState = getCadenceActiveState(members)
                 const active = members.filter((m) => m.status === 'ativa').length
-                const inactive = members.length - active
+                const inactive = members.filter((m) => m.status !== 'ativa' && m.status !== 'concluida').length
+                const done = members.filter((m) => m.status === 'concluida').length
                 return (
                   <Card key={c.id}>
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="flex gap-3 min-w-0">
+                      <div className="flex gap-3 min-w-0 flex-1">
                         <div className="h-fit rounded-xl bg-accent-500/15 p-2 text-accent-400">
                           <Layers className="h-5 w-5" />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="truncate font-semibold text-stone-50">{c.name}</h3>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate font-semibold text-stone-50">{c.name}</h3>
+                            {!cadenceState.disabled && (
+                              <Badge variant={cadenceState.active ? 'success' : 'muted'}>
+                                {cadenceState.active ? 'ativa' : 'pausada'}
+                              </Badge>
+                            )}
+                          </div>
                           <p className="mt-1 text-xs text-stone-500">
-                            {members.length} automação(ões) • <span className="text-emerald-400">{active} ativa(s)</span> • <span className="text-stone-400">{inactive} inativa(s)</span>
+                            {members.length} automação(ões)
+                            {active > 0 && <> • <span className="text-emerald-400">{active} ativa(s)</span></>}
+                            {inactive > 0 && <> • <span className="text-amber-400/90">{inactive} pausada(s)</span></>}
+                            {done > 0 && <> • <span className="text-stone-400">{done} concluída(s)</span></>}
                           </p>
                         </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(c, 'ativa')}>
-                          <PlayCircle className="h-3.5 w-3.5" /> Ativar todas
-                        </Button>
-                        <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(c, 'pausada')}>
-                          <PauseCircle className="h-3.5 w-3.5" /> Pausar todas
-                        </Button>
+                      <div className="flex flex-wrap items-start gap-2">
+                        <CadenceActiveToggle
+                          members={members}
+                          onChange={(next) => cadenceBulkStatus(c, next ? 'ativa' : 'pausada')}
+                        />
                         <button type="button" className="p-2 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Editar cadência" title="Editar nome e automações" onClick={() => openCadenceEditor(c)}>
                           <Pencil className="h-4 w-4" />
                         </button>
@@ -1468,18 +1522,14 @@ export function Messages({ defaultTab = 'criar' }) {
           </div>
 
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-semibold text-stone-50 inline-flex items-center gap-2">
                 <Layers className="h-5 w-5 text-accent-400" /> {activeCadence.name}
               </h3>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(activeCadence, 'ativa')}>
-                  <PlayCircle className="h-3.5 w-3.5" /> Ativar todas
-                </Button>
-                <Button size="sm" variant="outline" className="gap-1" onClick={() => cadenceBulkStatus(activeCadence, 'pausada')}>
-                  <PauseCircle className="h-3.5 w-3.5" /> Pausar todas
-                </Button>
-              </div>
+              <CadenceActiveToggle
+                members={automations.filter((a) => a.cadenceId === activeCadence.id)}
+                onChange={(next) => cadenceBulkStatus(activeCadence, next ? 'ativa' : 'pausada')}
+              />
             </div>
 
             {automations.filter((a) => a.cadenceId === activeCadence.id).length === 0 ? (
