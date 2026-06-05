@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Layers,
   ListChecks,
+  ArrowLeft,
 } from 'lucide-react'
 import { Tabs } from '../../components/common/Tabs.jsx'
 import { Card } from '../../components/common/Card.jsx'
@@ -1372,7 +1373,16 @@ export function Messages({ defaultTab = 'criar' }) {
       {tab === 'cadencia' && cadView === 'editor' && activeCadence && (
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="space-y-4">
-            <button type="button" onClick={closeCadenceEditor} className="text-sm text-stone-400 hover:text-stone-100">← Voltar para cadências</button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={closeCadenceEditor}
+              className="w-fit border-accent-500/40 bg-accent-500/5 text-accent-300 hover:border-accent-500/70 hover:bg-accent-500/10 hover:text-accent-200"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Voltar para cadências
+            </Button>
             <Card className="space-y-4">
               <div>
                 <p className="mb-1.5 text-sm font-medium text-stone-300">Nome da cadência</p>
