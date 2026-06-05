@@ -15,7 +15,6 @@ import {
   UserMinus,
   Plus,
   X,
-  Clock,
   UserCheck,
   Shield,
   BellRing,
@@ -62,11 +61,6 @@ function membersStorageKey(groupId) {
 function nowIso() {
   return new Date().toISOString()
 }
-
-const defaultStatusRules = () => ({
-  inactiveAfterDays: 3,
-  autoCheckEnabled: false,
-})
 
 const defaultGovernance = () => ({
   postingWindowEnabled: true,
@@ -115,13 +109,6 @@ const defaultX1Automation = () => ({
   quietHoursEnd: '08:00',
 })
 
-function daysSince(iso) {
-  if (!iso) return 0
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return 0
-  return (Date.now() - t) / (1000 * 60 * 60 * 24)
-}
-
 function formatActivity(iso) {
   if (!iso) return '—'
   try {
@@ -158,12 +145,9 @@ export function GroupDetails() {
   const [tagsToAdd, setTagsToAdd] = useState(() => new Set())
   const [tagsToRemove, setTagsToRemove] = useState(() => new Set())
   const [inlineNewTag, setInlineNewTag] = useState('')
-  const [statusRules, setStatusRules] = useState(() => defaultStatusRules())
-  const [confirmInactivityModal, setConfirmInactivityModal] = useState(false)
   const [newAdmin, setNewAdmin] = useState('')
   const [x1Automation, setX1Automation] = useState(() => defaultX1Automation())
   const catalogExtrasRef = useRef([])
-  const statusRulesRef = useRef(defaultStatusRules())
   const governanceRef = useRef(defaultGovernance())
   const routinesRef = useRef(defaultRoutines())
   const auditLogRef = useRef(defaultAudit())
@@ -174,10 +158,6 @@ export function GroupDetails() {
   useEffect(() => {
     catalogExtrasRef.current = catalogExtras
   }, [catalogExtras])
-
-  useEffect(() => {
-    statusRulesRef.current = statusRules
-  }, [statusRules])
 
   useEffect(() => {
     governanceRef.current = governance
@@ -200,10 +180,9 @@ export function GroupDetails() {
   }, [x1Automation])
 
   const persistAll = useCallback(
-    (nextMembers, nextExtras, nextRules, nextGovernance, nextRoutines, nextAudit, nextSnapshots, nextX1Automation) => {
+    (nextMembers, nextExtras, nextGovernance, nextRoutines, nextAudit, nextSnapshots, nextX1Automation) => {
       try {
         const ext = nextExtras !== undefined ? nextExtras : catalogExtrasRef.current
-        const rules = nextRules !== undefined ? nextRules : statusRulesRef.current
         const gov = nextGovernance !== undefined ? nextGovernance : governanceRef.current
         const rts = nextRoutines !== undefined ? nextRoutines : routinesRef.current
         const aud = nextAudit !== undefined ? nextAudit : auditLogRef.current
@@ -215,7 +194,6 @@ export function GroupDetails() {
             v: 5,
             members: nextMembers,
             catalogExtras: ext,
-            statusRules: rules,
             governance: gov,
             routines: rts,
             auditLog: aud,
@@ -268,7 +246,6 @@ export function GroupDetails() {
     }))
     let initial = base
     let extras = []
-    let rules = defaultStatusRules()
     let gov = defaultGovernance()
     let rts = defaultRoutines()
     let aud = defaultAudit()
@@ -281,9 +258,6 @@ export function GroupDetails() {
     }
     if (payload?.config && typeof payload.config === 'object') {
       if (Array.isArray(payload.config.catalogExtras)) extras = payload.config.catalogExtras.map(normalizeTag).filter(Boolean)
-      if (payload.config.statusRules && typeof payload.config.statusRules === 'object') {
-        rules = { ...defaultStatusRules(), ...payload.config.statusRules }
-      }
       if (payload.config.governance && typeof payload.config.governance === 'object') {
         gov = { ...defaultGovernance(), ...payload.config.governance }
       }
@@ -313,9 +287,6 @@ export function GroupDetails() {
               }
             })
             if (Array.isArray(saved.catalogExtras)) extras = saved.catalogExtras.map(normalizeTag).filter(Boolean)
-            if ((saved.v === 3 || saved.v === 4) && saved.statusRules && typeof saved.statusRules === 'object') {
-              rules = { ...defaultStatusRules(), ...saved.statusRules }
-            }
             if ((saved.v === 4 || saved.v === 5) && saved.governance && typeof saved.governance === 'object') {
               gov = { ...defaultGovernance(), ...saved.governance }
             }
@@ -347,7 +318,6 @@ export function GroupDetails() {
     setMembers(initial)
     setSelected(new Set())
     setCatalogExtras(extras)
-    setStatusRules(rules)
     setGovernance(gov)
     setRoutines(rts)
     setAuditLog(aud)
@@ -442,7 +412,7 @@ export function GroupDetails() {
     setCatalogExtras(nextExtras)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'tag.create', details: norm }, ...auditLog]
     setAuditLog(nextAudit.slice(0, 50))
-    persistAll(members, nextExtras, statusRules, governance, routines, nextAudit.slice(0, 50), snapshots)
+    persistAll(members, nextExtras, governance, routines, nextAudit.slice(0, 50), snapshots)
     setNewTagName('')
     toast.success(`Tag "${displayTag(norm)}" criada. Você pode atribuí-la aos membros.`)
   }
@@ -473,7 +443,7 @@ export function GroupDetails() {
       })
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'tag.bulk_add', details: toAdd.join(', ') }, ...auditLogRef.current].slice(0, 50)
       setAuditLog(nextAudit)
-      persistAll(next, nextExtras, statusRules, governance, routines, nextAudit, snapshots)
+      persistAll(next, nextExtras, governance, routines, nextAudit, snapshots)
       return next
     })
     toast.success(`Tag(s) aplicada(s) a ${selected.size} membro(s).`)
@@ -499,7 +469,7 @@ export function GroupDetails() {
       })
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'tag.bulk_remove', details: [...toDel].join(', ') }, ...auditLogRef.current].slice(0, 50)
       setAuditLog(nextAudit)
-      persistAll(next, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+      persistAll(next, catalogExtras, governance, routines, nextAudit, snapshots)
       return next
     })
     toast.success('Tag(s) removida(s) dos membros selecionados.')
@@ -515,7 +485,7 @@ export function GroupDetails() {
       )
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'tag.remove_single', details: norm }, ...auditLogRef.current].slice(0, 50)
       setAuditLog(nextAudit)
-      persistAll(next, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+      persistAll(next, catalogExtras, governance, routines, nextAudit, snapshots)
       return next
     })
     toast.success(`Tag "${displayTag(norm)}" removida.`)
@@ -548,7 +518,7 @@ export function GroupDetails() {
       const next = prev.map((m) => (m.id === memberId ? { ...m, status: nextStatus } : m))
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'member.status', details: `${memberId} -> ${nextStatus}` }, ...auditLogRef.current].slice(0, 50)
       setAuditLog(nextAudit)
-      persistAll(next, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+      persistAll(next, catalogExtras, governance, routines, nextAudit, snapshots)
       return next
     })
     toast.success('Status atualizado.')
@@ -576,7 +546,7 @@ export function GroupDetails() {
       const next = prev.map((m) => (selected.has(m.id) ? { ...m, status: nextStatus } : m))
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'member.status_bulk', details: `${selected.size} -> ${nextStatus}` }, ...auditLogRef.current].slice(0, 50)
       setAuditLog(nextAudit)
-      persistAll(next, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+      persistAll(next, catalogExtras, governance, routines, nextAudit, snapshots)
       return next
     })
     toast.success(`Status "${nextStatus}" aplicado a ${selected.size} membro(s).`)
@@ -585,37 +555,6 @@ export function GroupDetails() {
     void setGroupParticipantsStatus(id, memberIds, nextStatus).catch(() => {
       toast.error('Falha ao salvar status no servidor.')
     })
-  }
-
-  const applyInactivityRule = () => {
-    const days = Math.max(1, Math.min(365, Number(statusRules.inactiveAfterDays) || 3))
-    const nextRules = { ...statusRules, inactiveAfterDays: days }
-    const changedIds = []
-    let changed = 0
-    const next = members.map((m) => {
-      if (m.status === 'ativo' && daysSince(m.lastActivity) > days) {
-        changed += 1
-        changedIds.push(m.id)
-        return { ...m, status: 'inativo' }
-      }
-      return m
-    })
-    setStatusRules(nextRules)
-    setMembers(next)
-    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'rule.inactivity_apply', details: `dias=${days}; alterados=${changed}` }, ...auditLogRef.current].slice(0, 50)
-    setAuditLog(nextAudit)
-    persistAll(next, catalogExtras, nextRules, governance, routines, nextAudit, snapshots)
-    if (changed === 0) {
-      toast.info('Nenhum membro ativo ultrapassou o limite de dias sem atividade (campo lastActivity).')
-    } else {
-      toast.success(`${changed} membro(s) marcado(s) como inativo por inatividade (> ${days} dia(s)).`)
-    }
-
-    if (id && changedIds.length) {
-      void setGroupParticipantsStatus(id, changedIds, 'inativo').catch(() => {
-        toast.error('Falha ao salvar status inativo no servidor.')
-      })
-    }
   }
 
   const executeMoveBulk = () => {
@@ -627,7 +566,7 @@ export function GroupDetails() {
     toast.success(msg)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'bulk.move', details: msg }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots)
   }
 
   const createSnapshot = () => {
@@ -637,7 +576,6 @@ export function GroupDetails() {
       title: `Snapshot ${new Date().toLocaleTimeString('pt-BR')}`,
       governance,
       settings,
-      statusRules,
       routines,
       x1Automation,
     }
@@ -645,7 +583,7 @@ export function GroupDetails() {
     setSnapshots(next)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'snapshot.create', details: snap.title }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, next, x1Automation)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, next, x1Automation)
     toast.success('Snapshot de regras salvo.')
   }
 
@@ -654,7 +592,6 @@ export function GroupDetails() {
     if (!snap) return
     setGovernance(snap.governance)
     setSettings(snap.settings)
-    setStatusRules(snap.statusRules)
     setRoutines(snap.routines)
     setX1Automation(snap.x1Automation || defaultX1Automation())
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'snapshot.rollback', details: snap.title }, ...auditLogRef.current].slice(0, 50)
@@ -662,7 +599,6 @@ export function GroupDetails() {
     persistAll(
       members,
       catalogExtras,
-      snap.statusRules,
       snap.governance,
       snap.routines,
       nextAudit,
@@ -696,11 +632,10 @@ export function GroupDetails() {
   const saveGovernance = () => {
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'governance.save', details: 'Regras de governança atualizadas' }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots)
     if (resolveUseRealApi() && id) {
       void updateGroupConfig(id, {
         governance,
-        statusRules,
         routines,
         auditLog: nextAudit,
         snapshots,
@@ -715,11 +650,10 @@ export function GroupDetails() {
   const saveBasicSettings = () => {
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'group.settings_save', details: 'Configurações básicas salvas' }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots, x1Automation)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, x1Automation)
     if (resolveUseRealApi() && id) {
       void updateGroupConfig(id, {
         settings,
-        statusRules,
         auditLog: nextAudit,
       }).catch((e) => {
         toast.error(e?.response?.data?.message || 'Falha ao salvar configurações no servidor.')
@@ -743,7 +677,7 @@ export function GroupDetails() {
     setNewAdmin('')
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'admin.add', details: value }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, nextGovernance, routines, nextAudit, snapshots, x1Automation)
+    persistAll(members, catalogExtras, nextGovernance, routines, nextAudit, snapshots, x1Automation)
   }
 
   const removeAdmin = (value) => {
@@ -751,7 +685,7 @@ export function GroupDetails() {
     setGovernance(nextGovernance)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'admin.remove', details: value }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, nextGovernance, routines, nextAudit, snapshots, x1Automation)
+    persistAll(members, catalogExtras, nextGovernance, routines, nextAudit, snapshots, x1Automation)
   }
 
   const saveX1Automation = () => {
@@ -765,7 +699,7 @@ export function GroupDetails() {
     setX1Automation(safe)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'x1.settings_save', details: 'Automação de entrada/saída atualizada' }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots, safe)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, safe)
     if (resolveUseRealApi() && id) {
       void updateGroupConfig(id, { x1Automation: safe, auditLog: nextAudit }).catch((e) => {
         toast.error(e?.response?.data?.message || 'Falha ao salvar automação X1 no servidor.')
@@ -782,7 +716,7 @@ export function GroupDetails() {
     toast.success(message)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: `x1.simulate_${kind}`, details: message }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, routines, nextAudit, snapshots, x1Automation)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, x1Automation)
   }
 
   const addRoutine = () => {
@@ -797,7 +731,7 @@ export function GroupDetails() {
     setNewRoutine({ type: 'privacidade', description: '' })
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'routine.add', details: routine.description }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, next, nextAudit, snapshots)
+    persistAll(members, catalogExtras, governance, next, nextAudit, snapshots)
     toast.success('Rotina criada.')
   }
 
@@ -806,7 +740,7 @@ export function GroupDetails() {
     setRoutines(next)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'routine.toggle', details: routineId }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, statusRules, governance, next, nextAudit, snapshots)
+    persistAll(members, catalogExtras, governance, next, nextAudit, snapshots)
   }
 
   if (loading) {
@@ -953,64 +887,6 @@ export function GroupDetails() {
             </div>
           </Card>
 
-          <Card className="space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="rounded-lg bg-accent-500/15 p-2 text-accent-400">
-                <Clock className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1 space-y-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-stone-100 font-heading">Regra: inatividade no grupo</h3>
-                  <p className="mt-1 text-xs text-stone-500 leading-relaxed">
-                    Compara a data de <strong className="text-stone-400">última atividade</strong> (mock) com hoje. Membros
-                    <strong className="text-stone-400"> ativos</strong> com mais de N dias sem atividade passam a{' '}
-                    <strong className="text-stone-400">inativo</strong>. Não reativa automaticamente quem já estava inativo.
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="w-28">
-                    <Input
-                      label="Dias sem atividade"
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={statusRules.inactiveAfterDays}
-                      onChange={(e) =>
-                        setStatusRules((r) => ({
-                          ...r,
-                          inactiveAfterDays: Math.max(1, Math.min(365, Number(e.target.value) || 1)),
-                        }))
-                      }
-                    />
-                  </div>
-                  <Button type="button" variant="secondary" onClick={() => setConfirmInactivityModal(true)}>
-                    Aplicar regra agora
-                  </Button>
-                </div>
-                <Toggle
-                  checked={statusRules.autoCheckEnabled}
-                  onChange={(v) => {
-                    const n = { ...statusRules, autoCheckEnabled: v }
-                    setStatusRules(n)
-                    persistAll(members, catalogExtras, n, governance, routines, auditLog, snapshots, x1Automation)
-                  }}
-                  label="Preferir checagem automática diária (requer backend / cron)"
-                />
-                <p className="text-xs text-stone-600">
-                  Em produção: job agendado lê último &quot;visto&quot; ou última mensagem no grupo via API do WhatsApp e aplica a mesma lógica.
-                </p>
-                <div className="rounded-lg border border-brand-800/80 bg-brand-950/40 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">Regras ativas</p>
-                  <ul className="mt-2 space-y-1 text-xs text-stone-300">
-                    <li>• Inatividade após {statusRules.inactiveAfterDays} dia(s) sem atividade</li>
-                    <li>• Checagem automática diária: {statusRules.autoCheckEnabled ? 'ativada' : 'desativada'}</li>
-                    <li>• Aplicação manual disponível via botão &quot;Aplicar regra agora&quot;</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </Card>
-
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap gap-2">
               {['todos', 'ativos', 'inativos', 'admins'].map((f) => (
@@ -1095,9 +971,6 @@ export function GroupDetails() {
                           <img src={avatar(m.name)} alt="" className="h-8 w-8 rounded-full" />
                           <span className="text-stone-50">{m.name}</span>
                           {m.role === 'admin' && <Badge variant="warning">admin</Badge>}
-                          {daysSince(m.lastActivity) > statusRules.inactiveAfterDays && m.status === 'ativo' && (
-                            <Badge variant="warning">risco churn</Badge>
-                          )}
                         </div>
                       </td>
                       <td className="p-4 text-stone-400">{m.phone}</td>
@@ -1160,33 +1033,6 @@ export function GroupDetails() {
               </table>
             </div>
           </Card>
-
-          <Modal
-            isOpen={confirmInactivityModal}
-            onClose={() => setConfirmInactivityModal(false)}
-            title="Confirmar aplicação da regra"
-            size="md"
-            footer={
-              <>
-                <Button variant="ghost" onClick={() => setConfirmInactivityModal(false)}>
-                  Cancelar
-                </Button>
-                <Button
-                  onClick={() => {
-                    setConfirmInactivityModal(false)
-                    applyInactivityRule()
-                  }}
-                >
-                  Confirmar e aplicar
-                </Button>
-              </>
-            }
-          >
-            <p className="text-sm text-stone-300">
-              Aplicar agora a regra de inatividade para marcar como <strong>inativo</strong> membros ativos com mais de{' '}
-              <strong>{statusRules.inactiveAfterDays} dia(s)</strong> sem atividade?
-            </p>
-          </Modal>
 
           <Modal
             isOpen={addTagModal}
