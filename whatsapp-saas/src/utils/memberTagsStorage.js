@@ -73,3 +73,47 @@ export function setMemberCustomTags(overrides, memberId, tags) {
   }
   return next
 }
+
+/** Remove tag do catálogo e de todos os membros (exceto admin do WhatsApp). */
+export function removeTagGlobally(overrides, catalogExtras, tag) {
+  const norm = normalizeTag(tag)
+  if (!norm || norm === 'admin') return { overrides, catalogExtras }
+
+  const nextCatalog = catalogExtras.filter((t) => normalizeTag(t) !== norm)
+  let nextOverrides = { ...overrides }
+
+  for (const memberId of Object.keys(nextOverrides)) {
+    const entry = nextOverrides[memberId]
+    if (!Array.isArray(entry?.tags)) continue
+    const filtered = entry.tags.map(normalizeTag).filter((t) => t !== norm)
+    nextOverrides = setMemberCustomTags(nextOverrides, memberId, filtered)
+  }
+
+  return { overrides: nextOverrides, catalogExtras: nextCatalog }
+}
+
+/** Renomeia tag no catálogo e em todos os membros. Retorna null se inválido. */
+export function renameTagGlobally(overrides, catalogExtras, oldTag, newTag) {
+  const oldNorm = normalizeTag(oldTag)
+  const newNorm = normalizeTag(newTag)
+  if (!oldNorm || !newNorm || oldNorm === 'admin' || newNorm === 'admin') return null
+  if (oldNorm === newNorm) return { overrides, catalogExtras }
+
+  const nextCatalog = [
+    ...new Set(
+      catalogExtras
+        .map((t) => (normalizeTag(t) === oldNorm ? newNorm : normalizeTag(t)))
+        .filter(Boolean),
+    ),
+  ]
+
+  let nextOverrides = { ...overrides }
+  for (const memberId of Object.keys(nextOverrides)) {
+    const entry = nextOverrides[memberId]
+    if (!Array.isArray(entry?.tags)) continue
+    const tags = entry.tags.map(normalizeTag).map((t) => (t === oldNorm ? newNorm : t))
+    nextOverrides = setMemberCustomTags(nextOverrides, memberId, tags)
+  }
+
+  return { overrides: nextOverrides, catalogExtras: nextCatalog }
+}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Tag, MessageSquare, Download, RefreshCw, Plus, X, CheckSquare, Eraser } from 'lucide-react'
+import { Tag, MessageSquare, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -17,6 +17,8 @@ import {
   saveMemberTagsStore,
   mergeMemberTags,
   setMemberCustomTags,
+  removeTagGlobally,
+  renameTagGlobally,
 } from '../../utils/memberTagsStorage.js'
 
 function fmtActivity(iso) {
@@ -61,6 +63,8 @@ export function Members() {
   const [tagsModal, setTagsModal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [applyTagValue, setApplyTagValue] = useState('')
+  const [editingTag, setEditingTag] = useState('')
+  const [editingTagName, setEditingTagName] = useState('')
 
   const overridesRef = useRef(tagOverrides)
   const catalogRef = useRef(catalogExtras)
@@ -134,6 +138,18 @@ export function Members() {
 
   const allTags = tagCatalog
 
+  const manageableTags = useMemo(() => tagCatalog.filter((t) => t !== 'admin'), [tagCatalog])
+
+  const applyTagStoreUpdate = useCallback(
+    (nextOverrides, nextCatalog) => {
+      setTagOverrides(nextOverrides)
+      setCatalogExtras(nextCatalog)
+      persistStore(nextOverrides, nextCatalog)
+      setMembers(applyStoreToMembers(apiMembers, { overrides: nextOverrides, catalogExtras: nextCatalog }))
+    },
+    [apiMembers, persistStore],
+  )
+
   const displayedMembers = useMemo(() => {
     if (!tagFilter) return members
     return members.filter((m) => (m.tags || []).map(normalizeTag).includes(normalizeTag(tagFilter)))
@@ -180,6 +196,69 @@ export function Members() {
     persistStore(tagOverrides, nextCatalog)
     setNewTagName('')
     toast.success(`Tag "${displayTag(norm)}" criada.`)
+  }
+
+  const closeTagsModal = () => {
+    setTagsModal(false)
+    setEditingTag('')
+    setEditingTagName('')
+  }
+
+  const deleteTag = (tag) => {
+    const norm = normalizeTag(tag)
+    if (norm === 'admin') {
+      toast.info('A tag admin vem do WhatsApp e não pode ser excluída.')
+      return
+    }
+    const { overrides: nextOverrides, catalogExtras: nextCatalog } = removeTagGlobally(
+      tagOverrides,
+      catalogExtras,
+      norm,
+    )
+    applyTagStoreUpdate(nextOverrides, nextCatalog)
+    if (normalizeTag(tagFilter) === norm) setTagFilter('')
+    if (normalizeTag(applyTagValue) === norm) setApplyTagValue('')
+    if (editingTag === norm) {
+      setEditingTag('')
+      setEditingTagName('')
+    }
+    toast.success(`Tag "${displayTag(norm)}" excluída.`)
+  }
+
+  const startEditTag = (tag) => {
+    setEditingTag(tag)
+    setEditingTagName(displayTag(tag))
+  }
+
+  const cancelEditTag = () => {
+    setEditingTag('')
+    setEditingTagName('')
+  }
+
+  const saveEditTag = () => {
+    const newNorm = normalizeTag(editingTagName)
+    if (!newNorm) {
+      toast.error('Digite um nome para a tag.')
+      return
+    }
+    if (newNorm === 'admin') {
+      toast.error('O nome "admin" é reservado para admins do WhatsApp.')
+      return
+    }
+    if (newNorm !== editingTag && tagCatalog.includes(newNorm)) {
+      toast.error('Já existe uma tag com esse nome.')
+      return
+    }
+    const result = renameTagGlobally(tagOverrides, catalogExtras, editingTag, newNorm)
+    if (!result) {
+      toast.error('Não foi possível renomear esta tag.')
+      return
+    }
+    applyTagStoreUpdate(result.overrides, result.catalogExtras)
+    if (normalizeTag(tagFilter) === editingTag) setTagFilter(newNorm)
+    if (normalizeTag(applyTagValue) === editingTag) setApplyTagValue(newNorm)
+    toast.success(`Tag renomeada para "${displayTag(newNorm)}".`)
+    cancelEditTag()
   }
 
   const applyTagToSelected = (tagRaw) => {
@@ -535,25 +614,76 @@ export function Members() {
 
       <Modal
         isOpen={tagsModal}
-        onClose={() => setTagsModal(false)}
+        onClose={closeTagsModal}
         title="Gerenciar tags"
         size="md"
         footer={
-          <Button variant="ghost" onClick={() => setTagsModal(false)}>
+          <Button variant="ghost" onClick={closeTagsModal}>
             Fechar
           </Button>
         }
       >
         <p className="text-sm text-stone-400 mb-4">
-          Crie tags para organizar membros. Selecione membros na tabela e use o menu &quot;Aplicar tag&quot; acima da lista.
+          Crie, edite ou exclua tags. Selecione membros na tabela e use &quot;Aplicar tag&quot; acima da lista.
         </p>
-        <div className="flex flex-wrap gap-2 mb-4 min-h-[28px]">
-          {tagCatalog.map((t) => (
-            <Badge key={t} variant="default">
-              {displayTag(t)}
-            </Badge>
-          ))}
-          {tagCatalog.length === 0 && <span className="text-xs text-stone-500">Nenhuma tag ainda.</span>}
+        <div className="space-y-2 mb-4 min-h-[28px]">
+          {tagCatalog.includes('admin') && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="warning">admin</Badge>
+              <span className="text-xs text-stone-500">Reservada — vem do WhatsApp (não editável)</span>
+            </div>
+          )}
+          {manageableTags.length === 0 && !tagCatalog.includes('admin') && (
+            <span className="text-xs text-stone-500">Nenhuma tag ainda.</span>
+          )}
+          {manageableTags.map((t) =>
+            editingTag === t ? (
+              <div key={t} className="flex flex-wrap items-center gap-2">
+                <Input
+                  className="max-w-[220px]"
+                  value={editingTagName}
+                  onChange={(e) => setEditingTagName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      saveEditTag()
+                    }
+                    if (e.key === 'Escape') cancelEditTag()
+                  }}
+                  autoFocus
+                />
+                <Button type="button" size="sm" variant="primary" className="gap-1" onClick={saveEditTag}>
+                  <Check className="h-3.5 w-3.5" /> Salvar
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={cancelEditTag}>
+                  Cancelar
+                </Button>
+              </div>
+            ) : (
+              <div
+                key={t}
+                className="inline-flex items-center gap-1 rounded-full border border-brand-600 bg-brand-800/80 pl-3 pr-1.5 py-1 text-sm text-stone-100"
+              >
+                <span>{displayTag(t)}</span>
+                <button
+                  type="button"
+                  className="rounded p-1 text-stone-400 hover:bg-white/10 hover:text-accent-300"
+                  aria-label={`Editar tag ${displayTag(t)}`}
+                  onClick={() => startEditTag(t)}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  className="rounded p-1 text-stone-400 hover:bg-red-500/15 hover:text-red-300"
+                  aria-label={`Excluir tag ${displayTag(t)}`}
+                  onClick={() => deleteTag(t)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ),
+          )}
         </div>
         <div className="flex gap-2">
           <Input
