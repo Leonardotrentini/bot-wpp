@@ -35,7 +35,7 @@ function isInRange(date, start, end) {
 }
 
 function isGroupConnected(group) {
-  return group.status === "ativo" || Boolean(group.monitoringEnabled)
+  return group.status === "ativo" && Boolean(group.monitoringEnabled)
 }
 
 function mergeParticipantStatus(current, incoming) {

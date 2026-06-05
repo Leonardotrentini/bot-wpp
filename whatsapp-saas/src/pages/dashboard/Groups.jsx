@@ -9,6 +9,26 @@ import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { discoverGroups, getGroups, setGroupsStatus } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 
+function isMonitoredGroup(g) {
+  return g.status === 'ativo' && g.monitoringEnabled
+}
+
+function isPendingGroup(g) {
+  return g.status === 'pendente' || (g.status === 'ativo' && !g.monitoringEnabled)
+}
+
+function groupDisplayStatus(g) {
+  if (isMonitoredGroup(g)) return 'ativo'
+  if (g.status === 'inativo') return 'inativo'
+  return 'pendente'
+}
+
+function groupStatusBadgeVariant(g) {
+  if (isMonitoredGroup(g)) return 'success'
+  if (g.status === 'inativo') return 'muted'
+  return 'warning'
+}
+
 export function Groups() {
   const toast = useToast()
   const [groups, setGroups] = useState([])
@@ -116,8 +136,8 @@ export function Groups() {
 
   const groupCounts = useMemo(
     () => ({
-      ativos: groups.filter((g) => g.status === 'ativo').length,
-      pendentes: groups.filter((g) => g.status === 'pendente').length,
+      ativos: groups.filter(isMonitoredGroup).length,
+      pendentes: groups.filter(isPendingGroup).length,
       inativos: groups.filter((g) => g.status === 'inativo').length,
     }),
     [groups],
@@ -125,8 +145,8 @@ export function Groups() {
 
   const filtered = useMemo(() => {
     return groups.filter((g) => {
-      if (filter === 'ativos' && g.status !== 'ativo') return false
-      if (filter === 'pendentes' && g.status !== 'pendente') return false
+      if (filter === 'ativos' && !isMonitoredGroup(g)) return false
+      if (filter === 'pendentes' && !isPendingGroup(g)) return false
       if (filter === 'inativos' && g.status !== 'inativo') return false
       if (q && !g.name.toLowerCase().includes(q.toLowerCase())) return false
       return true
@@ -280,7 +300,7 @@ export function Groups() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold text-stone-50 truncate">{g.name}</h3>
-                      <Badge variant={g.status === 'ativo' ? 'success' : g.status === 'pendente' ? 'warning' : 'muted'}>{g.status}</Badge>
+                      <Badge variant={groupStatusBadgeVariant(g)}>{groupDisplayStatus(g)}</Badge>
                       {g.monitoringEnabled && g.status === 'ativo' && <Badge variant="success">Monitorando</Badge>}
                     </div>
                     <p className="text-xs text-stone-500 mt-1">{g.memberCount} membros</p>

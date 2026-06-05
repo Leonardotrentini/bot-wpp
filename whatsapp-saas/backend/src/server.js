@@ -15,6 +15,7 @@ const { z } = require("zod")
 const { createServer } = require("http")
 const { Server } = require("socket.io")
 const { prisma } = require("./lib/prisma")
+const { isPlausibleWhatsAppGroup, cleanupGhostGroups } = require("./lib/groupDiscovery")
 const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
 const {
@@ -535,7 +536,6 @@ function mapEvolutionGroup(group, instanceName) {
     instanceName,
     name,
     memberCount,
-    status: "ativo",
     lastMessage: group?.desc || "Grupo sincronizado do WhatsApp.",
     lastMessageAt: lastMessageAt ? new Date(lastMessageAt) : null,
     image: group?.pictureUrl || fallbackGroupImage(name),
@@ -612,7 +612,7 @@ async function readCachedGroups(userId) {
     where: { userId },
     orderBy: [{ status: "asc" }, { name: "asc" }],
   })
-  return rows.map(getGroupApiPayload)
+  return rows.filter((row) => row.monitoringEnabled || isPlausibleWhatsAppGroup(row)).map(getGroupApiPayload)
 }
 
 async function updateConnectionSync(userId, data) {
@@ -635,24 +635,28 @@ function getGroupUpdateData(group, extra = {}) {
   return { ...data, ...extra }
 }
 
-async function upsertDiscoveredGroup(userId, group, status = "pendente") {
-  const now = new Date()
+/** Descoberta/webhook: grava metadados plausíveis; status só muda via /groups/status ou activateGroupsForMonitoring. */
+async function upsertDiscoveredGroup(userId, group) {
   const existing = await prisma.whatsAppGroup.findUnique({
     where: { userId_groupJid: { userId, groupJid: group.groupJid } },
-    select: { status: true },
   })
-  const preserveStatus = existing?.status === "ativo" || existing?.status === "inativo"
-  const statusPatch =
-    status === "ativo" ? { status: "ativo" } : preserveStatus ? {} : !existing ? { status: "pendente" } : {}
 
+  if (existing?.status === "inativo" && !existing.monitoringEnabled) {
+    return existing
+  }
+
+  const plausible = isPlausibleWhatsAppGroup(group) || Boolean(existing?.monitoringEnabled)
+  if (!plausible) return existing || null
+
+  const now = new Date()
   return prisma.whatsAppGroup.upsert({
     where: { userId_groupJid: { userId, groupJid: group.groupJid } },
     create: {
-      ...getGroupCreateData(userId, group, status === "ativo" ? "ativo" : "pendente"),
+      ...getGroupCreateData(userId, group, "pendente"),
       lastSyncedAt: now,
     },
     update: {
-      ...getGroupUpdateData(group, statusPatch),
+      ...getGroupUpdateData(group),
       lastSyncedAt: now,
     },
   })
@@ -714,21 +718,25 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
       }
     }
     const shape = previewPayloadShape(payload)
-    const realGroups = normalizeEvolutionGroups(payload)
+    const allMapped = normalizeEvolutionGroups(payload)
       .map((g) => mapEvolutionGroup(g, conn.instanceName))
       .filter((g) => g.groupJid)
+    const realGroups = allMapped.filter((g) => isPlausibleWhatsAppGroup(g))
+    const skippedGhosts = allMapped.length - realGroups.length
 
     updatedConn = await updateConnectionSync(conn.userId, {
       groupSyncStatus: "DISCOVERING_GROUPS",
       groupSyncProgress: realGroups.length ? 65 : 100,
       groupSyncMessage: realGroups.length
-        ? `${realGroups.length} grupos encontrados. Preparando para sincronizar em etapas.`
-        : "Nenhum grupo foi retornado pelo WhatsApp.",
+        ? `${realGroups.length} grupos encontrados${skippedGhosts ? ` (${skippedGhosts} entradas inválidas ignoradas)` : ""}. Preparando para sincronizar em etapas.`
+        : skippedGhosts
+          ? `${skippedGhosts} entradas inválidas ignoradas; nenhum grupo real encontrado.`
+          : "Nenhum grupo foi retornado pelo WhatsApp.",
       groupSyncError: null,
     })
 
     for (const [index, group] of realGroups.entries()) {
-      await upsertDiscoveredGroup(conn.userId, group, "pendente")
+      await upsertDiscoveredGroup(conn.userId, group)
 
       const done = index + 1
       const progress = Math.min(98, Math.round(65 + (done / Math.max(1, realGroups.length)) * 33))
@@ -745,16 +753,18 @@ async function discoverGroupsFromEvolution(conn, { force = false } = {}) {
 
     if (realGroups.length > 0) {
       await prisma.whatsAppGroup.updateMany({
-        where: { userId: conn.userId, groupJid: { notIn: realGroups.map((g) => g.groupJid) } },
+        where: { userId: conn.userId, groupJid: { notIn: realGroups.map((g) => g.groupJid) }, monitoringEnabled: false },
         data: { status: "inativo", lastSyncedAt: now },
       })
     }
+
+    const cleanedGhosts = await cleanupGhostGroups(prisma, conn.userId)
 
     updatedConn = await updateConnectionSync(conn.userId, {
       groupSyncStatus: realGroups.length ? "GROUPS_FOUND" : "READY",
       groupSyncProgress: 100,
       groupSyncMessage: realGroups.length
-        ? `${realGroups.length} grupos encontrados. Selecione e marque como ativo para monitorar a partir de agora.`
+        ? `${realGroups.length} grupos encontrados${skippedGhosts ? ` · ${skippedGhosts} fantasma(s) ignorado(s)` : ""}${cleanedGhosts ? ` · ${cleanedGhosts} limpo(s)` : ""}. Selecione e marque como ativo para monitorar.`
         : "A Evolution respondeu, mas reconhecemos 0 grupos. Se você acabou de conectar, aguarde ~1 min (a sessão ainda sincroniza) e tente de novo.",
       groupSyncError: realGroups.length ? null : `Resposta da Evolution: ${shape}`,
       groupSyncRetryAfter: null,
@@ -889,7 +899,6 @@ async function importGroupMessages(conn, group, cutoffMs) {
   await prisma.whatsAppGroup.update({
     where: { id: group.id },
     data: {
-      status: "ativo",
       messageSyncStatus: "READY",
       messageSyncProgress: 100,
       messagesSyncedCount: totalSaved,
@@ -1082,6 +1091,7 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
 app.get("/api/groups", authMiddleware, async (req, res) => {
   try {
     const conn = await getUserWhatsAppConnection(req.user.sub)
+    await cleanupGhostGroups(prisma, req.user.sub)
     const cachedGroups = await readCachedGroups(req.user.sub)
     res.json({
       groups: cachedGroups,
@@ -2646,22 +2656,27 @@ async function updateGroupsFromWebhook(instanceName, body) {
     .map((g) => mapEvolutionGroup(g, instanceName))
     .filter((g) => g.groupJid)
 
+  let saved = 0
   for (const group of eventGroups) {
-    await upsertDiscoveredGroup(conn.userId, group, "ativo")
+    if (!isPlausibleWhatsAppGroup(group)) continue
+    await upsertDiscoveredGroup(conn.userId, group)
+    saved += 1
   }
 
-  if (eventGroups.length) {
-    const groupsCount = await prisma.whatsAppGroup.count({ where: { userId: conn.userId } })
+  const cleanedGhosts = await cleanupGhostGroups(prisma, conn.userId)
+
+  if (saved || cleanedGhosts) {
+    const visibleCount = (await readCachedGroups(conn.userId)).length
     const updatedConn = await updateConnectionSync(conn.userId, {
       groupSyncStatus: "READY",
       groupSyncProgress: 100,
-      groupSyncMessage: `${groupsCount} grupos atualizados por eventos do WhatsApp.`,
+      groupSyncMessage: `${visibleCount} grupo(s) visíveis${saved ? ` · ${saved} evento(s) processado(s)` : ""}${cleanedGhosts ? ` · ${cleanedGhosts} fantasma(s) ocultado(s)` : ""}. Ative manualmente os que quiser monitorar.`,
       groupSyncError: null,
     })
-    io.emit("whatsapp:status", formatConnectionPayload(updatedConn, groupsCount))
+    io.emit("whatsapp:status", formatConnectionPayload(updatedConn, visibleCount))
   }
 
-  return eventGroups.length
+  return saved
 }
 
 /** Mensagens novas (a partir da conexão). Só grava em grupos monitorados; sem histórico antigo. */

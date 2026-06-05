@@ -34,7 +34,7 @@ function DataBanner({ meta }) {
 
 function GroupFilterBar({ groups, selectedIds, onChange }) {
   const connected = useMemo(
-    () => groups.filter((g) => g.status === 'ativo' || g.monitoringEnabled),
+    () => groups.filter((g) => g.status === 'ativo' && g.monitoringEnabled),
     [groups],
   )
   const allSelected = selectedIds.length === 0
@@ -234,7 +234,7 @@ export function Dashboard() {
     },
   ]
 
-  const hasConnected = groups.some((g) => g.status === 'ativo' || g.monitoringEnabled)
+  const hasConnected = groups.some((g) => g.status === 'ativo' && g.monitoringEnabled)
 
   return (
     <div className="space-y-8">

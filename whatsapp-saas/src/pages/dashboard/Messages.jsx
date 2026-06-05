@@ -314,7 +314,9 @@ export function Messages({ defaultTab = 'criar' }) {
 
   useEffect(() => {
     Promise.all([
-      getGroups().then((r) => setGroups((r.data.groups || []).filter((g) => g.status === 'ativo'))),
+      getGroups().then((r) =>
+        setGroups((r.data.groups || []).filter((g) => g.status === 'ativo' && g.monitoringEnabled)),
+      ),
       refreshTemplates(),
       refreshAutomations(),
       refreshCadences(),

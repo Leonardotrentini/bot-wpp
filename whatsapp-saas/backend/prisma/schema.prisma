@@ -114,7 +114,7 @@ model WhatsAppGroup {
   groupJid             String
   name                 String
   memberCount          Int                        @default(0)
-  status               String                     @default("ativo")
+  status               String                     @default("pendente")
   lastMessage          String?
   lastMessageAt        DateTime?
   image                String?
