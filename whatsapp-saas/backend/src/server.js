@@ -2571,7 +2571,21 @@ app.delete("/api/automations/:id", authMiddleware, async (req, res) => {
 // ===================== Cadências (agrupam automações) =====================
 
 function getCadencePayload(c) {
-  return { id: c.id, name: c.name }
+  return { id: c.id, name: c.name, status: c.status || "pausada" }
+}
+
+async function syncLegacyCadenceStatus() {
+  const activeByCadence = await prisma.automation.groupBy({
+    by: ["cadenceId"],
+    where: { status: "ativa", cadenceId: { not: null } },
+  })
+  for (const row of activeByCadence) {
+    if (!row.cadenceId) continue
+    await prisma.cadence.updateMany({
+      where: { id: row.cadenceId, status: "pausada" },
+      data: { status: "ativa" },
+    })
+  }
 }
 
 app.get("/api/cadences", authMiddleware, async (req, res) => {
@@ -2634,6 +2648,11 @@ app.post("/api/cadences/:id/status", authMiddleware, async (req, res) => {
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Status inválido." })
 
+  const updatedCadence = await prisma.cadence.update({
+    where: { id: existing.id },
+    data: { status: parsed.data.status },
+  })
+
   const members = await prisma.automation.findMany({
     where: { userId: req.user.sub, cadenceId: existing.id, frequency: { not: "now" }, status: { not: "concluida" } },
   })
@@ -2643,7 +2662,7 @@ app.post("/api/cadences/:id/status", authMiddleware, async (req, res) => {
     await prisma.automation.update({ where: { id: a.id }, data })
   }
   const automations = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
-  res.json({ automations: automations.map(getAutomationPayload) })
+  res.json({ cadence: getCadencePayload(updatedCadence), automations: automations.map(getAutomationPayload) })
 })
 
 async function processDueAutomations() {
@@ -2653,9 +2672,19 @@ async function processDueAutomations() {
     take: 20,
   })
 
+  const cadenceIds = [...new Set(due.map((a) => a.cadenceId).filter(Boolean))]
+  const pausedCadenceIds = new Set(
+    cadenceIds.length
+      ? (await prisma.cadence.findMany({ where: { id: { in: cadenceIds }, status: "pausada" }, select: { id: true } })).map(
+          (c) => c.id,
+        )
+      : [],
+  )
+
   const catchupMs = SCHEDULER_CATCHUP_HOURS * 3600 * 1000
 
   for (const a of due) {
+    if (a.cadenceId && pausedCadenceIds.has(a.cadenceId)) continue
     if (schedulerLock.has(a.id)) continue
     schedulerLock.add(a.id)
     try {
@@ -3155,6 +3184,7 @@ async function refreshConnectedInstanceWebhooks() {
 
 httpServer.listen(port, () => {
   void ensureDefaultPlans().catch((err) => console.error("[bootstrap] ensureDefaultPlans:", err?.message || err))
+  void syncLegacyCadenceStatus().catch((err) => console.error("[bootstrap] syncLegacyCadenceStatus:", err?.message || err))
   void refreshConnectedInstanceWebhooks().catch((err) =>
     console.error("[bootstrap] refreshConnectedInstanceWebhooks:", err?.message || err),
   )

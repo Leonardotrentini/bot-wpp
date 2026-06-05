@@ -201,6 +201,7 @@ model Cadence {
   id        String   @id @default(cuid())
   userId    String
   name      String
+  status    String   @default("pausada") // ativa | pausada
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

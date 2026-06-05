@@ -158,36 +158,21 @@ function frequencyLabel(a) {
   return a.frequency
 }
 
-function cadenceActionableMembers(members) {
-  return members.filter((m) => m.frequency !== 'now' && m.status !== 'concluida')
+function getCadenceActiveState(cadence, members) {
+  if (members.length === 0) return { active: false, disabled: true, reason: 'empty' }
+  return { active: cadence?.status === 'ativa', disabled: false, reason: null }
 }
 
-function getCadenceActiveState(members) {
-  const actionable = cadenceActionableMembers(members)
-  if (actionable.length === 0) {
-    if (members.length === 0) return { active: false, disabled: true, reason: 'empty' }
-    if (members.every((m) => m.status === 'concluida')) return { active: false, disabled: true, reason: 'done' }
-    return { active: false, disabled: true, reason: 'none' }
-  }
-  return { active: actionable.some((m) => m.status === 'ativa'), disabled: false, reason: null }
-}
-
-function cadenceStatusHint(state) {
+function cadenceStatusHint(state, members) {
   if (state.reason === 'empty') return 'Adicione automações para ativar'
-  if (state.reason === 'done') return 'Todos os disparos concluídos'
-  if (state.reason === 'none') return 'Nenhum disparo agendado'
+  const allDone = members.length > 0 && members.every((m) => m.status === 'concluida')
+  if (allDone) return state.active ? 'Cadência ativa • disparos concluídos' : 'Cadência pausada • disparos concluídos'
   return state.active ? 'Cadência ativa' : 'Cadência pausada'
 }
 
-function CadenceActiveToggle({ members, onChange, className = '' }) {
-  const state = getCadenceActiveState(members)
-  const label = state.disabled
-    ? state.reason === 'done'
-      ? 'Concluída'
-      : 'Inativa'
-    : state.active
-      ? 'Ativa'
-      : 'Pausada'
+function CadenceActiveToggle({ cadence, members, onChange, className = '' }) {
+  const state = getCadenceActiveState(cadence, members)
+  const label = state.disabled ? 'Inativa' : state.active ? 'Ativa' : 'Pausada'
   return (
     <div className={`flex flex-col items-end gap-1 ${className}`}>
       <Toggle
@@ -196,7 +181,7 @@ function CadenceActiveToggle({ members, onChange, className = '' }) {
         label={label}
         onChange={(next) => onChange(next)}
       />
-      <span className="text-[11px] text-stone-500">{cadenceStatusHint(state)}</span>
+      <span className="text-[11px] text-stone-500">{cadenceStatusHint(state, members)}</span>
     </div>
   )
 }
@@ -851,6 +836,10 @@ export function Messages({ defaultTab = 'criar' }) {
     try {
       const res = await setCadenceStatus(c.id, status)
       setAutomations(res.data.automations || [])
+      if (res.data.cadence) {
+        setCadences((prev) => prev.map((x) => (x.id === c.id ? { ...x, ...res.data.cadence } : x)))
+        setActiveCadence((prev) => (prev?.id === c.id ? { ...prev, ...res.data.cadence } : prev))
+      }
       toast.success(status === 'ativa' ? 'Cadência ativada.' : 'Cadência pausada.')
     } catch {
       toast.error('Falha ao atualizar a cadência.')
@@ -1283,7 +1272,7 @@ export function Messages({ defaultTab = 'criar' }) {
             <div className="space-y-4">
               {cadences.map((c) => {
                 const members = automations.filter((a) => a.cadenceId === c.id)
-                const cadenceState = getCadenceActiveState(members)
+                const cadenceState = getCadenceActiveState(c, members)
                 const active = members.filter((m) => m.status === 'ativa').length
                 const inactive = members.filter((m) => m.status !== 'ativa' && m.status !== 'concluida').length
                 const done = members.filter((m) => m.status === 'concluida').length
@@ -1297,7 +1286,7 @@ export function Messages({ defaultTab = 'criar' }) {
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate font-semibold text-stone-50">{c.name}</h3>
-                            {!cadenceState.disabled && (
+                            {members.length > 0 && (
                               <Badge variant={cadenceState.active ? 'success' : 'muted'}>
                                 {cadenceState.active ? 'ativa' : 'pausada'}
                               </Badge>
@@ -1313,6 +1302,7 @@ export function Messages({ defaultTab = 'criar' }) {
                       </div>
                       <div className="flex flex-wrap items-start gap-2">
                         <CadenceActiveToggle
+                          cadence={c}
                           members={members}
                           onChange={(next) => cadenceBulkStatus(c, next ? 'ativa' : 'pausada')}
                         />
@@ -1527,6 +1517,7 @@ export function Messages({ defaultTab = 'criar' }) {
                 <Layers className="h-5 w-5 text-accent-400" /> {activeCadence.name}
               </h3>
               <CadenceActiveToggle
+                cadence={activeCadence}
                 members={automations.filter((a) => a.cadenceId === activeCadence.id)}
                 onChange={(next) => cadenceBulkStatus(activeCadence, next ? 'ativa' : 'pausada')}
               />
