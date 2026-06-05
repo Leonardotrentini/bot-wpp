@@ -9,7 +9,10 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:push": "prisma db push --accept-data-loss",
-    "prisma:seed": "node prisma/seed.js"
+    "prisma:seed": "node prisma/seed.js",
+    "test:x1": "node scripts/test-x1-automation.js",
+    "test:x1:flow": "node scripts/test-x1-flow-mock.js",
+    "test:x1:integration": "node scripts/test-x1-integration.js"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

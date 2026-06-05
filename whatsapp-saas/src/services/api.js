@@ -228,6 +228,31 @@ export async function updateGroupConfig(groupId, payload = {}) {
   return mockResponse({ ok: true, ...payload })
 }
 
+export async function getGroupX1Deliveries(groupId, limit = 30) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(`/groups/${encodeURIComponent(groupId)}/x1/deliveries`, { params: { limit } })
+  }
+  return mockResponse({ deliveries: [] })
+}
+
+export async function testGroupX1(groupId, { kind, participantJid }) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/groups/${encodeURIComponent(groupId)}/x1/test`, { kind, participantJid })
+  }
+  await delay()
+  return mockResponse({
+    ok: true,
+    delivery: {
+      id: `x1-${Date.now()}`,
+      kind,
+      participantJid,
+      status: 'sent',
+      source: 'test',
+      createdAt: new Date().toISOString(),
+    },
+  })
+}
+
 export async function setGroupParticipantsStatus(groupId, participantIds = [], status = 'ativo') {
   if (resolveUseRealApi()) {
     return apiClient.post(`/groups/${encodeURIComponent(groupId)}/participants/status`, { participantIds, status })

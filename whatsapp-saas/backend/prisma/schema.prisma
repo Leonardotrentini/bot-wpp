@@ -289,3 +289,25 @@ model WhatsAppGroupParticipant {
   @@unique([groupId, participantJid])
   @@index([participantJid])
 }
+
+model GroupX1Delivery {
+  id                String   @id @default(cuid())
+  userId            String
+  groupId           String
+  participantJid    String
+  participantName   String?
+  kind              String // join | leave | test
+  body              String?
+  status            String   @default("pending") // pending | sending | sent | failed | skipped
+  error             String?
+  source            String   @default("webhook") // webhook | sync | test
+  scheduledAt       DateTime @default(now())
+  sentAt            DateTime?
+  providerMessageId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId, groupId])
+  @@index([userId, groupId, participantJid, createdAt])
+  @@index([status, scheduledAt])
+}

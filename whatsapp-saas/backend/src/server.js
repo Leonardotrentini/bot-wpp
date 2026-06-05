@@ -53,6 +53,15 @@ const {
   isReactionRecord,
   extractReactionTargetMessageId,
 } = require("./lib/evolutionMessages")
+const {
+  enqueueX1ForParticipant,
+  processPendingX1Deliveries,
+  handleGroupParticipantsX1Webhook,
+  notifyX1FromParticipantSync,
+  getX1Deliveries,
+  formatDeliveryRow,
+  resolveParticipantMeta,
+} = require("./lib/groupX1Automation")
 const adminRoutes = require("./routes/admin")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
@@ -471,21 +480,20 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
   const currentJids = new Set(enriched.map((p) => p.participantJid))
   const now = new Date()
 
-  // Preserva o status manual (ex.: "inativo") do usuário para que um novo sync
-  // não sobrescreva o que foi configurado no dashboard/GroupDetails.
-  const existingStatuses = currentJids.size
-    ? await prisma.whatsAppGroupParticipant.findMany({
-        where: { groupId: groupRow.id, participantJid: { in: [...currentJids] } },
-        select: { participantJid: true, status: true },
-      })
-    : []
-  const existingByJid = new Map(existingStatuses.map((r) => [r.participantJid, r.status]))
+  const existingRows = await prisma.whatsAppGroupParticipant.findMany({
+    where: { groupId: groupRow.id },
+    select: { participantJid: true, status: true, name: true, phone: true, raw: true },
+  })
+  const existingByJid = new Map(existingRows.map((r) => [r.participantJid, r]))
+
+  const joinedForX1 = []
+  const leftForX1 = []
 
   for (const participant of enriched) {
-    const prevStatus = existingByJid.get(participant.participantJid)
-      // Se o usuário marcou "inativo", preservamos; caso contrário, tratamos como ativo
-      // (reentrada => ativo; saída => "saiu" tratada pelo stale detection).
-      const status = prevStatus === "inativo" ? "inativo" : "ativo"
+    const prev = existingByJid.get(participant.participantJid)
+    const isNewJoin = !prev || prev.status === "saiu"
+    const prevStatus = prev?.status
+    const status = prevStatus === "inativo" ? "inativo" : "ativo"
     const data = {
       name: finalizeParticipantName(participant),
       phone: participant.phone,
@@ -500,20 +508,38 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
       create: { groupId: groupRow.id, participantJid: participant.participantJid, ...data },
       update: data,
     })
+    if (isNewJoin && status === "ativo") {
+      joinedForX1.push({
+        participantJid: participant.participantJid,
+        name: data.name,
+        phoneDigits: participant.phoneDigits,
+        isLid: participant.isLid,
+      })
+    }
   }
 
   if (currentJids.size > 0) {
     const stale = await prisma.whatsAppGroupParticipant.findMany({
       where: { groupId: groupRow.id, participantJid: { notIn: [...currentJids] }, status: { not: "saiu" } },
-      select: { id: true },
+      select: { id: true, participantJid: true, name: true, phone: true, raw: true },
     })
     if (stale.length) {
       await prisma.whatsAppGroupParticipant.updateMany({
         where: { id: { in: stale.map((s) => s.id) } },
         data: { status: "saiu", leftAt: now, lastSyncedAt: now },
       })
+      for (const s of stale) {
+        const meta = resolveParticipantMeta(s.participantJid, s.raw, s)
+        leftForX1.push({
+          participantJid: s.participantJid,
+          name: s.name || meta.participantName,
+          phoneDigits: meta.phoneDigits,
+          isLid: meta.isLid || participantIsLidSafe(s.participantJid),
+        })
+      }
     }
   }
+
   await prisma.whatsAppGroup.update({
     where: { id: groupRow.id },
     data: {
@@ -522,7 +548,23 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
       lastSyncedAt: new Date(),
     },
   })
+
+  const freshGroupRow = await prisma.whatsAppGroup.findUnique({ where: { id: groupRow.id } })
+  if (freshGroupRow && (joinedForX1.length || leftForX1.length)) {
+    void notifyX1FromParticipantSync(getX1Deps(), {
+      conn,
+      groupRow: freshGroupRow,
+      joined: joinedForX1,
+      left: leftForX1,
+    }).catch((err) => console.error("[x1] sync notify:", err?.message || err))
+  }
+
   return enriched.length
+}
+
+function participantIsLidSafe(jid) {
+  const domain = String(jid || "").split("@")[1]?.toLowerCase()
+  return domain === "lid"
 }
 
 function mapEvolutionGroup(group, instanceName) {
@@ -1510,6 +1552,98 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
   }
 })
 
+app.get("/api/groups/:id/x1/deliveries", authMiddleware, async (req, res) => {
+  try {
+    const groupJid = decodeURIComponent(req.params.id)
+    const groupRow = await prisma.whatsAppGroup.findUnique({
+      where: { userId_groupJid: { userId: req.user.sub, groupJid } },
+      select: { id: true },
+    })
+    if (!groupRow) return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado." })
+
+    const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100)
+    const rows = await getX1Deliveries(prisma, req.user.sub, groupRow.id, { limit })
+    return res.json({ deliveries: rows.map(formatDeliveryRow) })
+  } catch (err) {
+    console.error("x1 deliveries:", err)
+    return res.status(500).json({ error: "INTERNAL_ERROR", message: "Falha ao carregar histórico X1." })
+  }
+})
+
+app.post("/api/groups/:id/x1/test", authMiddleware, async (req, res) => {
+  try {
+    const groupJid = decodeURIComponent(req.params.id)
+    const schema = z.object({
+      kind: z.enum(["join", "leave"]),
+      participantJid: z.string().min(3),
+    })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: parsed.error.issues?.[0]?.message || "Informe kind e participantJid.",
+      })
+    }
+
+    const groupRow = await prisma.whatsAppGroup.findUnique({
+      where: { userId_groupJid: { userId: req.user.sub, groupJid } },
+    })
+    if (!groupRow) return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado." })
+
+    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId: req.user.sub } })
+    if (!conn?.connected) {
+      return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: "Conecte o WhatsApp antes de testar o X1." })
+    }
+
+    const participant = await prisma.whatsAppGroupParticipant.findUnique({
+      where: {
+        groupId_participantJid: { groupId: groupRow.id, participantJid: parsed.data.participantJid },
+      },
+      select: { participantJid: true, name: true, phone: true, raw: true },
+    })
+    if (!participant) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Participante não encontrado neste grupo." })
+    }
+
+    const meta = resolveParticipantMeta(participant.participantJid, participant.raw, participant)
+    const result = await enqueueX1ForParticipant(getX1Deps(), {
+      userId: req.user.sub,
+      groupRow,
+      participantJid: participant.participantJid,
+      participantName: meta.participantName,
+      phoneDigits: meta.phoneDigits,
+      isLid: meta.isLid,
+      kind: parsed.data.kind,
+      source: "test",
+      skipDelay: true,
+      force: true,
+    })
+
+    if (result.delivery?.status === "failed" || result.delivery?.status === "skipped") {
+      return res.status(422).json({
+        ok: false,
+        reason: result.reason,
+        delivery: formatDeliveryRow(result.delivery),
+      })
+    }
+
+    if (result.ok && result.delivery) {
+      await processPendingX1Deliveries(getX1Deps())
+      const fresh = await prisma.groupX1Delivery.findUnique({ where: { id: result.delivery.id } })
+      return res.json({ ok: true, delivery: formatDeliveryRow(fresh || result.delivery) })
+    }
+
+    return res.status(400).json({
+      ok: false,
+      reason: result.reason || "UNKNOWN",
+      message: "Não foi possível enfileirar o teste X1.",
+    })
+  } catch (err) {
+    console.error("x1 test:", err)
+    return handleEvolutionError(res, err)
+  }
+})
+
 app.get("/api/members", authMiddleware, async (req, res) => {
   try {
     const groupId = typeof req.query.groupId === "string" ? req.query.groupId.trim() : ""
@@ -1763,6 +1897,10 @@ const MESSAGE_SEND_RETRIES = Number(process.env.MESSAGE_SEND_RETRIES || 1)
 const MESSAGE_SEND_RETRY_DELAY_MS = Number(process.env.MESSAGE_SEND_RETRY_DELAY_MS || 4000)
 const { validateMediaContentSize } = require("./lib/mediaLimits.js")
 const ENABLE_SCHEDULER = process.env.ENABLE_SCHEDULER !== "false"
+
+function getX1Deps() {
+  return { prisma, sendText }
+}
 const SCHEDULER_CATCHUP_HOURS = Number(process.env.SCHEDULER_CATCHUP_HOURS || 6)
 const SP_OFFSET = "-03:00" // America/Sao_Paulo (sem horário de verão)
 const schedulerLock = new Set()
@@ -2875,7 +3013,10 @@ app.post("/api/evolution/webhook", async (req, res) => {
 
     if (event === "CONNECTION_UPDATE" || event === "QRCODE_UPDATED") {
       await updateConnectionFromWebhook(instanceName, req.body)
-    } else if (["GROUPS_UPSERT", "GROUP_UPDATE", "GROUP_PARTICIPANTS_UPDATE"].includes(event)) {
+    } else if (event === "GROUP_PARTICIPANTS_UPDATE") {
+      await updateGroupsFromWebhook(instanceName, req.body)
+      await handleGroupParticipantsX1Webhook(getX1Deps(), instanceName, req.body)
+    } else if (["GROUPS_UPSERT", "GROUP_UPDATE"].includes(event)) {
       await updateGroupsFromWebhook(instanceName, req.body)
     } else if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
       await storeIncomingMessages(instanceName, req.body)
@@ -3021,7 +3162,8 @@ httpServer.listen(port, () => {
   if (ENABLE_SCHEDULER) {
     setInterval(() => {
       processDueAutomations().catch((err) => console.error("[scheduler] tick:", err?.message || err))
+      processPendingX1Deliveries(getX1Deps()).catch((err) => console.error("[x1] scheduler:", err?.message || err))
     }, 30000)
-    console.log("Agendador de automações ativo (tick 30s).")
+    console.log("Agendador de automações e X1 ativo (tick 30s).")
   }
 })

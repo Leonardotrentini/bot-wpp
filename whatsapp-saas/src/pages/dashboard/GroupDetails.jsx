@@ -22,6 +22,8 @@ import {
   RotateCcw,
   CalendarClock,
   Users2,
+  AlertTriangle,
+  Send,
 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Tabs } from '../../components/common/Tabs.jsx'
@@ -33,7 +35,7 @@ import { Badge } from '../../components/common/Badge.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
 import { Select } from '../../components/common/Select.jsx'
-import { getGroupDetails, setGroupParticipantsStatus, updateGroupConfig } from '../../services/api.js'
+import { getGroupDetails, getGroupX1Deliveries, setGroupParticipantsStatus, testGroupX1, updateGroupConfig } from '../../services/api.js'
 import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { avatar, mockGroupSettings } from '../../utils/mockData.js'
@@ -147,6 +149,10 @@ export function GroupDetails() {
   const [inlineNewTag, setInlineNewTag] = useState('')
   const [newAdmin, setNewAdmin] = useState('')
   const [x1Automation, setX1Automation] = useState(() => defaultX1Automation())
+  const [x1Deliveries, setX1Deliveries] = useState([])
+  const [x1DeliveriesLoading, setX1DeliveriesLoading] = useState(false)
+  const [testParticipantJid, setTestParticipantJid] = useState('')
+  const [x1Testing, setX1Testing] = useState(null)
   const catalogExtrasRef = useRef([])
   const governanceRef = useRef(defaultGovernance())
   const routinesRef = useRef(defaultRoutines())
@@ -174,6 +180,33 @@ export function GroupDetails() {
   useEffect(() => {
     snapshotsRef.current = snapshots
   }, [snapshots])
+
+  useEffect(() => {
+    if (tab !== 'config' || !id || !resolveUseRealApi()) return
+    let ok = true
+    setX1DeliveriesLoading(true)
+    getGroupX1Deliveries(id, 30)
+      .then((res) => {
+        if (!ok) return
+        setX1Deliveries(Array.isArray(res.data?.deliveries) ? res.data.deliveries : [])
+      })
+      .catch(() => {
+        if (ok) setX1Deliveries([])
+      })
+      .finally(() => {
+        if (ok) setX1DeliveriesLoading(false)
+      })
+    return () => {
+      ok = false
+    }
+  }, [tab, id, x1Automation.enabled])
+
+  useEffect(() => {
+    if (!members.length) return
+    if (testParticipantJid && members.some((m) => m.participantJid === testParticipantJid || m.id === testParticipantJid)) return
+    const first = members.find((m) => m.status !== 'saiu')
+    if (first) setTestParticipantJid(first.participantJid || first.id || '')
+  }, [members, testParticipantJid])
 
   useEffect(() => {
     x1AutomationRef.current = x1Automation
@@ -647,20 +680,6 @@ export function GroupDetails() {
     toast.success('Governança salva.')
   }
 
-  const saveBasicSettings = () => {
-    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'group.settings_save', details: 'Configurações básicas salvas' }, ...auditLogRef.current].slice(0, 50)
-    setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, x1Automation)
-    if (resolveUseRealApi() && id) {
-      void updateGroupConfig(id, {
-        settings,
-        auditLog: nextAudit,
-      }).catch((e) => {
-        toast.error(e?.response?.data?.message || 'Falha ao salvar configurações no servidor.')
-      })
-    }
-    toast.success('Configurações básicas salvas.')
-  }
 
   const addAdmin = () => {
     const value = newAdmin.trim()
@@ -688,6 +707,13 @@ export function GroupDetails() {
     persistAll(members, catalogExtras, nextGovernance, routines, nextAudit, snapshots, x1Automation)
   }
 
+  const refreshX1Deliveries = useCallback(() => {
+    if (!id || !resolveUseRealApi()) return Promise.resolve()
+    return getGroupX1Deliveries(id, 30)
+      .then((res) => setX1Deliveries(Array.isArray(res.data?.deliveries) ? res.data.deliveries : []))
+      .catch(() => setX1Deliveries([]))
+  }, [id])
+
   const saveX1Automation = () => {
     const safe = {
       ...x1Automation,
@@ -708,15 +734,43 @@ export function GroupDetails() {
     toast.success('Automação X1 salva.')
   }
 
-  const simulateX1Event = (kind) => {
-    const message =
-      kind === 'join'
-        ? `Disparo X1 (entrada): ${x1Automation.joinTemplate.slice(0, 80)}...`
-        : `Disparo X1 (saída): ${x1Automation.leaveTemplate.slice(0, 80)}...`
-    toast.success(message)
-    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: `x1.simulate_${kind}`, details: message }, ...auditLogRef.current].slice(0, 50)
-    setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, x1Automation)
+  const testX1Event = async (kind) => {
+    if (!testParticipantJid) {
+      toast.error('Selecione um membro para testar o X1.')
+      return
+    }
+    setX1Testing(kind)
+    try {
+      const res = await testGroupX1(id, { kind, participantJid: testParticipantJid })
+      const delivery = res.data?.delivery
+      if (delivery?.status === 'sent') {
+        toast.success(`X1 de ${kind === 'join' ? 'entrada' : 'saída'} enviado no privado.`)
+      } else if (delivery?.status === 'pending') {
+        toast.success('X1 enfileirado — será enviado em instantes.')
+      } else {
+        toast.success('Teste X1 registrado.')
+      }
+      const nextAudit = [
+        {
+          id: crypto.randomUUID(),
+          at: nowIso(),
+          action: `x1.test_${kind}`,
+          details: `${testParticipantJid} → ${delivery?.status || 'ok'}`,
+        },
+        ...auditLogRef.current,
+      ].slice(0, 50)
+      setAuditLog(nextAudit)
+      persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, x1Automation)
+      await refreshX1Deliveries()
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.response?.data?.delivery?.error || err?.message || 'Falha ao testar X1.'
+      toast.error(msg)
+      if (err?.response?.data?.delivery) {
+        await refreshX1Deliveries()
+      }
+    } finally {
+      setX1Testing(null)
+    }
   }
 
   const addRoutine = () => {
@@ -1417,46 +1471,19 @@ export function GroupDetails() {
 
       {tab === 'config' && (
         <div className="max-w-4xl space-y-6">
-          <Card className="space-y-6">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="font-medium text-stone-50">Mensagem de boas-vindas</p>
-                <p className="text-xs text-stone-500">Enviada quando alguém entra no grupo</p>
+          {!payload?.group?.monitoringEnabled && (
+            <Card className="border-amber-700/60 bg-amber-950/20">
+              <div className="flex gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-amber-200">Monitoramento inativo</p>
+                  <p className="text-xs text-amber-200/80 mt-1">
+                    Ative o monitoramento deste grupo na lista de grupos para a automação X1 disparar em entradas e saídas reais.
+                  </p>
+                </div>
               </div>
-              <Toggle checked={settings.welcomeEnabled} onChange={(v) => setSettings((s) => ({ ...s, welcomeEnabled: v }))} />
-            </div>
-            {settings.welcomeEnabled && (
-              <Textarea rows={4} value={settings.welcomeMessage} onChange={(e) => setSettings((s) => ({ ...s, welcomeMessage: e.target.value }))} />
-            )}
-            <div className="flex items-center justify-between gap-4 border-t border-brand-800 pt-6">
-              <div>
-                <p className="font-medium text-stone-50">Auto-moderação</p>
-                <p className="text-xs text-stone-500">Filtros automáticos básicos</p>
-              </div>
-              <Toggle checked={settings.autoModEnabled} onChange={(v) => setSettings((s) => ({ ...s, autoModEnabled: v }))} />
-            </div>
-            <Textarea
-              label="Palavras proibidas (uma por linha ou separadas por espaço)"
-              value={settings.bannedWords}
-              onChange={(e) => setSettings((s) => ({ ...s, bannedWords: e.target.value }))}
-            />
-            <Input
-              label="Limite de mensagens por usuário (por hora)"
-              type="number"
-              value={settings.messageLimitPerUser}
-              onChange={(e) => setSettings((s) => ({ ...s, messageLimitPerUser: Number(e.target.value) }))}
-            />
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="font-medium text-stone-50">Permitir mídias</p>
-                <p className="text-xs text-stone-500">Imagens, áudios e vídeos</p>
-              </div>
-              <Toggle checked={settings.allowMedia} onChange={(v) => setSettings((s) => ({ ...s, allowMedia: v }))} />
-            </div>
-            <Button onClick={saveBasicSettings}>
-              Salvar configurações básicas
-            </Button>
-          </Card>
+            </Card>
+          )}
 
           <Card className="space-y-5">
             <div className="flex items-center justify-between gap-4">
@@ -1491,6 +1518,7 @@ export function GroupDetails() {
               rows={3}
               value={x1Automation.joinTemplate}
               onChange={(e) => setX1Automation((s) => ({ ...s, joinTemplate: e.target.value }))}
+              placeholder="Use {{nome}} para personalizar"
             />
             <Textarea
               label="Template X1 de saída"
@@ -1542,17 +1570,77 @@ export function GroupDetails() {
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2">
-              <Button variant="secondary" onClick={saveX1Automation}>
-                Salvar automação X1
-              </Button>
-              <Button variant="outline" onClick={() => simulateX1Event('join')}>
-                Simular entrada
-              </Button>
-              <Button variant="outline" onClick={() => simulateX1Event('leave')}>
-                Simular saída
+            <div className="border-t border-brand-800 pt-5 space-y-4">
+              <p className="text-sm text-stone-300 font-medium">Testar envio real no privado</p>
+              <Select
+                label="Membro de teste"
+                value={testParticipantJid}
+                onChange={(e) => setTestParticipantJid(e.target.value)}
+              >
+                <option value="">Selecione um membro</option>
+                {members
+                  .filter((m) => m.status !== 'saiu')
+                  .map((m) => (
+                    <option key={m.id || m.participantJid} value={m.participantJid || m.id}>
+                      {m.name || m.phone || m.participantJid || m.id}
+                    </option>
+                  ))}
+              </Select>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={saveX1Automation}>
+                  Salvar automação X1
+                </Button>
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  disabled={!testParticipantJid || x1Testing === 'join'}
+                  onClick={() => testX1Event('join')}
+                >
+                  <Send className="h-4 w-4" />
+                  {x1Testing === 'join' ? 'Enviando…' : 'Testar entrada'}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="gap-2"
+                  disabled={!testParticipantJid || x1Testing === 'leave'}
+                  onClick={() => testX1Event('leave')}
+                >
+                  <Send className="h-4 w-4" />
+                  {x1Testing === 'leave' ? 'Enviando…' : 'Testar saída'}
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm text-stone-200 font-semibold">Histórico de envios X1</h4>
+              <Button variant="ghost" className="text-xs" onClick={() => refreshX1Deliveries()}>
+                Atualizar
               </Button>
             </div>
+            {x1DeliveriesLoading && <p className="text-xs text-stone-500">Carregando…</p>}
+            {!x1DeliveriesLoading && x1Deliveries.length === 0 && (
+              <p className="text-xs text-stone-500">Nenhum envio X1 registrado ainda.</p>
+            )}
+            <ul className="space-y-2 max-h-80 overflow-y-auto">
+              {x1Deliveries.map((d) => (
+                <li key={d.id} className="text-xs border border-brand-800 rounded-lg p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-accent-400 font-medium">{d.kind}</span>
+                    <span className="text-stone-500">·</span>
+                    <span className={d.status === 'sent' ? 'text-emerald-400' : d.status === 'failed' ? 'text-red-400' : 'text-stone-400'}>
+                      {d.status}
+                    </span>
+                    <span className="text-stone-500">· {d.source}</span>
+                  </div>
+                  <p className="text-stone-300 mt-1">{d.participantName || d.participantJid}</p>
+                  {d.bodyPreview && <p className="text-stone-500 mt-1 truncate">{d.bodyPreview}</p>}
+                  {d.error && <p className="text-red-400/90 mt-1">{d.error}</p>}
+                  <p className="text-stone-600 mt-1">{formatActivity(d.sentAt || d.createdAt)}</p>
+                </li>
+              ))}
+            </ul>
           </Card>
         </div>
       )}
