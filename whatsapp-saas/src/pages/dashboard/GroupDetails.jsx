@@ -97,12 +97,8 @@ const defaultAudit = () => []
 
 const defaultSnapshots = () => []
 
-const defaultX1Automation = () => ({
-  enabled: true,
-  sendX1OnJoin: true,
-  sendX1OnLeave: true,
-  joinTemplate: 'Olá {{nome}}, seja bem-vindo(a)! Me chama no X1 para receber o guia rápido.',
-  leaveTemplate: 'Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?',
+const defaultX1KindSettings = (template) => ({
+  template,
   minDelaySec: 15,
   maxDelaySec: 75,
   maxX1PerUser24h: 2,
@@ -110,6 +106,72 @@ const defaultX1Automation = () => ({
   quietHoursStart: '22:00',
   quietHoursEnd: '08:00',
 })
+
+const defaultX1Automation = () => ({
+  enabled: true,
+  sendX1OnJoin: true,
+  sendX1OnLeave: true,
+  join: defaultX1KindSettings(
+    'Olá {{nome}}, seja bem-vindo(a)! Me chama no X1 para receber o guia rápido.',
+  ),
+  leave: defaultX1KindSettings('Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?'),
+})
+
+function sanitizeX1KindBlock(block) {
+  const safe = {
+    ...block,
+    template: String(block?.template || ''),
+    minDelaySec: Math.max(0, Number(block?.minDelaySec) || 0),
+    maxDelaySec: Math.max(0, Number(block?.maxDelaySec) || 0),
+    maxX1PerUser24h: Math.max(1, Number(block?.maxX1PerUser24h) || 1),
+    quietHoursEnabled: block?.quietHoursEnabled !== false,
+    quietHoursStart: block?.quietHoursStart || '22:00',
+    quietHoursEnd: block?.quietHoursEnd || '08:00',
+  }
+  if (safe.maxDelaySec < safe.minDelaySec) safe.maxDelaySec = safe.minDelaySec
+  return safe
+}
+
+function migrateX1Automation(raw) {
+  const base = defaultX1Automation()
+  if (!raw || typeof raw !== 'object') return base
+
+  const join = sanitizeX1KindBlock({
+    ...base.join,
+    ...(raw.join || {}),
+    template: raw.join?.template ?? raw.joinTemplate ?? base.join.template,
+    minDelaySec: raw.join?.minDelaySec ?? raw.minDelaySec ?? base.join.minDelaySec,
+    maxDelaySec: raw.join?.maxDelaySec ?? raw.maxDelaySec ?? base.join.maxDelaySec,
+    maxX1PerUser24h: raw.join?.maxX1PerUser24h ?? raw.maxX1PerUser24h ?? base.join.maxX1PerUser24h,
+    quietHoursEnabled: raw.join?.quietHoursEnabled ?? raw.quietHoursEnabled ?? base.join.quietHoursEnabled,
+    quietHoursStart: raw.join?.quietHoursStart ?? raw.quietHoursStart ?? base.join.quietHoursStart,
+    quietHoursEnd: raw.join?.quietHoursEnd ?? raw.quietHoursEnd ?? base.join.quietHoursEnd,
+  })
+
+  const leave = sanitizeX1KindBlock({
+    ...base.leave,
+    ...(raw.leave || {}),
+    template: raw.leave?.template ?? raw.leaveTemplate ?? base.leave.template,
+    minDelaySec: raw.leave?.minDelaySec ?? raw.minDelaySec ?? base.leave.minDelaySec,
+    maxDelaySec: raw.leave?.maxDelaySec ?? raw.maxDelaySec ?? base.leave.maxDelaySec,
+    maxX1PerUser24h: raw.leave?.maxX1PerUser24h ?? raw.maxX1PerUser24h ?? base.leave.maxX1PerUser24h,
+    quietHoursEnabled: raw.leave?.quietHoursEnabled ?? raw.quietHoursEnabled ?? base.leave.quietHoursEnabled,
+    quietHoursStart: raw.leave?.quietHoursStart ?? raw.quietHoursStart ?? base.leave.quietHoursStart,
+    quietHoursEnd: raw.leave?.quietHoursEnd ?? raw.quietHoursEnd ?? base.leave.quietHoursEnd,
+  })
+
+  return {
+    enabled: raw.enabled !== false,
+    sendX1OnJoin: raw.sendX1OnJoin !== false,
+    sendX1OnLeave: raw.sendX1OnLeave !== false,
+    join,
+    leave,
+  }
+}
+
+function patchX1Kind(setter, kind, patch) {
+  setter((s) => ({ ...s, [kind]: { ...s[kind], ...patch } }))
+}
 
 function formatActivity(iso) {
   if (!iso) return '—'
@@ -298,7 +360,7 @@ export function GroupDetails() {
       if (Array.isArray(payload.config.auditLog)) aud = payload.config.auditLog
       if (Array.isArray(payload.config.snapshots)) snp = payload.config.snapshots
       if (payload.config.x1Automation && typeof payload.config.x1Automation === 'object') {
-        x1 = { ...defaultX1Automation(), ...payload.config.x1Automation }
+        x1 = migrateX1Automation(payload.config.x1Automation)
       }
     }
     if (!resolveUseRealApi()) {
@@ -327,7 +389,7 @@ export function GroupDetails() {
             if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.auditLog)) aud = saved.auditLog
             if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.snapshots)) snp = saved.snapshots
             if (saved.v === 5 && saved.x1Automation && typeof saved.x1Automation === 'object') {
-              x1 = { ...defaultX1Automation(), ...saved.x1Automation }
+              x1 = migrateX1Automation(saved.x1Automation)
             }
           } else if (Array.isArray(saved) && saved.length) {
             const byId = new Map(saved.map((x) => [x.id, x]))
@@ -715,13 +777,11 @@ export function GroupDetails() {
   }, [id])
 
   const saveX1Automation = () => {
-    const safe = {
+    const safe = migrateX1Automation({
       ...x1Automation,
-      minDelaySec: Math.max(0, Number(x1Automation.minDelaySec) || 0),
-      maxDelaySec: Math.max(0, Number(x1Automation.maxDelaySec) || 0),
-      maxX1PerUser24h: Math.max(1, Number(x1Automation.maxX1PerUser24h) || 1),
-    }
-    if (safe.maxDelaySec < safe.minDelaySec) safe.maxDelaySec = safe.minDelaySec
+      join: sanitizeX1KindBlock(x1Automation.join),
+      leave: sanitizeX1KindBlock(x1Automation.leave),
+    })
     setX1Automation(safe)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'x1.settings_save', details: 'Automação de entrada/saída atualizada' }, ...auditLogRef.current].slice(0, 50)
     setAuditLog(nextAudit)
@@ -1513,62 +1573,113 @@ export function GroupDetails() {
               />
             </div>
 
-            <Textarea
-              label="Template X1 de entrada"
-              rows={3}
-              value={x1Automation.joinTemplate}
-              onChange={(e) => setX1Automation((s) => ({ ...s, joinTemplate: e.target.value }))}
-              placeholder="Use {{nome}} para personalizar"
-            />
-            <Textarea
-              label="Template X1 de saída"
-              rows={3}
-              value={x1Automation.leaveTemplate}
-              onChange={(e) => setX1Automation((s) => ({ ...s, leaveTemplate: e.target.value }))}
-            />
-
-            <div className="grid gap-4 md:grid-cols-3">
-              <Input
-                label="Delay mínimo (seg)"
-                type="number"
-                value={x1Automation.minDelaySec}
-                onChange={(e) => setX1Automation((s) => ({ ...s, minDelaySec: Number(e.target.value) || 0 }))}
+            <div className="space-y-4 rounded-xl border border-emerald-900/50 bg-emerald-950/10 p-4">
+              <p className="text-sm font-semibold text-emerald-300">Mensagem de entrada</p>
+              <Textarea
+                label="Texto enviado no privado quando alguém entra"
+                rows={3}
+                value={x1Automation.join?.template || ''}
+                onChange={(e) => patchX1Kind(setX1Automation, 'join', { template: e.target.value })}
+                placeholder="Use {{nome}} para personalizar"
               />
-              <Input
-                label="Delay máximo (seg)"
-                type="number"
-                value={x1Automation.maxDelaySec}
-                onChange={(e) => setX1Automation((s) => ({ ...s, maxDelaySec: Number(e.target.value) || 0 }))}
-              />
-              <Input
-                label="Limite X1 por usuário / 24h"
-                type="number"
-                value={x1Automation.maxX1PerUser24h}
-                onChange={(e) => setX1Automation((s) => ({ ...s, maxX1PerUser24h: Number(e.target.value) || 1 }))}
-              />
-            </div>
-
-            <Toggle
-              checked={x1Automation.quietHoursEnabled}
-              onChange={(v) => setX1Automation((s) => ({ ...s, quietHoursEnabled: v }))}
-              label="Respeitar horário de silêncio"
-            />
-            {x1Automation.quietHoursEnabled && (
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <Input
-                  label="Início silêncio"
-                  type="time"
-                  value={x1Automation.quietHoursStart}
-                  onChange={(e) => setX1Automation((s) => ({ ...s, quietHoursStart: e.target.value }))}
+                  label="Delay mínimo (seg)"
+                  type="number"
+                  value={x1Automation.join?.minDelaySec ?? 0}
+                  onChange={(e) => patchX1Kind(setX1Automation, 'join', { minDelaySec: Number(e.target.value) || 0 })}
                 />
                 <Input
-                  label="Fim silêncio"
-                  type="time"
-                  value={x1Automation.quietHoursEnd}
-                  onChange={(e) => setX1Automation((s) => ({ ...s, quietHoursEnd: e.target.value }))}
+                  label="Delay máximo (seg)"
+                  type="number"
+                  value={x1Automation.join?.maxDelaySec ?? 0}
+                  onChange={(e) => patchX1Kind(setX1Automation, 'join', { maxDelaySec: Number(e.target.value) || 0 })}
+                />
+                <Input
+                  label="Limite por usuário / 24h"
+                  type="number"
+                  value={x1Automation.join?.maxX1PerUser24h ?? 1}
+                  onChange={(e) =>
+                    patchX1Kind(setX1Automation, 'join', { maxX1PerUser24h: Number(e.target.value) || 1 })
+                  }
                 />
               </div>
-            )}
+              <Toggle
+                checked={x1Automation.join?.quietHoursEnabled !== false}
+                onChange={(v) => patchX1Kind(setX1Automation, 'join', { quietHoursEnabled: v })}
+                label="Respeitar horário de silêncio (entrada)"
+              />
+              {x1Automation.join?.quietHoursEnabled !== false && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Input
+                    label="Início silêncio"
+                    type="time"
+                    value={x1Automation.join?.quietHoursStart || '22:00'}
+                    onChange={(e) => patchX1Kind(setX1Automation, 'join', { quietHoursStart: e.target.value })}
+                  />
+                  <Input
+                    label="Fim silêncio"
+                    type="time"
+                    value={x1Automation.join?.quietHoursEnd || '08:00'}
+                    onChange={(e) => patchX1Kind(setX1Automation, 'join', { quietHoursEnd: e.target.value })}
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4 rounded-xl border border-amber-900/40 bg-amber-950/10 p-4">
+              <p className="text-sm font-semibold text-amber-200">Mensagem de saída</p>
+              <Textarea
+                label="Texto enviado no privado quando alguém sai"
+                rows={3}
+                value={x1Automation.leave?.template || ''}
+                onChange={(e) => patchX1Kind(setX1Automation, 'leave', { template: e.target.value })}
+                placeholder="Use {{nome}} para personalizar"
+              />
+              <div className="grid gap-4 md:grid-cols-3">
+                <Input
+                  label="Delay mínimo (seg)"
+                  type="number"
+                  value={x1Automation.leave?.minDelaySec ?? 0}
+                  onChange={(e) => patchX1Kind(setX1Automation, 'leave', { minDelaySec: Number(e.target.value) || 0 })}
+                />
+                <Input
+                  label="Delay máximo (seg)"
+                  type="number"
+                  value={x1Automation.leave?.maxDelaySec ?? 0}
+                  onChange={(e) => patchX1Kind(setX1Automation, 'leave', { maxDelaySec: Number(e.target.value) || 0 })}
+                />
+                <Input
+                  label="Limite por usuário / 24h"
+                  type="number"
+                  value={x1Automation.leave?.maxX1PerUser24h ?? 1}
+                  onChange={(e) =>
+                    patchX1Kind(setX1Automation, 'leave', { maxX1PerUser24h: Number(e.target.value) || 1 })
+                  }
+                />
+              </div>
+              <Toggle
+                checked={x1Automation.leave?.quietHoursEnabled !== false}
+                onChange={(v) => patchX1Kind(setX1Automation, 'leave', { quietHoursEnabled: v })}
+                label="Respeitar horário de silêncio (saída)"
+              />
+              {x1Automation.leave?.quietHoursEnabled !== false && (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Input
+                    label="Início silêncio"
+                    type="time"
+                    value={x1Automation.leave?.quietHoursStart || '22:00'}
+                    onChange={(e) => patchX1Kind(setX1Automation, 'leave', { quietHoursStart: e.target.value })}
+                  />
+                  <Input
+                    label="Fim silêncio"
+                    type="time"
+                    value={x1Automation.leave?.quietHoursEnd || '08:00'}
+                    onChange={(e) => patchX1Kind(setX1Automation, 'leave', { quietHoursEnd: e.target.value })}
+                  />
+                </div>
+              )}
+            </div>
 
             <div className="border-t border-brand-800 pt-5 space-y-4">
               <p className="text-sm text-stone-300 font-medium">Testar envio real no privado</p>

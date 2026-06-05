@@ -1,11 +1,6 @@
 const { jidDomain, phoneDigitsFromJid, resolvePhoneDigits, digitsOnly } = require("./participantIdentity")
 
-const DEFAULT_X1_CONFIG = {
-  enabled: true,
-  sendX1OnJoin: true,
-  sendX1OnLeave: true,
-  joinTemplate: "Olá {{nome}}, seja bem-vindo(a)! Me chama no X1 para receber o guia rápido.",
-  leaveTemplate: "Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?",
+const DEFAULT_KIND_SETTINGS = {
   minDelaySec: 15,
   maxDelaySec: 75,
   maxX1PerUser24h: 2,
@@ -14,38 +9,96 @@ const DEFAULT_X1_CONFIG = {
   quietHoursEnd: "08:00",
 }
 
+const DEFAULT_X1_CONFIG = {
+  enabled: true,
+  sendX1OnJoin: true,
+  sendX1OnLeave: true,
+  join: {
+    ...DEFAULT_KIND_SETTINGS,
+    template: "Olá {{nome}}, seja bem-vindo(a)! Me chama no X1 para receber o guia rápido.",
+  },
+  leave: {
+    ...DEFAULT_KIND_SETTINGS,
+    template: "Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?",
+  },
+}
+
 const X1_TIMEZONE = "America/Sao_Paulo"
 const processingLock = new Set()
 
-function normalizeX1Config(raw) {
-  const src = raw && typeof raw === "object" ? raw : {}
+function normalizeDelayPair(src, fallback) {
   let minDelaySec = Math.max(
     0,
-    src.minDelaySec != null && src.minDelaySec !== "" ? Number(src.minDelaySec) : DEFAULT_X1_CONFIG.minDelaySec,
+    src.minDelaySec != null && src.minDelaySec !== "" ? Number(src.minDelaySec) : fallback.minDelaySec,
   )
   let maxDelaySec = Math.max(
     0,
-    src.maxDelaySec != null && src.maxDelaySec !== "" ? Number(src.maxDelaySec) : DEFAULT_X1_CONFIG.maxDelaySec,
+    src.maxDelaySec != null && src.maxDelaySec !== "" ? Number(src.maxDelaySec) : fallback.maxDelaySec,
   )
-  if (Number.isNaN(minDelaySec)) minDelaySec = DEFAULT_X1_CONFIG.minDelaySec
-  if (Number.isNaN(maxDelaySec)) maxDelaySec = DEFAULT_X1_CONFIG.maxDelaySec
+  if (Number.isNaN(minDelaySec)) minDelaySec = fallback.minDelaySec
+  if (Number.isNaN(maxDelaySec)) maxDelaySec = fallback.maxDelaySec
   if (maxDelaySec < minDelaySec) maxDelaySec = minDelaySec
+  return { minDelaySec, maxDelaySec }
+}
+
+function normalizeKindBlock(rawBlock, { kind, legacyFlat }) {
+  const fallback = DEFAULT_X1_CONFIG[kind]
+  const src = rawBlock && typeof rawBlock === "object" ? rawBlock : {}
+  const templateKey = kind === "join" ? "joinTemplate" : "leaveTemplate"
+  const { minDelaySec, maxDelaySec } = normalizeDelayPair(
+    {
+      minDelaySec: src.minDelaySec ?? legacyFlat?.minDelaySec,
+      maxDelaySec: src.maxDelaySec ?? legacyFlat?.maxDelaySec,
+    },
+    fallback,
+  )
 
   return {
-    ...DEFAULT_X1_CONFIG,
-    ...src,
+    template: String(src.template ?? legacyFlat?.[templateKey] ?? fallback.template),
+    minDelaySec,
+    maxDelaySec,
+    maxX1PerUser24h: Math.max(
+      1,
+      Number(src.maxX1PerUser24h ?? legacyFlat?.maxX1PerUser24h) || fallback.maxX1PerUser24h,
+    ),
+    quietHoursEnabled:
+      src.quietHoursEnabled != null
+        ? src.quietHoursEnabled !== false
+        : legacyFlat?.quietHoursEnabled !== false,
+    quietHoursStart: String(
+      src.quietHoursStart ?? legacyFlat?.quietHoursStart ?? fallback.quietHoursStart,
+    ),
+    quietHoursEnd: String(src.quietHoursEnd ?? legacyFlat?.quietHoursEnd ?? fallback.quietHoursEnd),
+  }
+}
+
+function normalizeX1Config(raw) {
+  const src = raw && typeof raw === "object" ? raw : {}
+
+  const join = normalizeKindBlock(src.join, { kind: "join", legacyFlat: src })
+  const leave = normalizeKindBlock(src.leave, { kind: "leave", legacyFlat: src })
+
+  return {
     enabled: src.enabled !== false,
     sendX1OnJoin: src.sendX1OnJoin !== false,
     sendX1OnLeave: src.sendX1OnLeave !== false,
-    minDelaySec,
-    maxDelaySec,
-    maxX1PerUser24h: Math.max(1, Number(src.maxX1PerUser24h) || DEFAULT_X1_CONFIG.maxX1PerUser24h),
-    quietHoursEnabled: src.quietHoursEnabled !== false,
-    quietHoursStart: String(src.quietHoursStart || DEFAULT_X1_CONFIG.quietHoursStart),
-    quietHoursEnd: String(src.quietHoursEnd || DEFAULT_X1_CONFIG.quietHoursEnd),
-    joinTemplate: String(src.joinTemplate || DEFAULT_X1_CONFIG.joinTemplate),
-    leaveTemplate: String(src.leaveTemplate || DEFAULT_X1_CONFIG.leaveTemplate),
+    join,
+    leave,
+    // compat legado (leitores antigos)
+    joinTemplate: join.template,
+    leaveTemplate: leave.template,
+    minDelaySec: join.minDelaySec,
+    maxDelaySec: join.maxDelaySec,
+    maxX1PerUser24h: join.maxX1PerUser24h,
+    quietHoursEnabled: join.quietHoursEnabled,
+    quietHoursStart: join.quietHoursStart,
+    quietHoursEnd: join.quietHoursEnd,
   }
+}
+
+function getKindConfig(config, kind) {
+  if (kind === "leave") return config.leave
+  return config.join
 }
 
 function renderX1Template(template, { nome = "amigo(a)" } = {}) {
@@ -200,17 +253,17 @@ function resolveParticipantMeta(participantJid, raw, dbParticipant) {
   return { isLid, phoneDigits, participantName }
 }
 
-async function countRecentDeliveries(prisma, { userId, groupId, participantJid }) {
+async function countRecentDeliveries(prisma, { userId, groupId, participantJid, kind }) {
   const since = new Date(Date.now() - 24 * 3600 * 1000)
-  return prisma.groupX1Delivery.count({
-    where: {
-      userId,
-      groupId,
-      participantJid,
-      status: { in: ["pending", "sending", "sent"] },
-      createdAt: { gte: since },
-    },
-  })
+  const where = {
+    userId,
+    groupId,
+    participantJid,
+    status: { in: ["pending", "sending", "sent"] },
+    createdAt: { gte: since },
+  }
+  if (kind && kind !== "test") where.kind = kind
+  return prisma.groupX1Delivery.count({ where })
 }
 
 async function enqueueX1ForParticipant(deps, ctx) {
@@ -239,13 +292,16 @@ async function enqueueX1ForParticipant(deps, ctx) {
     return { ok: false, reason: "X1_DISABLED" }
   }
 
+  const eventKind = kind === "leave" ? "leave" : "join"
+  const kindConfig = getKindConfig(config, eventKind)
+
   if (!force) {
-    if (kind === "join" && !config.sendX1OnJoin) return { ok: false, reason: "JOIN_DISABLED" }
-    if (kind === "leave" && !config.sendX1OnLeave) return { ok: false, reason: "LEAVE_DISABLED" }
+    if (eventKind === "join" && !config.sendX1OnJoin) return { ok: false, reason: "JOIN_DISABLED" }
+    if (eventKind === "leave" && !config.sendX1OnLeave) return { ok: false, reason: "LEAVE_DISABLED" }
   }
 
-  const effectiveKind = kind === "test" ? "test" : kind
-  const template = kind === "leave" ? config.leaveTemplate : config.joinTemplate
+  const effectiveKind = kind === "test" ? eventKind : kind
+  const template = kindConfig.template
   const body = renderX1Template(template, { nome: participantName })
 
   if (!force && effectiveKind !== "test") {
@@ -267,8 +323,13 @@ async function enqueueX1ForParticipant(deps, ctx) {
   }
 
   if (!force) {
-    const recent = await countRecentDeliveries(prisma, { userId, groupId: groupRow.id, participantJid })
-    if (recent >= config.maxX1PerUser24h) {
+    const recent = await countRecentDeliveries(prisma, {
+      userId,
+      groupId: groupRow.id,
+      participantJid,
+      kind: effectiveKind,
+    })
+    if (recent >= kindConfig.maxX1PerUser24h) {
       const skipped = await prisma.groupX1Delivery.create({
         data: {
           userId,
@@ -316,9 +377,9 @@ async function enqueueX1ForParticipant(deps, ctx) {
     console.log("[x1] LID resolvido via telefone:", sendNumber, participantJid)
   }
 
-  const scheduledAt = computeScheduledAt(config, {
+  const scheduledAt = computeScheduledAt(kindConfig, {
     now: new Date(),
-    skipDelay: skipDelay || force || effectiveKind === "test",
+    skipDelay: skipDelay || force || kind === "test",
   })
 
   const delivery = await prisma.groupX1Delivery.create({
@@ -403,7 +464,9 @@ async function processOneDelivery(deps, deliveryId) {
       return null
     }
 
-    const body = delivery.body || renderX1Template(DEFAULT_X1_CONFIG.joinTemplate, { nome: delivery.participantName })
+    const kindConfig = getKindConfig(normalizeX1Config(groupRow.groupX1Automation), delivery.kind)
+    const body =
+      delivery.body || renderX1Template(kindConfig.template, { nome: delivery.participantName })
     console.log(`[x1] enviando DM ${delivery.kind} → ${sendNumber} (grupo ${groupRow.groupJid})`)
 
     const resp = await sendText(conn.instanceName, sendNumber, body)
@@ -563,7 +626,10 @@ function formatDeliveryRow(row) {
 
 module.exports = {
   DEFAULT_X1_CONFIG,
+  DEFAULT_KIND_SETTINGS,
   normalizeX1Config,
+  normalizeKindBlock,
+  getKindConfig,
   renderX1Template,
   parseParticipantsUpdatePayload,
   mapParticipantAction,

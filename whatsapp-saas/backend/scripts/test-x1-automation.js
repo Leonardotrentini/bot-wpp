@@ -32,15 +32,15 @@ console.log("\n[groupX1Automation] testes unitários\n")
 
 test("normalizeX1Config aceita delay zero", () => {
   const cfg = normalizeX1Config({ minDelaySec: 0, maxDelaySec: 0 })
-  assert.strictEqual(cfg.minDelaySec, 0)
-  assert.strictEqual(cfg.maxDelaySec, 0)
+  assert.strictEqual(cfg.join.minDelaySec, 0)
+  assert.strictEqual(cfg.join.maxDelaySec, 0)
 })
 
 test("normalizeX1Config aplica defaults", () => {
   const cfg = normalizeX1Config({ enabled: true, minDelaySec: 5, maxDelaySec: 2 })
-  assert.strictEqual(cfg.minDelaySec, 5)
-  assert.strictEqual(cfg.maxDelaySec, 5)
-  assert.strictEqual(cfg.maxX1PerUser24h, DEFAULT_X1_CONFIG.maxX1PerUser24h)
+  assert.strictEqual(cfg.join.minDelaySec, 5)
+  assert.strictEqual(cfg.join.maxDelaySec, 5)
+  assert.strictEqual(cfg.join.maxX1PerUser24h, DEFAULT_X1_CONFIG.join.maxX1PerUser24h)
 })
 
 test("renderX1Template substitui {{nome}}", () => {
