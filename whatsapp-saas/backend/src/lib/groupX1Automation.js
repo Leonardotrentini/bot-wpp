@@ -290,7 +290,7 @@ async function enqueueX1ForParticipant(deps, ctx) {
   }
 
   const sendNumber = resolveSendNumber(participantJid, phoneDigits)
-  if (isLid || !sendNumber) {
+  if (!sendNumber) {
     const failed = await prisma.groupX1Delivery.create({
       data: {
         userId,
@@ -300,7 +300,9 @@ async function enqueueX1ForParticipant(deps, ctx) {
         kind: effectiveKind,
         body,
         status: "failed",
-        error: "Número oculto (LID) — não é possível enviar X1 privado.",
+        error: isLid
+          ? "Número oculto (LID) sem telefone resolvível — não é possível enviar X1 privado."
+          : "Telefone indisponível para envio X1 privado.",
         source,
         scheduledAt: new Date(),
         sentAt: null,
@@ -308,6 +310,10 @@ async function enqueueX1ForParticipant(deps, ctx) {
     })
     console.warn("[x1] sem número para envio:", participantJid, groupRow.groupJid)
     return { ok: false, reason: "NO_PHONE", delivery: failed }
+  }
+
+  if (isLid) {
+    console.log("[x1] LID resolvido via telefone:", sendNumber, participantJid)
   }
 
   const scheduledAt = computeScheduledAt(config, {
