@@ -15,7 +15,7 @@ const DEFAULT_X1_CONFIG = {
   sendX1OnLeave: true,
   join: {
     ...DEFAULT_KIND_SETTINGS,
-    template: "Olá {{nome}}, seja bem-vindo(a)! Me chama no X1 para receber o guia rápido.",
+    template: "Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.",
   },
   leave: {
     ...DEFAULT_KIND_SETTINGS,

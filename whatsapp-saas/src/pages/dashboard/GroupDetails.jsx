@@ -112,7 +112,7 @@ const defaultX1Automation = () => ({
   sendX1OnJoin: true,
   sendX1OnLeave: true,
   join: defaultX1KindSettings(
-    'Olá {{nome}}, seja bem-vindo(a)! Me chama no X1 para receber o guia rápido.',
+    'Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.',
   ),
   leave: defaultX1KindSettings('Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?'),
 })
@@ -1580,7 +1580,7 @@ export function GroupDetails() {
                 rows={3}
                 value={x1Automation.join?.template || ''}
                 onChange={(e) => patchX1Kind(setX1Automation, 'join', { template: e.target.value })}
-                placeholder="Use {{nome}} para personalizar"
+                placeholder="Mensagem enviada no privado quando alguém entra no grupo"
               />
               <div className="grid gap-4 md:grid-cols-3">
                 <Input
@@ -1634,7 +1634,7 @@ export function GroupDetails() {
                 rows={3}
                 value={x1Automation.leave?.template || ''}
                 onChange={(e) => patchX1Kind(setX1Automation, 'leave', { template: e.target.value })}
-                placeholder="Use {{nome}} para personalizar"
+                placeholder="Mensagem enviada no privado quando alguém sai do grupo"
               />
               <div className="grid gap-4 md:grid-cols-3">
                 <Input
