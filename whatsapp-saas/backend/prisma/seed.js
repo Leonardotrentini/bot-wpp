@@ -10,9 +10,9 @@ async function main() {
     {
       name: "ILIMITADO",
       slug: "free",
-      description: "Acesso completo sem limite de grupos",
+      description: "Acesso completo — até 50 grupos monitorados",
       priceMonthly: null,
-      maxGroups: 9999,
+      maxGroups: 50,
       active: true,
       sortOrder: 0,
     },

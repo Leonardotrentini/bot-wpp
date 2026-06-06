@@ -8,6 +8,9 @@ import { Input } from '../../components/common/Input.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { discoverGroups, getGroups, setGroupsStatus } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
+import { useAuth } from '../../contexts/AuthContext.jsx'
+
+const DEFAULT_MAX_GROUPS = 50
 
 function isMonitoredGroup(g) {
   return g.status === 'ativo' && g.monitoringEnabled
@@ -31,7 +34,9 @@ function groupStatusBadgeVariant(g) {
 
 export function Groups() {
   const toast = useToast()
+  const { user } = useAuth()
   const [groups, setGroups] = useState([])
+  const [limits, setLimits] = useState(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('ativos')
   const [q, setQ] = useState('')
@@ -45,6 +50,7 @@ export function Groups() {
     const nextGroups = data.groups || []
     setGroups(nextGroups)
     setSync(data.sync || null)
+    if (data.limits) setLimits(data.limits)
     if (!initializedSelection.current) {
       const monitored = nextGroups.filter((g) => g.monitoringEnabled && g.status === 'ativo').map((g) => g.id)
       if (monitored.length) setSelected(new Set(monitored))
@@ -85,13 +91,32 @@ export function Groups() {
       toast.info('Selecione ao menos um grupo.')
       return
     }
+    if (status === 'ativo') {
+      const maxGroups = limits?.maxGroups ?? user?.plan?.maxGroups ?? DEFAULT_MAX_GROUPS
+      const monitored = limits?.monitored ?? groups.filter(isMonitoredGroup).length
+      const alreadyMonitored = new Set(groups.filter(isMonitoredGroup).map((g) => g.id))
+      const newActivations = groupIds.filter((id) => !alreadyMonitored.has(id)).length
+      const remaining = Math.max(0, maxGroups - monitored)
+      if (newActivations > remaining && remaining >= 0) {
+        toast.info(
+          remaining === 0
+            ? `Limite de ${maxGroups} grupos atingido. Desative um grupo para liberar vaga.`
+            : `Serão ativados no máximo ${remaining} de ${newActivations} grupo(s) novo(s) (limite ${maxGroups}).`,
+        )
+        if (remaining === 0) return
+      }
+    }
     setActionLoading(true)
     try {
       const { data } = await setGroupsStatus(groupIds, status)
       applyData(data)
       setSelected(new Set())
       if (data.message) {
-        toast.success(data.message)
+        if (data.meta?.skipped) {
+          toast.info(data.message)
+        } else {
+          toast.success(data.message)
+        }
       } else {
         toast.success(`${groupIds.length} grupo(s) marcado(s) como ${status}.`)
       }
@@ -101,7 +126,7 @@ export function Groups() {
     } finally {
       setActionLoading(false)
     }
-  }, [applyData, selected, toast])
+  }, [applyData, selected, toast, limits, user, groups])
 
   useEffect(() => {
     load()
@@ -143,6 +168,11 @@ export function Groups() {
     [groups],
   )
 
+  const maxGroups = limits?.maxGroups ?? user?.plan?.maxGroups ?? DEFAULT_MAX_GROUPS
+  const monitoredCount = limits?.monitored ?? groupCounts.ativos
+  const remainingSlots = Math.max(0, maxGroups - monitoredCount)
+  const atLimit = remainingSlots === 0
+
   const filtered = useMemo(() => {
     return groups.filter((g) => {
       if (filter === 'ativos' && !isMonitoredGroup(g)) return false
@@ -164,6 +194,10 @@ export function Groups() {
           <p className="text-sm text-stone-400 mt-1">
             1) Procure os grupos. 2) Selecione. 3) Marque como <strong className="text-stone-300">ativo</strong> para monitorar
             mensagens, entradas e saídas a partir de agora.
+          </p>
+          <p className={`text-xs mt-2 ${atLimit ? 'text-amber-300' : 'text-stone-500'}`}>
+            {monitoredCount} / {maxGroups} grupos monitorados
+            {atLimit ? ' · limite atingido — desative um grupo para ativar outro' : remainingSlots < maxGroups ? ` · ${remainingSlots} vaga(s) restante(s)` : ''}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">

@@ -122,7 +122,7 @@ export async function getAdminPlans() {
     return {
       data: {
         plans: [
-          { id: 'plan-free', name: 'ILIMITADO', slug: 'free', maxGroups: 9999 },
+          { id: 'plan-free', name: 'ILIMITADO', slug: 'free', maxGroups: 50 },
           { id: 'plan-pro', name: 'Pro', slug: 'pro', maxGroups: 50 },
         ],
       },

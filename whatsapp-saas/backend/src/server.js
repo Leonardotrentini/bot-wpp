@@ -16,6 +16,13 @@ const { createServer } = require("http")
 const { Server } = require("socket.io")
 const { prisma } = require("./lib/prisma")
 const { isPlausibleWhatsAppGroup, cleanupGhostGroups } = require("./lib/groupDiscovery")
+const {
+  getGroupLimitsPayload,
+  resolveActivationBatch,
+  resolveMonitoredGroupJidsForSend,
+} = require("./lib/groupLimits")
+const { enqueueUserSend } = require("./lib/sendQueue")
+const { scheduleParticipantSync } = require("./lib/participantSyncQueue")
 const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
 const {
@@ -107,8 +114,19 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
 
 app.use("/api/admin", adminRoutes)
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "vesto-backend", ts: new Date().toISOString() })
+app.get("/health", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`
+    res.json({ ok: true, service: "vesto-backend", db: "ok", ts: new Date().toISOString() })
+  } catch (err) {
+    res.status(503).json({
+      ok: false,
+      service: "vesto-backend",
+      db: "error",
+      message: err?.message || "Database unavailable",
+      ts: new Date().toISOString(),
+    })
+  }
 })
 
 app.post("/api/auth/register", async (req, res) => {
@@ -974,22 +992,51 @@ async function syncParticipantsForActiveGroups(userId, groupJids = null) {
   const rows = await prisma.whatsAppGroup.findMany({ where, orderBy: { name: "asc" } })
   let synced = 0
   let failed = 0
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     try {
       await syncParticipantsForGroupRow(conn, row)
       synced++
     } catch (err) {
       failed++
+      if (isRateLimitError(err)) {
+        console.warn("[participants-sync] rate limit em", row.groupJid)
+        break
+      }
       console.warn("[participants-sync]", row.groupJid, err?.message || err)
+    }
+    if (index < rows.length - 1 && GROUP_SYNC_ITEM_DELAY_MS > 0) {
+      await wait(GROUP_SYNC_ITEM_DELAY_MS)
     }
   }
   return { synced, failed }
 }
 
+function buildActivationMessage({ activated, batch }) {
+  if (!activated) {
+    return batch?.partial
+      ? `Limite de ${batch.limit} grupos atingido. Nenhum grupo novo foi ativado.`
+      : "Nenhum grupo foi ativado."
+  }
+  if (batch?.partial && batch.skipped > 0) {
+    return `${activated} grupo(s) ativo(s). ${batch.skipped} não ativado(s) — limite de ${batch.limit} grupos monitorados por número.`
+  }
+  if (batch?.unknown > 0) {
+    return `${activated} grupo(s) ativo(s). ${batch.unknown} ID(s) ignorado(s) (não encontrados no cache).`
+  }
+  return `${activated} grupo(s) ativo(s). Métricas e mensagens a partir de agora.`
+}
+
 /** Ativa monitoramento em tempo real (sem backup de mensagens antigas). */
 async function activateGroupsForMonitoring(userId, groupJids) {
-  const unique = [...new Set((groupJids || []).filter(Boolean))]
-  if (!unique.length) return { activated: 0 }
+  const batch = await resolveActivationBatch(userId, groupJids)
+  const unique = batch.jids
+  if (!unique.length) return { activated: 0, batch }
+
+  const monitoredBefore = await prisma.whatsAppGroup.findMany({
+    where: { userId, groupJid: { in: unique }, monitoringEnabled: true, status: "ativo" },
+    select: { groupJid: true },
+  })
+  const monitoredBeforeSet = new Set(monitoredBefore.map((g) => g.groupJid))
 
   const now = new Date()
   const rows = await prisma.whatsAppGroup.findMany({
@@ -1010,8 +1057,19 @@ async function activateGroupsForMonitoring(userId, groupJids) {
     })
   }
 
-  void syncParticipantsForActiveGroups(userId, unique)
-  return { activated: rows.length }
+  const newlyActivated = unique.filter((jid) => !monitoredBeforeSet.has(jid))
+  if (newlyActivated.length) {
+    scheduleParticipantSync(userId, newlyActivated, async (groupJid) => {
+      const conn = await getUserWhatsAppConnection(userId)
+      if (!conn?.connected) return
+      const groupRow = await prisma.whatsAppGroup.findUnique({
+        where: { userId_groupJid: { userId, groupJid } },
+      })
+      if (groupRow) await syncParticipantsForGroupRow(conn, groupRow)
+    })
+  }
+
+  return { activated: rows.length, batch }
 }
 
 async function runMessageImport(userId, { onlyGroupJids } = {}) {
@@ -1137,10 +1195,12 @@ app.get("/api/groups", authMiddleware, async (req, res) => {
     const conn = await getUserWhatsAppConnection(req.user.sub)
     await cleanupGhostGroups(prisma, req.user.sub)
     const cachedGroups = await readCachedGroups(req.user.sub)
+    const limits = await getGroupLimitsPayload(req.user.sub)
     res.json({
       groups: cachedGroups,
       sync: getSyncPayload(conn, cachedGroups.length),
       import: getImportPayload(conn),
+      limits,
     })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
@@ -1173,12 +1233,15 @@ app.post("/api/groups/select", authMiddleware, async (req, res) => {
     }
 
     const { groupIds } = parsed.data
-    const { activated } = await activateGroupsForMonitoring(req.user.sub, groupIds)
+    const { activated, batch } = await activateGroupsForMonitoring(req.user.sub, groupIds)
     const cachedGroups = await readCachedGroups(req.user.sub)
+    const limits = await getGroupLimitsPayload(req.user.sub)
     return res.json({
       groups: cachedGroups,
       import: getImportPayload(conn),
-      message: `${activated} grupo(s) ativo(s). Métricas e mensagens a partir de agora.`,
+      limits,
+      message: buildActivationMessage({ activated, batch }),
+      meta: batch?.partial ? { skipped: batch.skipped, limit: batch.limit } : undefined,
     })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
@@ -1201,6 +1264,7 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
 
     const conn = await getUserWhatsAppConnection(req.user.sub)
     const { groupIds, status } = parsed.data
+    let activationResult = null
     if (status === "ativo") {
       if (!conn.connected) {
         return res.status(409).json({
@@ -1208,7 +1272,7 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
           message: "Conecte o WhatsApp antes de ativar grupos.",
         })
       }
-      await activateGroupsForMonitoring(req.user.sub, groupIds)
+      activationResult = await activateGroupsForMonitoring(req.user.sub, groupIds)
     } else {
       const data =
         status === "inativo"
@@ -1221,15 +1285,24 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
     }
 
     const cachedGroups = await readCachedGroups(req.user.sub)
+    const limits = await getGroupLimitsPayload(req.user.sub)
     const message =
       status === "ativo"
-        ? `${groupIds.length} grupo(s) ativo(s). Dados coletados somente a partir de agora.`
+        ? buildActivationMessage({
+            activated: activationResult?.activated ?? groupIds.length,
+            batch: activationResult?.batch,
+          })
         : undefined
     return res.json({
       groups: cachedGroups,
       sync: getSyncPayload(conn, cachedGroups.length),
       import: getImportPayload(conn),
+      limits,
       message,
+      meta:
+        activationResult?.batch?.partial
+          ? { skipped: activationResult.batch.skipped, limit: activationResult.batch.limit }
+          : undefined,
     })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
@@ -1904,8 +1977,10 @@ function getX1Deps() {
   return { prisma, sendText }
 }
 const SCHEDULER_CATCHUP_HOURS = Number(process.env.SCHEDULER_CATCHUP_HOURS || 6)
+const SCHEDULER_MAX_AUTOMATIONS_PER_TICK = Number(process.env.SCHEDULER_MAX_AUTOMATIONS_PER_TICK || 5)
 const SP_OFFSET = "-03:00" // America/Sao_Paulo (sem horário de verão)
 const schedulerLock = new Set()
+let schedulerTickBusy = false
 
 function sendDelayWithJitter() {
   return MESSAGE_SEND_GROUP_DELAY_MS + Math.floor(Math.random() * Math.max(0, MESSAGE_SEND_JITTER_MS))
@@ -2066,23 +2141,26 @@ async function dispatchMessage({ userId, instanceName, groupJids, content, autom
 }
 
 async function runSendJob(jobId, { userId, instanceName, groupJids, content, automationId = null }) {
-  try {
-    await dispatchMessage({
-      userId,
-      instanceName,
-      groupJids,
-      content,
-      automationId,
-      onProgress: async ({ done, sent, failed }) => {
-        await prisma.sendJob.update({ where: { id: jobId }, data: { done, sent, failed } }).catch(() => {})
-      },
-    })
-    await prisma.sendJob.update({ where: { id: jobId }, data: { status: "done" } }).catch(() => {})
-  } catch (err) {
-    await prisma.sendJob
-      .update({ where: { id: jobId }, data: { status: "error", error: (err?.message || "erro").slice(0, 300) } })
-      .catch(() => {})
-  }
+  return enqueueUserSend(userId, async () => {
+    try {
+      const { valid } = await resolveMonitoredGroupJidsForSend(userId, groupJids)
+      await dispatchMessage({
+        userId,
+        instanceName,
+        groupJids: valid,
+        content,
+        automationId,
+        onProgress: async ({ done, sent, failed }) => {
+          await prisma.sendJob.update({ where: { id: jobId }, data: { done, sent, failed, total: valid.length } }).catch(() => {})
+        },
+      })
+      await prisma.sendJob.update({ where: { id: jobId }, data: { status: "done" } }).catch(() => {})
+    } catch (err) {
+      await prisma.sendJob
+        .update({ where: { id: jobId }, data: { status: "error", error: (err?.message || "erro").slice(0, 300) } })
+        .catch(() => {})
+    }
+  })
 }
 
 function spParts(date) {
@@ -2254,13 +2332,15 @@ app.post("/api/messages/send", authMiddleware, async (req, res) => {
     const invalid = validateContent(content)
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
 
+    const { valid: monitoredGroupIds } = await resolveMonitoredGroupJidsForSend(req.user.sub, parsed.data.groupIds)
+
     const job = await prisma.sendJob.create({
-      data: { userId: req.user.sub, label: "Envio imediato", total: parsed.data.groupIds.length },
+      data: { userId: req.user.sub, label: "Envio imediato", total: monitoredGroupIds.length },
     })
     void runSendJob(job.id, {
       userId: req.user.sub,
       instanceName: conn.instanceName,
-      groupJids: parsed.data.groupIds,
+      groupJids: monitoredGroupIds,
       content,
     })
     return res.status(202).json({ job: getJobPayload(job) })
@@ -2381,6 +2461,11 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
     const invalid = validateContent(content)
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
 
+    const { valid: monitoredGroupIds, invalid: invalidGroupIds } = await resolveMonitoredGroupJidsForSend(
+      req.user.sub,
+      parsed.data.groupIds,
+    )
+
     let cadenceId = null
     if (parsed.data.cadenceId) {
       const cad = await prisma.cadence.findFirst({ where: { id: parsed.data.cadenceId, userId: req.user.sub }, select: { id: true } })
@@ -2388,7 +2473,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
     }
 
     const groupNames = []
-    for (const jid of parsed.data.groupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
+    for (const jid of monitoredGroupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
 
     const scheduledAt = parsed.data.frequency === "once" ? parseScheduledAt(parsed.data.scheduledAt) : null
     if (parsed.data.frequency === "once" && !scheduledAt) {
@@ -2408,7 +2493,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
           cadenceId,
           name: parsed.data.name,
           status: "concluida",
-          groupJids: parsed.data.groupIds,
+          groupJids: monitoredGroupIds,
           groupNames,
           templateId: parsed.data.templateId || null,
           ...content,
@@ -2417,16 +2502,20 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
         },
       })
       const job = await prisma.sendJob.create({
-        data: { userId: req.user.sub, label: parsed.data.name, total: parsed.data.groupIds.length },
+        data: { userId: req.user.sub, label: parsed.data.name, total: monitoredGroupIds.length },
       })
       void runSendJob(job.id, {
         userId: req.user.sub,
         instanceName: conn.instanceName,
-        groupJids: parsed.data.groupIds,
+        groupJids: monitoredGroupIds,
         content,
         automationId: created.id,
       })
-      return res.status(202).json({ automation: getAutomationPayload(created), job: getJobPayload(job) })
+      return res.status(202).json({
+        automation: getAutomationPayload(created),
+        job: getJobPayload(job),
+        meta: invalidGroupIds.length ? { skippedGroups: invalidGroupIds.length } : undefined,
+      })
     }
 
     const draft = {
@@ -2443,7 +2532,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
         cadenceId,
         name: parsed.data.name,
         status: parsed.data.status === "pausada" ? "pausada" : "ativa",
-        groupJids: parsed.data.groupIds,
+        groupJids: monitoredGroupIds,
         groupNames,
         templateId: parsed.data.templateId || null,
         ...content,
@@ -2454,7 +2543,10 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
         nextRunAt,
       },
     })
-    return res.status(201).json({ automation: getAutomationPayload(created) })
+    return res.status(201).json({
+      automation: getAutomationPayload(created),
+      meta: invalidGroupIds.length ? { skippedGroups: invalidGroupIds.length } : undefined,
+    })
   } catch (err) {
     if (err?.code === "WHATSAPP_NOT_CONNECTED") {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
@@ -2671,7 +2763,8 @@ async function processDueAutomations() {
   const now = new Date()
   const due = await prisma.automation.findMany({
     where: { status: "ativa", nextRunAt: { lte: now } },
-    take: 20,
+    take: SCHEDULER_MAX_AUTOMATIONS_PER_TICK,
+    orderBy: { nextRunAt: "asc" },
   })
 
   const cadenceIds = [...new Set(due.map((a) => a.cadenceId).filter(Boolean))]
@@ -2707,13 +2800,24 @@ async function processDueAutomations() {
       const conn = await prisma.whatsAppConnection.findUnique({ where: { userId: a.userId } })
       if (!conn?.instanceName || !conn.connected) continue
 
-      await dispatchMessage({
-        userId: a.userId,
-        instanceName: conn.instanceName,
-        groupJids: a.groupJids,
-        content: getMessageContent(a),
-        automationId: a.id,
+      const { valid } = await resolveMonitoredGroupJidsForSend(a.userId, a.groupJids).catch((err) => {
+        console.warn("[scheduler] grupos inválidos:", a.id, err?.message || err)
+        return { valid: [] }
       })
+      if (!valid.length) {
+        console.warn("[scheduler] automação sem grupos monitorados:", a.id)
+        continue
+      }
+
+      await enqueueUserSend(a.userId, () =>
+        dispatchMessage({
+          userId: a.userId,
+          instanceName: conn.instanceName,
+          groupJids: valid,
+          content: getMessageContent(a),
+          automationId: a.id,
+        }),
+      )
     } catch (err) {
       console.error("[scheduler]", a.id, err?.message || err)
     } finally {
@@ -2984,6 +3088,20 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
 }
 
 function handleEvolutionError(res, err) {
+  if (err?.code === "GROUP_LIMIT_EXCEEDED") {
+    return res.status(err.status || 409).json({
+      error: "GROUP_LIMIT_EXCEEDED",
+      message: err.message,
+      meta: err.meta || null,
+    })
+  }
+  if (err?.code === "GROUPS_NOT_MONITORED") {
+    return res.status(err.status || 400).json({
+      error: "GROUPS_NOT_MONITORED",
+      message: err.message,
+      meta: err.meta || null,
+    })
+  }
   if (err?.code === "EVOLUTION_CONFIG_MISSING") {
     return res.status(503).json({
       error: "EVOLUTION_NOT_CONFIGURED",
@@ -3194,9 +3312,16 @@ httpServer.listen(port, () => {
   console.log(`Backend online na porta ${port}`)
   if (ENABLE_SCHEDULER) {
     setInterval(() => {
-      processDueAutomations().catch((err) => console.error("[scheduler] tick:", err?.message || err))
-      processPendingX1Deliveries(getX1Deps()).catch((err) => console.error("[x1] scheduler:", err?.message || err))
+      if (schedulerTickBusy) return
+      schedulerTickBusy = true
+      processDueAutomations()
+        .catch((err) => console.error("[scheduler] tick:", err?.message || err))
+        .then(() => processPendingX1Deliveries(getX1Deps()))
+        .catch((err) => console.error("[x1] scheduler:", err?.message || err))
+        .finally(() => {
+          schedulerTickBusy = false
+        })
     }, 30000)
-    console.log("Agendador de automações e X1 ativo (tick 30s).")
+    console.log(`Agendador de automações e X1 ativo (tick 30s, max ${SCHEDULER_MAX_AUTOMATIONS_PER_TICK}/tick).`)
   }
 })

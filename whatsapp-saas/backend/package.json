@@ -12,7 +12,8 @@
     "prisma:seed": "node prisma/seed.js",
     "test:x1": "node scripts/test-x1-automation.js",
     "test:x1:flow": "node scripts/test-x1-flow-mock.js",
-    "test:x1:integration": "node scripts/test-x1-integration.js"
+    "test:x1:integration": "node scripts/test-x1-integration.js",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

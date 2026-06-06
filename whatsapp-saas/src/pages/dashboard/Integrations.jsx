@@ -32,7 +32,8 @@ export function Integrations() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-stone-400 max-w-2xl">
-        Conecte sua stack de vendas. Os campos abaixo são mock — o backend validará tokens e OAuth.
+        Integrações com plataformas externas estão <strong className="text-stone-300">em desenvolvimento</strong> e ainda não conectam ao backend.
+        Use o painel principal (WhatsApp, grupos e automações) para operar no piloto.
       </p>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map((i) => (
