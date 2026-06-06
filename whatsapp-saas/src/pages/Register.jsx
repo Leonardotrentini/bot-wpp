@@ -39,7 +39,8 @@ export function Register() {
       toast.success('Conta criada! Bem-vindo.')
       navigate('/dashboard')
     } catch (err) {
-      toast.error(err.message || 'Não foi possível registrar')
+      const msg = err?.response?.data?.message || err?.message || 'Não foi possível registrar'
+      toast.error(msg)
     } finally {
       setLoading(false)
     }

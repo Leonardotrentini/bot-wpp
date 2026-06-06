@@ -73,7 +73,11 @@ async function main() {
   }
 
   console.log("[seed] Planos criados/atualizados: free, pro")
-  console.log("[seed] Admin:", email, "(defina ADMIN_SEED_EMAIL / ADMIN_SEED_PASSWORD em produção)")
+  if (process.env.NODE_ENV === "production" && !process.env.ADMIN_SEED_PASSWORD) {
+    console.warn("[seed] AVISO: ADMIN_SEED_PASSWORD não definido — admin existente mantém senha anterior.")
+  } else {
+    console.log("[seed] Admin:", email)
+  }
 }
 
 main()

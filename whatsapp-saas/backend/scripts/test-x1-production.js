@@ -4,8 +4,13 @@
  * Env opcionais: API_BASE, ADMIN_EMAIL, ADMIN_PASSWORD
  */
 const API_BASE = (process.env.API_BASE || "https://backend-production-7a466.up.railway.app/api").replace(/\/+$/, "")
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@vesto.group"
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "VestoAdmin2024!"
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
+
+if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  console.error("Defina ADMIN_EMAIL e ADMIN_PASSWORD no ambiente.")
+  process.exit(1)
+}
 
 async function request(method, path, { token, body } = {}) {
   const controller = new AbortController()

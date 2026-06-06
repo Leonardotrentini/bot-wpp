@@ -72,6 +72,14 @@ const {
   migrateStoredX1Templates,
 } = require("./lib/groupX1Automation")
 const adminRoutes = require("./routes/admin")
+const {
+  isPublicRegistrationAllowed,
+  getCorsOrigin,
+  isValidEvolutionWebhook,
+  sanitizeClientError,
+  logStartupSecurityChecks,
+} = require("./lib/security")
+const { authRateLimit } = require("./lib/authRateLimit")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -96,17 +104,26 @@ const STATUS_REFRESH_MIN_INTERVAL_MS = Number(process.env.STATUS_REFRESH_MIN_INT
 const activeMessageImports = new Set()
 
 const app = express()
+app.set("trust proxy", 1)
 const httpServer = createServer(app)
+const corsOrigin = getCorsOrigin()
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || "*",
+    origin: corsOrigin,
     credentials: true,
   },
 })
 
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff")
+  res.setHeader("X-Frame-Options", "DENY")
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin")
+  next()
+})
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "*",
+    origin: corsOrigin,
     credentials: true,
   }),
 )
@@ -129,7 +146,13 @@ app.get("/health", async (_req, res) => {
   }
 })
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", authRateLimit, async (req, res) => {
+  if (!isPublicRegistrationAllowed()) {
+    return res.status(403).json({
+      error: "REGISTRATION_DISABLED",
+      message: "Cadastro público desativado. Peça acesso ao administrador.",
+    })
+  }
   const schema = z.object({
     name: z.string().min(2),
     email: z.string().email(),
@@ -176,7 +199,7 @@ app.post("/api/auth/register", async (req, res) => {
   })
 })
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authRateLimit, async (req, res) => {
   const schema = z.object({
     email: z.string().email(),
     password: z.string().min(1),
@@ -239,6 +262,7 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
     email: z.string().trim().email().optional(),
     phone: z.string().trim().max(32).optional().nullable(),
     avatar: z.string().max(1_000_000).optional().nullable(),
+    currentPassword: z.string().min(1).max(128).optional(),
     newPassword: z.string().min(6).max(128).optional(),
   })
   const parsed = schema.safeParse(req.body || {})
@@ -270,7 +294,23 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
     if (payload.email !== undefined) data.email = payload.email
     if (payload.phone !== undefined) data.phone = payload.phone || null
     if (payload.avatar !== undefined) data.avatarUrl = payload.avatar || null
-    if (payload.newPassword) data.passwordHash = await bcrypt.hash(payload.newPassword, 10)
+    if (payload.newPassword) {
+      if (!payload.currentPassword) {
+        return res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message: "Informe a senha atual para definir uma nova senha.",
+        })
+      }
+      const current = await prisma.user.findUnique({
+        where: { id: req.user.sub },
+        select: { passwordHash: true },
+      })
+      const ok = current && (await bcrypt.compare(payload.currentPassword, current.passwordHash))
+      if (!ok) {
+        return res.status(401).json({ error: "INVALID_PASSWORD", message: "Senha atual incorreta." })
+      }
+      data.passwordHash = await bcrypt.hash(payload.newPassword, 10)
+    }
 
     const updated = await prisma.user.update({
       where: { id: req.user.sub },
@@ -2856,17 +2896,6 @@ function buildEvolutionWebhookUrl() {
   return secret ? `${base}?secret=${encodeURIComponent(secret)}` : base
 }
 
-function isValidEvolutionWebhook(req) {
-  const expected = process.env.EVOLUTION_WEBHOOK_SECRET?.trim()
-  if (!expected) return true
-  const received =
-    req.query.secret ||
-    req.get("x-evolution-secret") ||
-    req.get("x-webhook-secret") ||
-    req.get("authorization")?.replace(/^Bearer\s+/i, "")
-  return received === expected
-}
-
 function getWebhookEvent(body) {
   const raw = body?.event || body?.type || body?.data?.event || ""
   return String(raw)
@@ -3089,38 +3118,34 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
 
 function handleEvolutionError(res, err) {
   if (err?.code === "GROUP_LIMIT_EXCEEDED") {
-    return res.status(err.status || 409).json({
-      error: "GROUP_LIMIT_EXCEEDED",
-      message: err.message,
-      meta: err.meta || null,
-    })
+    const { status, body } = sanitizeClientError(err, { error: "GROUP_LIMIT_EXCEEDED", status: 409 })
+    body.meta = err.meta || null
+    return res.status(status).json(body)
   }
   if (err?.code === "GROUPS_NOT_MONITORED") {
-    return res.status(err.status || 400).json({
-      error: "GROUPS_NOT_MONITORED",
-      message: err.message,
-      meta: err.meta || null,
-    })
+    const { status, body } = sanitizeClientError(err, { error: "GROUPS_NOT_MONITORED", status: 400 })
+    body.meta = err.meta || null
+    return res.status(status).json(body)
   }
   if (err?.code === "EVOLUTION_CONFIG_MISSING") {
     return res.status(503).json({
       error: "EVOLUTION_NOT_CONFIGURED",
-      message: "Defina EVOLUTION_BASE_URL e EVOLUTION_API_KEY no backend.",
+      message: "Serviço WhatsApp temporariamente indisponível.",
     })
   }
   if (isRateLimitError(err)) {
     return res.status(429).json({
       error: "EVOLUTION_RATE_LIMITED",
       message: "WhatsApp limitou consultas temporariamente. Aguarde alguns minutos antes de tentar de novo.",
-      details: err?.details || null,
     })
   }
   console.error("Evolution error:", err?.message || err, err?.details || err?.rawPreview || "")
-  return res.status(502).json({
+  const { status, body } = sanitizeClientError(err, {
     error: "EVOLUTION_ERROR",
-    message: err?.message || "Falha ao comunicar com a Evolution API.",
-    details: err?.details || (err?.rawPreview ? { rawPreview: err.rawPreview } : null),
+    message: "Falha ao comunicar com o WhatsApp. Tente novamente.",
+    status: 502,
   })
+  return res.status(status).json(body)
 }
 
 /** Atualiza status de entrega (ack) das mensagens enviadas, por messageId. */
@@ -3310,6 +3335,7 @@ httpServer.listen(port, () => {
     console.error("[bootstrap] refreshConnectedInstanceWebhooks:", err?.message || err),
   )
   console.log(`Backend online na porta ${port}`)
+  logStartupSecurityChecks()
   if (ENABLE_SCHEDULER) {
     setInterval(() => {
       if (schedulerTickBusy) return

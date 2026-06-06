@@ -4,9 +4,14 @@
  */
 const API_BASE = (process.env.API_BASE || "https://backend-production-7a466.up.railway.app/api").replace(/\/+$/, "")
 const WEBHOOK_BASE = API_BASE.replace(/\/api$/, "")
-const WEBHOOK_SECRET = process.env.EVOLUTION_WEBHOOK_SECRET || "VestoWebhook2024"
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@vesto.group"
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "Admin@ChangeMe!2026"
+const WEBHOOK_SECRET = process.env.EVOLUTION_WEBHOOK_SECRET
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
+
+if (!WEBHOOK_SECRET || !ADMIN_EMAIL || !ADMIN_PASSWORD) {
+  console.error("Defina EVOLUTION_WEBHOOK_SECRET, ADMIN_EMAIL e ADMIN_PASSWORD no ambiente.")
+  process.exit(1)
+}
 
 async function api(method, path, { token, body } = {}) {
   const res = await fetch(`${API_BASE}${path}`, {

@@ -64,6 +64,9 @@ async function main() {
     } else if (reg.status === 409) {
       ok("POST /api/auth/register (API responde)")
       passed += 1
+    } else if (reg.status === 403 && reg.data?.error === "REGISTRATION_DISABLED") {
+      ok("POST /api/auth/register (público desligado — esperado em produção)")
+      passed += 1
     } else {
       fail("POST /api/auth/register", `${reg.status} ${JSON.stringify(reg.data)}`)
       failed += 1

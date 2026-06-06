@@ -28,7 +28,7 @@ export function Settings() {
   const [photoLoading, setPhotoLoading] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
-  const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' })
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
 
   useEffect(() => {
     setProfile(emptyProfileForm(user))
@@ -110,16 +110,18 @@ export function Settings() {
   }
 
   const savePassword = async () => {
+    const currentPassword = passwordForm.currentPassword.trim()
     const newPassword = passwordForm.newPassword.trim()
     const confirmPassword = passwordForm.confirmPassword.trim()
 
+    if (!currentPassword) return toast.error('Informe a senha atual.')
     if (newPassword.length < 6) return toast.error('A nova senha deve ter no mínimo 6 caracteres.')
     if (newPassword !== confirmPassword) return toast.error('As senhas não coincidem.')
 
     try {
       setSavingPassword(true)
-      await updateProfile({ newPassword })
-      setPasswordForm({ newPassword: '', confirmPassword: '' })
+      await updateProfile({ currentPassword, newPassword })
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
       toast.success('Senha alterada com sucesso.')
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao alterar senha.')
@@ -191,6 +193,13 @@ export function Settings() {
           </div>
         </div>
         <Input
+          label="Senha atual"
+          type="password"
+          value={passwordForm.currentPassword}
+          onChange={(e) => setPasswordForm((f) => ({ ...f, currentPassword: e.target.value }))}
+          placeholder="Sua senha de login"
+        />
+        <Input
           label="Nova senha"
           type="password"
           value={passwordForm.newPassword}
@@ -207,7 +216,7 @@ export function Settings() {
         <Button
           variant="secondary"
           onClick={savePassword}
-          disabled={savingPassword || !passwordForm.newPassword.trim()}
+          disabled={savingPassword || !passwordForm.currentPassword.trim() || !passwordForm.newPassword.trim()}
         >
           {savingPassword ? 'Alterando…' : 'Alterar senha'}
         </Button>
