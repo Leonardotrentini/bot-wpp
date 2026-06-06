@@ -104,7 +104,7 @@ export async function getAdminUsers(params = {}) {
             email: mockUser.email,
             role: 'USER',
             createdAt: new Date().toISOString(),
-            plan: { name: 'Grátis', slug: 'free' },
+            plan: { id: 'plan-free', name: 'ILIMITADO', slug: 'free' },
           },
         ],
         total: 1,
@@ -116,9 +116,86 @@ export async function getAdminUsers(params = {}) {
   return apiClient.get('/admin/users', { params })
 }
 
+export async function getAdminPlans() {
+  if (!resolveUseRealApi()) {
+    await delay()
+    return {
+      data: {
+        plans: [
+          { id: 'plan-free', name: 'ILIMITADO', slug: 'free', maxGroups: 9999 },
+          { id: 'plan-pro', name: 'Pro', slug: 'pro', maxGroups: 50 },
+        ],
+      },
+    }
+  }
+  return apiClient.get('/admin/plans')
+}
+
 export async function patchAdminUser(userId, body) {
   if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
-  return apiClient.patch(`/admin/users/${userId}`, body)
+  return apiClient.patch(`/admin/users/${encodeURIComponent(userId)}`, body)
+}
+
+export async function patchAdminUserPlan(userId, planId) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.patch(`/admin/users/${encodeURIComponent(userId)}/subscription`, { planId })
+}
+
+export async function deleteAdminUser(userId) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.delete(`/admin/users/${encodeURIComponent(userId)}`)
+}
+
+export function getImpersonationInfo() {
+  try {
+    const raw = sessionStorage.getItem('vg_impersonating')
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function stashAdminSessionForImpersonation() {
+  const token = localStorage.getItem('vg_auth_token')
+  const auth = localStorage.getItem('vg_auth')
+  if (token) sessionStorage.setItem('vg_admin_token', token)
+  if (auth) sessionStorage.setItem('vg_admin_auth', auth)
+}
+
+export async function impersonateAdminUser(userId) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  const { data } = await apiClient.post(`/admin/users/${encodeURIComponent(userId)}/impersonate`)
+  stashAdminSessionForImpersonation()
+  sessionStorage.setItem(
+    'vg_impersonating',
+    JSON.stringify({ userId: data.user.id, name: data.user.name, email: data.user.email }),
+  )
+  sessionUser = data.user
+  localStorage.setItem('vg_auth', JSON.stringify(data.user))
+  localStorage.setItem('vg_auth_token', data.token)
+  return data
+}
+
+export function exitImpersonation() {
+  const adminToken = sessionStorage.getItem('vg_admin_token')
+  const adminAuth = sessionStorage.getItem('vg_admin_auth')
+  sessionStorage.removeItem('vg_admin_token')
+  sessionStorage.removeItem('vg_admin_auth')
+  sessionStorage.removeItem('vg_impersonating')
+  if (adminToken) localStorage.setItem('vg_auth_token', adminToken)
+  else localStorage.removeItem('vg_auth_token')
+  if (adminAuth) {
+    localStorage.setItem('vg_auth', adminAuth)
+    try {
+      sessionUser = JSON.parse(adminAuth)
+    } catch {
+      sessionUser = null
+    }
+  } else {
+    localStorage.removeItem('vg_auth')
+    sessionUser = null
+  }
+  return sessionUser
 }
 
 export async function createAdminUser(body) {
@@ -132,7 +209,7 @@ export async function createAdminUser(body) {
           email: body?.email || 'novo@exemplo.com',
           role: body?.role || 'USER',
           createdAt: new Date().toISOString(),
-          plan: { name: 'Grátis', slug: 'free' },
+          plan: { name: 'ILIMITADO', slug: 'free' },
         },
       },
     }
@@ -154,6 +231,9 @@ export function logout() {
   sessionUser = null
   localStorage.removeItem('vg_auth')
   localStorage.removeItem('vg_auth_token')
+  sessionStorage.removeItem('vg_admin_token')
+  sessionStorage.removeItem('vg_admin_auth')
+  sessionStorage.removeItem('vg_impersonating')
 }
 
 export async function getGroups() {

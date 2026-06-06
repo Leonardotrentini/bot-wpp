@@ -1,8 +1,11 @@
-import { Outlet, useLocation } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { DashboardSidebar } from './DashboardSidebar.jsx'
 import { DashboardHeader } from './DashboardHeader.jsx'
 import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
+import { useAuth } from '../../contexts/AuthContext.jsx'
+import { Button } from '../common/Button.jsx'
+import { Eye } from 'lucide-react'
 
 const titles = {
   '/dashboard': 'Visão geral',
@@ -18,7 +21,9 @@ const titles = {
 
 export function DashboardLayout() {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const { width } = useSidebar()
+  const { isImpersonating, impersonation, exitImpersonation } = useAuth()
 
   const title = useMemo(() => {
     if (pathname.startsWith('/dashboard/groups/') && pathname !== '/dashboard/groups') return 'Detalhes do grupo'
@@ -29,6 +34,24 @@ export function DashboardLayout() {
     <div className="min-h-screen bg-brand-950">
       <DashboardSidebar />
       <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
+        {isImpersonating && (
+          <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-accent-500/30 bg-accent-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
+            <p className="inline-flex items-center gap-2 text-sm text-accent-200">
+              <Eye className="h-4 w-4 shrink-0" />
+              Visualizando conta de <strong className="font-semibold text-accent-100">{impersonation?.name}</strong>
+            </p>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                exitImpersonation()
+                navigate('/dashboard/admin')
+              }}
+            >
+              Voltar ao admin
+            </Button>
+          </div>
+        )}
         <DashboardHeader title={title} />
         <main className="p-4 lg:p-6">
           <Outlet />

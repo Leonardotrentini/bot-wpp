@@ -1,11 +1,18 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { loadSessionFromStorage, logout as apiLogout, fetchMe } from '../services/api.js'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import {
+  loadSessionFromStorage,
+  logout as apiLogout,
+  fetchMe,
+  getImpersonationInfo,
+  exitImpersonation as apiExitImpersonation,
+} from '../services/api.js'
 import { resolveUseRealApi } from '../lib/runtimeEnv.js'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => loadSessionFromStorage())
+  const [impersonation, setImpersonation] = useState(() => getImpersonationInfo())
 
   const login = (u) => setUser(u)
   const setCurrentUser = (updater) => {
@@ -17,7 +24,19 @@ export function AuthProvider({ children }) {
   const logout = () => {
     apiLogout()
     setUser(null)
+    setImpersonation(null)
   }
+
+  const exitImpersonation = useCallback(() => {
+    const adminUser = apiExitImpersonation()
+    setImpersonation(null)
+    setUser(adminUser)
+    return adminUser
+  }, [])
+
+  const refreshImpersonation = useCallback(() => {
+    setImpersonation(getImpersonationInfo())
+  }, [])
 
   useEffect(() => {
     if (!resolveUseRealApi()) return
@@ -28,6 +47,7 @@ export function AuthProvider({ children }) {
       .catch(() => {
         apiLogout()
         setUser(null)
+        setImpersonation(null)
       })
   }, [])
 
@@ -37,10 +57,14 @@ export function AuthProvider({ children }) {
       login,
       setCurrentUser,
       logout,
+      exitImpersonation,
+      refreshImpersonation,
+      impersonation,
+      isImpersonating: Boolean(impersonation),
       isAuthenticated: !!user,
-      isAdmin: user?.role === 'ADMIN',
+      isAdmin: user?.role === 'ADMIN' && !impersonation,
     }),
-    [user],
+    [user, impersonation, exitImpersonation, refreshImpersonation],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -8,11 +8,11 @@ const prisma = new PrismaClient()
 async function main() {
   const planDefs = [
     {
-      name: "Grátis",
+      name: "ILIMITADO",
       slug: "free",
-      description: "Plano inicial para experimentar",
+      description: "Acesso completo sem limite de grupos",
       priceMonthly: null,
-      maxGroups: 3,
+      maxGroups: 9999,
       active: true,
       sortOrder: 0,
     },

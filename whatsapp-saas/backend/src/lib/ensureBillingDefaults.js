@@ -2,11 +2,11 @@ const { prisma } = require("./prisma")
 
 const DEFAULT_PLANS = [
   {
-    name: "Grátis",
+    name: "ILIMITADO",
     slug: "free",
-    description: "Plano inicial para experimentar",
+    description: "Acesso completo sem limite de grupos",
     priceMonthly: null,
-    maxGroups: 3,
+    maxGroups: 9999,
     active: true,
     sortOrder: 0,
   },
