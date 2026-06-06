@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Film,
   Image as ImageIcon,
@@ -57,6 +58,18 @@ import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const FILE_ACCEPT_MEDIA = 'image/*,video/mp4,.mp4'
 const HIST_PAGE_SIZE = 20
+
+const TAB_ROUTES = {
+  criar: '/dashboard/automations/library',
+  automacoes: '/dashboard/automations',
+  cadencia: '/dashboard/automations/cadences',
+}
+
+const TAB_SUBTITLES = {
+  criar: 'Modelos reutilizáveis para usar em disparos e cadências.',
+  automacoes: 'Agende envios em grupos com horário e frequência.',
+  cadencia: 'Organize sequências de disparos por campanha ou dia.',
+}
 
 function isMp4Video(file) {
   if (/\.mp4$/i.test(file.name || '')) return true
@@ -198,6 +211,80 @@ function mediaPreviewSrc(content) {
   return content.mediaPreviewUrl || content.mediaBase64 || null
 }
 
+function templateTypeMeta(t) {
+  if (t.mediaType === 'image') return { label: 'Imagem', variant: 'success', icon: ImageIcon }
+  if (t.mediaType === 'video') return { label: 'Vídeo', variant: 'warning', icon: Film }
+  return { label: 'Texto', variant: 'muted', icon: FileText }
+}
+
+function TemplateLibraryCard({ template, usageCount, onEdit, onDuplicate, onDelete, onUse }) {
+  const meta = templateTypeMeta(template)
+  const TypeIcon = meta.icon
+
+  return (
+    <Card padding={false} className="group flex h-full flex-col gap-0 overflow-hidden transition hover:border-accent-500/30">
+      <button
+        type="button"
+        className="flex flex-1 flex-col gap-3 p-4 text-left transition hover:bg-white/[0.02]"
+        onClick={() => onEdit(template)}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <TypeIcon className="h-4 w-4 shrink-0 text-accent-400" />
+              <h3 className="truncate font-semibold text-stone-50">{template.name}</h3>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge variant={meta.variant}>{meta.label}</Badge>
+              {usageCount > 0 && (
+                <span className="text-[11px] text-stone-500">{usageCount} disparo(s)</span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex min-h-[120px] items-center justify-center rounded-xl border border-brand-800/80 bg-[#0b141a]/60 p-3">
+          <PreviewBubble content={template} />
+        </div>
+      </button>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-brand-800/80 bg-brand-950/40 px-4 py-3">
+        <Button size="sm" variant="outline" className="text-xs" onClick={() => onUse(template)}>
+          <Zap className="h-3.5 w-3.5" />
+          Usar em disparo
+        </Button>
+        <div className="flex gap-1">
+          <button
+            type="button"
+            className="rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-50"
+            aria-label="Editar"
+            title="Editar"
+            onClick={() => onEdit(template)}
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className="rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-50"
+            aria-label="Duplicar"
+            title="Duplicar"
+            onClick={() => onDuplicate(template)}
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            className="rounded-lg p-2 text-stone-400 transition hover:bg-red-500/10 hover:text-red-300"
+            aria-label="Excluir"
+            title="Excluir"
+            onClick={() => onDelete(template.id)}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 function PreviewBubble({ content }) {
   const hasMedia = content.mediaType === 'image' || content.mediaType === 'video'
   if (!hasMedia && !content.body?.trim()) {
@@ -270,6 +357,7 @@ function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaNa
 
 export function Messages({ defaultTab = 'criar' }) {
   const toast = useToast()
+  const navigate = useNavigate()
   const [tab, setTab] = useState(defaultTab)
   const [groups, setGroups] = useState([])
   const [templates, setTemplates] = useState([])
@@ -341,6 +429,31 @@ export function Messages({ defaultTab = 'criar' }) {
   useEffect(() => {
     setTab(defaultTab)
   }, [defaultTab])
+
+  const changeTab = useCallback(
+    (next) => {
+      setTab(next)
+      navigate(TAB_ROUTES[next] || TAB_ROUTES.automacoes)
+    },
+    [navigate],
+  )
+
+  const templateUsageCount = useMemo(() => {
+    const map = {}
+    for (const a of automations) {
+      if (a.templateId) map[a.templateId] = (map[a.templateId] || 0) + 1
+    }
+    return map
+  }, [automations])
+
+  const templateTypeStats = useMemo(
+    () => ({
+      text: templates.filter((t) => t.mediaType === 'none' || !t.mediaType).length,
+      image: templates.filter((t) => t.mediaType === 'image').length,
+      video: templates.filter((t) => t.mediaType === 'video').length,
+    }),
+    [templates],
+  )
 
   useEffect(() => {
     Promise.all([
@@ -528,6 +641,17 @@ export function Messages({ defaultTab = 'criar' }) {
     }
   }
 
+  function useTemplateInAutomation(t) {
+    setEditingAutoId(null)
+    setAutoForm({
+      ...emptyAutomationForm(),
+      source: 'template',
+      templateId: t.id,
+    })
+    changeTab('automacoes')
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)
+  }
+
   async function removeTemplate() {
     if (!confirmTpl) return
     try {
@@ -609,7 +733,7 @@ export function Messages({ defaultTab = 'criar' }) {
       weekday: a.weekday ?? 1,
       status: a.status === 'pausada' ? 'pausada' : 'ativa',
     })
-    if (tab !== 'automacoes') setTab('automacoes')
+    if (tab !== 'automacoes') changeTab('automacoes')
     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
@@ -857,23 +981,23 @@ export function Messages({ defaultTab = 'criar' }) {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-stone-50">Mensagens</h2>
-          <p className="text-sm text-stone-400 mt-1">Crie mensagens reutilizáveis e dispare em grupos com horário e frequência.</p>
+          <h2 className="text-xl font-semibold text-stone-50">Automações</h2>
+          <p className="mt-1 text-sm text-stone-400">{TAB_SUBTITLES[tab] || TAB_SUBTITLES.automacoes}</p>
         </div>
-        <div className="flex gap-2 text-xs">
+        <div className="flex flex-wrap gap-2 text-xs">
           <span className="rounded-lg border border-brand-800 px-3 py-1.5 text-stone-300">{templates.length} mensagens</span>
-          <span className="rounded-lg border border-brand-800 px-3 py-1.5 text-stone-300">{activeCount} automações ativas</span>
+          <span className="rounded-lg border border-brand-800 px-3 py-1.5 text-stone-300">{activeCount} disparos ativos</span>
         </div>
       </div>
 
       <Tabs
         tabs={[
-          { id: 'criar', label: 'Criar mensagem' },
-          { id: 'automacoes', label: 'Automações' },
-          { id: 'cadencia', label: 'Cadência' },
+          { id: 'criar', label: 'Biblioteca' },
+          { id: 'automacoes', label: 'Disparos' },
+          { id: 'cadencia', label: 'Cadências' },
         ]}
         active={tab}
-        onChange={setTab}
+        onChange={changeTab}
       />
 
       {/* Barra de progresso de envio */}
@@ -901,76 +1025,71 @@ export function Messages({ defaultTab = 'criar' }) {
       {tab === 'criar' && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-1 flex-wrap items-center gap-2">
-              <div className="relative flex-1 min-w-[180px]">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-full max-w-sm">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
                 <Input className="pl-9" placeholder="Buscar mensagem" value={tplSearch} onChange={(e) => setTplSearch(e.target.value)} />
               </div>
-              <Select value={tplTypeFilter} onChange={(e) => setTplTypeFilter(e.target.value)} className="w-auto">
+              <Select value={tplTypeFilter} onChange={(e) => setTplTypeFilter(e.target.value)} className="w-auto min-w-[140px]">
                 <option value="all">Todos os tipos</option>
                 <option value="text">Texto</option>
                 <option value="image">Imagem</option>
                 <option value="video">Vídeo</option>
               </Select>
+              {templates.length > 0 && (
+                <span className="hidden text-xs text-stone-500 sm:inline">
+                  {templateTypeStats.text} texto • {templateTypeStats.image} imagem • {templateTypeStats.video} vídeo
+                </span>
+              )}
             </div>
-            <Button className="gap-2" onClick={openNewTemplate}>
+            <Button className="gap-2 shrink-0" onClick={openNewTemplate}>
               <Plus className="h-4 w-4" /> Nova mensagem
             </Button>
           </div>
 
           {loadingInit ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              {[0, 1].map((i) => (
-                <Card key={i} className="animate-pulse">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {[0, 1, 2].map((i) => (
+                <Card key={i} className="animate-pulse p-4">
                   <div className="h-4 w-1/3 rounded bg-brand-800" />
-                  <div className="mt-3 h-20 w-full rounded bg-brand-800/60" />
+                  <div className="mt-3 h-28 w-full rounded-xl bg-brand-800/60" />
+                  <div className="mt-3 h-9 w-full rounded-lg bg-brand-800/40" />
                 </Card>
               ))}
             </div>
           ) : filteredTemplates.length === 0 ? (
-            <Card>
-              <p className="text-sm text-stone-400">
-                {templates.length === 0 ? 'Nenhuma mensagem ainda. Clique em "Nova mensagem" para criar a primeira.' : 'Nenhuma mensagem encontrada com esse filtro.'}
-              </p>
+            <Card className="border-dashed border-brand-700/80 py-12 text-center">
+              {templates.length === 0 ? (
+                <div className="mx-auto flex max-w-md flex-col items-center gap-4">
+                  <div className="rounded-2xl bg-accent-500/10 p-4 text-accent-400">
+                    <FileText className="h-8 w-8" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-stone-100">Nenhuma mensagem na biblioteca</p>
+                    <p className="mt-1 text-sm text-stone-400">
+                      Crie modelos de texto, imagem ou vídeo para reutilizar em disparos e cadências.
+                    </p>
+                  </div>
+                  <Button className="gap-2" onClick={openNewTemplate}>
+                    <Plus className="h-4 w-4" /> Criar primeira mensagem
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-stone-400">Nenhuma mensagem encontrada com esse filtro.</p>
+              )}
             </Card>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {filteredTemplates.map((t) => (
-                <Card key={t.id} className="flex flex-col gap-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {t.mediaType === 'image' ? (
-                        <ImageIcon className="h-4 w-4 shrink-0 text-accent-400" />
-                      ) : t.mediaType === 'video' ? (
-                        <Film className="h-4 w-4 shrink-0 text-accent-400" />
-                      ) : (
-                        <FileText className="h-4 w-4 shrink-0 text-accent-400" />
-                      )}
-                      <h3 className="truncate font-semibold text-stone-50">{t.name}</h3>
-                    </div>
-                    <div className="flex gap-1 shrink-0">
-                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Editar" title="Editar" onClick={() => openEditTemplate(t)}>
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-white/5 hover:text-stone-50" aria-label="Duplicar" title="Duplicar" onClick={() => duplicateTemplate(t)}>
-                        <Copy className="h-4 w-4" />
-                      </button>
-                      <button type="button" className="p-1.5 rounded-lg text-stone-400 hover:bg-red-500/10 hover:text-red-300" aria-label="Excluir" title="Excluir" onClick={() => setConfirmTpl(t.id)}>
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                  {t.mediaType === 'image' && t.mediaBase64 && <img src={t.mediaBase64} alt="" className="h-28 w-full rounded-lg object-cover border border-brand-800" />}
-                  {t.mediaType === 'video' && t.mediaBase64 && (
-                    <VideoMediaPreview
-                      src={t.mediaBase64}
-                      mediaName={t.mediaName}
-                      compact
-                      className="h-28 w-full rounded-lg border border-brand-800 bg-black"
-                    />
-                  )}
-                  {t.body && <p className="text-sm text-stone-400 whitespace-pre-wrap line-clamp-4">{t.body}</p>}
-                </Card>
+                <TemplateLibraryCard
+                  key={t.id}
+                  template={t}
+                  usageCount={templateUsageCount[t.id] || 0}
+                  onEdit={openEditTemplate}
+                  onDuplicate={duplicateTemplate}
+                  onDelete={setConfirmTpl}
+                  onUse={useTemplateInAutomation}
+                />
               ))}
             </div>
           )}
@@ -999,7 +1118,7 @@ export function Messages({ defaultTab = 'criar' }) {
 
             {autoForm.source === 'template' ? (
               templates.length === 0 ? (
-                <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">Você ainda não tem mensagens. Crie uma na aba "Criar mensagem".</p>
+                <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">Você ainda não tem mensagens. Crie uma na aba &quot;Biblioteca&quot;.</p>
               ) : (
                 <Select label="Escolha a mensagem" value={autoForm.templateId} onChange={(e) => setAutoForm((f) => ({ ...f, templateId: e.target.value }))}>
                   <option value="">— selecione —</option>
@@ -1410,7 +1529,7 @@ export function Messages({ defaultTab = 'criar' }) {
                   </Select>
                   {cadStep.source === 'template' ? (
                     templates.length === 0 ? (
-                      <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">Crie uma mensagem na aba “Criar mensagem”.</p>
+                      <p className="rounded-lg border border-brand-800 px-3 py-2 text-xs text-stone-400">Crie uma mensagem na aba &quot;Biblioteca&quot;.</p>
                     ) : (
                       <Select label="Escolha a mensagem" value={cadStep.templateId} onChange={(e) => setCadStep((f) => ({ ...f, templateId: e.target.value }))}>
                         <option value="">— selecione —</option>

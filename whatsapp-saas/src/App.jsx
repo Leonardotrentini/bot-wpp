@@ -54,8 +54,10 @@ export default function App() {
         <Route path="connect" element={<Connect />} />
         <Route path="groups" element={<Groups />} />
         <Route path="groups/:id" element={<GroupDetails />} />
-        <Route path="messages" element={<Messages defaultTab="criar" />} />
         <Route path="automations" element={<Messages defaultTab="automacoes" />} />
+        <Route path="automations/library" element={<Messages defaultTab="criar" />} />
+        <Route path="automations/cadences" element={<Messages defaultTab="cadencia" />} />
+        <Route path="messages" element={<Navigate to="/dashboard/automations/library" replace />} />
         <Route path="members" element={<Members />} />
         <Route path="analytics" element={<Navigate to="/dashboard" replace />} />
         <Route path="integrations" element={<Integrations />} />
