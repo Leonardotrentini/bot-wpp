@@ -26,6 +26,14 @@ const DEFAULT_X1_CONFIG = {
 const X1_TIMEZONE = "America/Sao_Paulo"
 const processingLock = new Set()
 
+function stripNomePlaceholder(template) {
+  return String(template || "")
+    .replace(/\{\{\s*nome\s*\}\}/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([!?.,:;])/g, "$1")
+    .trim()
+}
+
 function normalizeDelayPair(src, fallback) {
   let minDelaySec = Math.max(
     0,
@@ -54,7 +62,7 @@ function normalizeKindBlock(rawBlock, { kind, legacyFlat }) {
   )
 
   return {
-    template: String(src.template ?? legacyFlat?.[templateKey] ?? fallback.template),
+    template: stripNomePlaceholder(String(src.template ?? legacyFlat?.[templateKey] ?? fallback.template)),
     minDelaySec,
     maxDelaySec,
     maxX1PerUser24h: Math.max(
@@ -624,6 +632,29 @@ function formatDeliveryRow(row) {
   }
 }
 
+async function migrateStoredX1Templates(prisma) {
+  const groups = await prisma.whatsAppGroup.findMany({
+    where: { groupX1Automation: { not: null } },
+    select: { id: true, groupX1Automation: true },
+  })
+
+  let updated = 0
+  for (const group of groups) {
+    const raw = group.groupX1Automation
+    if (!raw || typeof raw !== "object") continue
+    if (!/\{\{\s*nome\s*\}\}/i.test(JSON.stringify(raw))) continue
+
+    const normalized = normalizeX1Config(raw)
+    await prisma.whatsAppGroup.update({
+      where: { id: group.id },
+      data: { groupX1Automation: normalized },
+    })
+    updated += 1
+  }
+
+  if (updated) console.log(`[x1] Templates migrados (removido {{nome}}): ${updated} grupo(s).`)
+}
+
 module.exports = {
   DEFAULT_X1_CONFIG,
   DEFAULT_KIND_SETTINGS,
@@ -643,4 +674,6 @@ module.exports = {
   getX1Deliveries,
   formatDeliveryRow,
   resolveParticipantMeta,
+  stripNomePlaceholder,
+  migrateStoredX1Templates,
 }

@@ -117,10 +117,18 @@ const defaultX1Automation = () => ({
   leave: defaultX1KindSettings('Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?'),
 })
 
+function stripNomePlaceholder(template) {
+  return String(template || '')
+    .replace(/\{\{\s*nome\s*\}\}/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([!?.,:;])/g, '$1')
+    .trim()
+}
+
 function sanitizeX1KindBlock(block) {
   const safe = {
     ...block,
-    template: String(block?.template || ''),
+    template: stripNomePlaceholder(block?.template || ''),
     minDelaySec: Math.max(0, Number(block?.minDelaySec) || 0),
     maxDelaySec: Math.max(0, Number(block?.maxDelaySec) || 0),
     maxX1PerUser24h: Math.max(1, Number(block?.maxX1PerUser24h) || 1),

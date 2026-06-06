@@ -11,6 +11,7 @@ const {
   isInQuietHours,
   computeScheduledAt,
   DEFAULT_X1_CONFIG,
+  stripNomePlaceholder,
 } = require("../src/lib/groupX1Automation")
 
 let passed = 0
@@ -46,6 +47,17 @@ test("normalizeX1Config aplica defaults", () => {
 test("renderX1Template substitui {{nome}}", () => {
   const out = renderX1Template("Oi {{nome}}, tudo bem?", { nome: "Maria" })
   assert.strictEqual(out, "Oi Maria, tudo bem?")
+})
+
+test("stripNomePlaceholder remove placeholder dos templates salvos", () => {
+  assert.strictEqual(
+    stripNomePlaceholder("Bem-vindo(a) {{nome}}! Entrada automática X1 — Vesto"),
+    "Bem-vindo(a)! Entrada automática X1 — Vesto",
+  )
+  assert.strictEqual(
+    stripNomePlaceholder("Até logo {{nome}} — saída automática X1"),
+    "Até logo — saída automática X1",
+  )
 })
 
 test("mapParticipantAction reconhece add/remove", () => {

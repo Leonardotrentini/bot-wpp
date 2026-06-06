@@ -61,6 +61,8 @@ const {
   getX1Deliveries,
   formatDeliveryRow,
   resolveParticipantMeta,
+  normalizeX1Config,
+  migrateStoredX1Templates,
 } = require("./lib/groupX1Automation")
 const adminRoutes = require("./routes/admin")
 
@@ -1456,7 +1458,7 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
         governance: groupRow.groupGovernance || null,
         statusRules: groupRow.groupStatusRules || null,
         routines: groupRow.groupRoutines || null,
-        x1Automation: groupRow.groupX1Automation || null,
+        x1Automation: groupRow.groupX1Automation ? normalizeX1Config(groupRow.groupX1Automation) : null,
         auditLog: groupRow.groupAuditLog || null,
         snapshots: groupRow.groupSnapshots || null,
         catalogExtras: groupRow.groupCatalogExtras || null,
@@ -1503,7 +1505,7 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
     if (parsed.data.governance !== undefined) data.groupGovernance = parsed.data.governance
     if (parsed.data.statusRules !== undefined) data.groupStatusRules = parsed.data.statusRules
     if (parsed.data.routines !== undefined) data.groupRoutines = parsed.data.routines
-    if (parsed.data.x1Automation !== undefined) data.groupX1Automation = parsed.data.x1Automation
+    if (parsed.data.x1Automation !== undefined) data.groupX1Automation = normalizeX1Config(parsed.data.x1Automation)
     if (parsed.data.auditLog !== undefined) data.groupAuditLog = parsed.data.auditLog
     if (parsed.data.snapshots !== undefined) data.groupSnapshots = parsed.data.snapshots
     if (parsed.data.catalogExtras !== undefined) data.groupCatalogExtras = parsed.data.catalogExtras
@@ -1530,7 +1532,7 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
         governance: row.groupGovernance || null,
         statusRules: row.groupStatusRules || null,
         routines: row.groupRoutines || null,
-        x1Automation: row.groupX1Automation || null,
+        x1Automation: row.groupX1Automation ? normalizeX1Config(row.groupX1Automation) : null,
         auditLog: row.groupAuditLog || null,
         snapshots: row.groupSnapshots || null,
         catalogExtras: row.groupCatalogExtras || null,
@@ -3185,6 +3187,7 @@ async function refreshConnectedInstanceWebhooks() {
 httpServer.listen(port, () => {
   void ensureDefaultPlans().catch((err) => console.error("[bootstrap] ensureDefaultPlans:", err?.message || err))
   void syncLegacyCadenceStatus().catch((err) => console.error("[bootstrap] syncLegacyCadenceStatus:", err?.message || err))
+  void migrateStoredX1Templates(prisma).catch((err) => console.error("[bootstrap] migrateStoredX1Templates:", err?.message || err))
   void refreshConnectedInstanceWebhooks().catch((err) =>
     console.error("[bootstrap] refreshConnectedInstanceWebhooks:", err?.message || err),
   )
