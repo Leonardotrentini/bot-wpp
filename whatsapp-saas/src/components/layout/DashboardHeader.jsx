@@ -2,6 +2,7 @@ import { Bell, ChevronDown, LogOut, User } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext.jsx'
+import { UserAvatar } from '../common/UserAvatar.jsx'
 
 export function DashboardHeader({ title }) {
   const { user, logout } = useAuth()
@@ -35,7 +36,7 @@ export function DashboardHeader({ title }) {
             onClick={() => setOpen(!open)}
             className="flex items-center gap-2 rounded-xl border border-brand-700 bg-brand-900/60 py-1.5 pl-2 pr-2 text-left hover:border-accent-500/30 transition"
           >
-            <img src={user?.avatar} alt="" className="h-8 w-8 rounded-lg bg-brand-800" />
+            <UserAvatar name={user?.name} src={user?.avatar} size="sm" className="rounded-lg" />
             <span className="hidden max-w-[120px] truncate text-sm text-stone-100 sm:block">{user?.name}</span>
             <ChevronDown className={`h-4 w-4 text-stone-400 transition ${open ? 'rotate-180' : ''}`} />
           </button>
