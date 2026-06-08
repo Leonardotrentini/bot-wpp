@@ -1553,7 +1553,7 @@ export function GroupDetails() {
             </Card>
           )}
 
-          <Card className="space-y-5">
+          <Card className="relative z-10 space-y-5">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <h3 className="text-stone-50 font-semibold font-heading">Automação de entrada e saída (X1)</h3>
@@ -1689,10 +1689,11 @@ export function GroupDetails() {
               )}
             </div>
 
-            <div className="border-t border-brand-800 pt-5 space-y-4">
+            <div className="relative z-10 border-t border-brand-800 pt-5 space-y-4">
               <p className="text-sm text-stone-300 font-medium">Testar envio real no privado</p>
               <Select
                 label="Membro de teste"
+                placement="top"
                 value={testParticipantJid}
                 onChange={(e) => setTestParticipantJid(e.target.value)}
               >

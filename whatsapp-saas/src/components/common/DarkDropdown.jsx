@@ -13,6 +13,7 @@ export function DarkDropdown({
   className = '',
   triggerClassName = '',
   menuClassName = '',
+  placement = 'bottom',
   leadingIcon = null,
   ariaLabel,
 }) {
@@ -43,8 +44,11 @@ export function DarkDropdown({
     setOpen(false)
   }
 
+  const menuPlacementClass =
+    placement === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
+
   return (
-    <div ref={rootRef} className={`relative ${className}`}>
+    <div ref={rootRef} className={`relative ${open ? 'z-[100]' : ''} ${className}`}>
       <button
         type="button"
         disabled={disabled}
@@ -64,7 +68,7 @@ export function DarkDropdown({
       {open && (
         <ul
           role="listbox"
-          className={`absolute z-[80] mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-brand-700 bg-black py-1 shadow-2xl ${menuClassName}`}
+          className={`absolute z-[200] max-h-56 w-full overflow-y-auto rounded-xl border border-brand-700 bg-black py-1 shadow-2xl ${menuPlacementClass} ${menuClassName}`}
         >
           {options.map((opt) => {
             const v = String(opt.value)

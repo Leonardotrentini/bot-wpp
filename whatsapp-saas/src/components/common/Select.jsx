@@ -11,7 +11,19 @@ function optionsFromChildren(children) {
     }))
 }
 
-export function Select({ label, error, children, className = '', value, onChange, disabled, id, ...rest }) {
+export function Select({
+  label,
+  error,
+  children,
+  className = '',
+  value,
+  onChange,
+  disabled,
+  id,
+  placement,
+  menuClassName,
+  ...rest
+}) {
   const options = useMemo(() => optionsFromChildren(children), [children])
   const placeholder = options.find((o) => o.value === '')?.label || 'Selecionar…'
 
@@ -28,6 +40,8 @@ export function Select({ label, error, children, className = '', value, onChange
         options={options}
         placeholder={placeholder}
         disabled={disabled}
+        placement={placement}
+        menuClassName={menuClassName}
         ariaLabel={label || rest['aria-label']}
         triggerClassName={error ? 'border-red-500/60' : ''}
       />
