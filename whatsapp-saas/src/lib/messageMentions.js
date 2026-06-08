@@ -23,7 +23,13 @@ export function normalizeMentionsJson(raw) {
 }
 
 export function appendComposerFields(payload, form) {
-  const mentionsJson = normalizeMentionsJson(form.mentionsJson)
+  let mentionsJson = normalizeMentionsJson(form.mentionsJson)
+  if (hasMentionAllInText(form.body) && !mentionsJson.mentionAll) {
+    mentionsJson = {
+      mentionAll: true,
+      mentions: [...mentionsJson.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: MENTION_ALL_TOKEN }],
+    }
+  }
   if (mentionsJson.mentionAll || mentionsJson.mentions.length) {
     payload.mentionsJson = mentionsJson
   }

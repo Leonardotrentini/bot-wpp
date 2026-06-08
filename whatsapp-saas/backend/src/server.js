@@ -82,6 +82,7 @@ const {
 const { authRateLimit } = require("./lib/authRateLimit")
 const {
   normalizeMentionsInput,
+  mergeMentionsFromBody,
   resolveMentionsForGroup,
   buildEvolutionSendOptions,
   isParticipantMentionable,
@@ -2057,13 +2058,16 @@ function stripDataUrlPrefix(b64) {
 }
 
 function getMessageContent(source) {
+  const body = source?.body || ""
+  const mergedMentions = mergeMentionsFromBody(body, source?.mentionsJson)
+  const hasMentions = mergedMentions.mentionAll || mergedMentions.mentions.some((m) => m.type === "user")
   return {
-    body: source?.body || "",
+    body,
     mediaType: source?.mediaType || "none",
     mediaBase64: source?.mediaBase64 || null,
     mediaMime: source?.mediaMime || null,
     mediaName: source?.mediaName || null,
-    mentionsJson: source?.mentionsJson != null ? normalizeMentionsInput(source.mentionsJson) : null,
+    mentionsJson: hasMentions ? mergedMentions : null,
     linkPreview: source?.linkPreview !== false,
   }
 }

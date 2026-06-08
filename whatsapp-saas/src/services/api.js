@@ -341,9 +341,29 @@ export async function setGroupParticipantsStatus(groupId, participantIds = [], s
   return mockResponse({ updated: participantIds.length, status })
 }
 
-export async function sendMessage({ groupIds, templateId, body, mediaType, mediaBase64, mediaMime, mediaName }) {
+export async function sendMessage({
+  groupIds,
+  templateId,
+  body,
+  mediaType,
+  mediaBase64,
+  mediaMime,
+  mediaName,
+  mentionsJson,
+  linkPreview,
+}) {
   if (resolveUseRealApi()) {
-    return apiClient.post('/messages/send', { groupIds, templateId, body, mediaType, mediaBase64, mediaMime, mediaName })
+    return apiClient.post('/messages/send', {
+      groupIds,
+      templateId,
+      body,
+      mediaType,
+      mediaBase64,
+      mediaMime,
+      mediaName,
+      mentionsJson,
+      linkPreview,
+    })
   }
   await delay()
   return mockResponse({ results: (groupIds || []).map((id) => ({ groupJid: id, status: 'entregue' })), sent: groupIds?.length || 0 })

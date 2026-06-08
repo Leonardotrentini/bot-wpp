@@ -152,11 +152,21 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
     if (phoneDigits && !mentioned.includes(phoneDigits)) mentioned.push(phoneDigits)
   }
 
-  // @all: Evolution resolve todos os JIDs do grupo (inclui LID) via mentionsEveryOne
-  const mentionsEveryOne = mentionsJson.mentionAll === true
+  let mentionsEveryOne = false
+
+  // @all: enviar JIDs do sync local — mentionsEveryOne depende do cache da Evolution (muitas vezes vazio)
+  if (mentionsJson.mentionAll === true) {
+    const participantJids = participants.map((p) => p.participantJid).filter(Boolean)
+    for (const jid of participantJids) {
+      if (!mentioned.includes(jid)) mentioned.push(jid)
+    }
+    if (!participantJids.length) {
+      mentionsEveryOne = true
+    }
+  }
 
   let whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
-  if (mentionsEveryOne) {
+  if (mentionsJson.mentionAll) {
     whatsappBody = formatWhatsAppMentionAllBody(whatsappBody, true)
   }
 
@@ -170,6 +180,7 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
       mentionsEveryOne,
       mentionedCount: mentioned.length,
       participantCount: participants.length,
+      participantJidsUsed: mentionsJson.mentionAll && !mentionsEveryOne,
       skippedLid: participants.filter((p) => jidDomain(p.participantJid) === "lid").length,
     },
   }
@@ -178,7 +189,10 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
 function buildEvolutionSendOptions(mentionOpts = {}) {
   const opts = {}
   if (mentionOpts.linkPreview === true) opts.linkPreview = true
-  if (mentionOpts.mentionsEveryOne === true) opts.mentionsEveryOne = true
+  // mentionsEveryOne só quando não temos JIDs locais; senão mentioned[] tem prioridade na Evolution
+  if (mentionOpts.mentionsEveryOne === true && !(mentionOpts.mentioned?.length > 0)) {
+    opts.mentionsEveryOne = true
+  }
   if (Array.isArray(mentionOpts.mentioned) && mentionOpts.mentioned.length) {
     opts.mentioned = mentionOpts.mentioned
   }
