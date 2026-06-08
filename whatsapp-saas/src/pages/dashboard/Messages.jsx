@@ -54,7 +54,7 @@ import {
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, imageMaxLabel, videoMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
-import { appendComposerFields, emptyMentionsJson, highlightMentionsInText } from '../../lib/messageMentions.js'
+import { appendComposerFields, emptyMentionsJson, highlightMentionsInText, mentionPartClass } from '../../lib/messageMentions.js'
 import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
 
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
@@ -305,16 +305,10 @@ function MessageBodyPreview({ text, mentionsJson }) {
   return (
     <p className="whitespace-pre-wrap text-sm text-stone-100">
       {parts.map((part, i) => {
-        if (part.type === 'link') {
+        const cls = mentionPartClass(part.type)
+        if (cls) {
           return (
-            <span key={i} className="text-sky-300 underline underline-offset-2">
-              {part.value}
-            </span>
-          )
-        }
-        if (part.type === 'mention') {
-          return (
-            <span key={i} className="font-medium text-accent-300">
+            <span key={i} className={cls}>
               {part.value}
             </span>
           )

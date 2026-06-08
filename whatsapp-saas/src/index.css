@@ -75,4 +75,45 @@
   .vg-select-dark {
     color-scheme: dark;
   }
+
+  /* Menções — semântica visual (editor, chips, prévia) */
+  .mention-inline-all {
+    @apply rounded px-0.5 font-semibold text-amber-300;
+    background: rgb(245 158 11 / 0.12);
+  }
+  .mention-inline-user {
+    @apply rounded px-0.5 font-medium text-sky-300;
+    background: rgb(56 189 248 / 0.12);
+  }
+  .mention-inline-link {
+    @apply text-sky-400 underline underline-offset-2;
+  }
+
+  .mention-chip-all {
+    @apply inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-200;
+  }
+  .mention-chip-user {
+    @apply inline-flex items-center gap-1 rounded-full border border-sky-500/35 bg-sky-500/12 px-2.5 py-1 text-xs font-medium text-sky-200;
+  }
+
+  .mention-btn {
+    @apply border-sky-600/50 bg-sky-950/40 text-sky-200 hover:border-sky-500/60 hover:bg-sky-900/50 hover:text-sky-100;
+  }
+
+  .mention-dropdown {
+    @apply absolute left-0 right-0 top-full z-[120] mt-1 w-full overflow-hidden rounded-xl border border-brand-700 bg-brand-950 shadow-2xl shadow-black/40;
+  }
+
+  .mention-dropdown-item {
+    @apply flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition;
+  }
+  .mention-dropdown-item--active {
+    @apply bg-white/8;
+  }
+  .mention-dropdown-item--all {
+    @apply border-b border-brand-800/80;
+  }
+  .mention-dropdown-item--all.mention-dropdown-item--active {
+    @apply bg-amber-500/12;
+  }
 }

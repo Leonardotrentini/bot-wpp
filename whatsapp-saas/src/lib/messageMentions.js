@@ -72,9 +72,20 @@ export function highlightMentionsInText(text, mentionsJson) {
   for (const match of text.matchAll(regex)) {
     const idx = match.index ?? 0
     if (idx > last) parts.push(...renderMessageBodyParts(text.slice(last, idx)))
-    parts.push({ type: 'mention', value: match[0] })
+    const label = match[1] || ''
+    parts.push({
+      type: label.toLowerCase() === 'todos' ? 'mention-all' : 'mention-user',
+      value: match[0],
+    })
     last = idx + match[0].length
   }
   if (last < text.length) parts.push(...renderMessageBodyParts(text.slice(last)))
   return parts.length ? parts : renderMessageBodyParts(text)
+}
+
+export function mentionPartClass(type) {
+  if (type === 'mention-all') return 'mention-inline-all'
+  if (type === 'mention-user') return 'mention-inline-user'
+  if (type === 'link') return 'mention-inline-link'
+  return ''
 }

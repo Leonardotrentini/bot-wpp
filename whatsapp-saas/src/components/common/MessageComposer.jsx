@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AtSign, Link2, X } from 'lucide-react'
-import { Textarea } from './Textarea.jsx'
+import { AtSign, Link2, Megaphone, User, Users, X } from 'lucide-react'
+import { MentionTextarea } from './MentionTextarea.jsx'
 import { Input } from './Input.jsx'
 import { Button } from './Button.jsx'
 import { Toggle } from './Toggle.jsx'
@@ -14,6 +14,16 @@ import {
 
 function mentionToken(label) {
   return `@${label}`
+}
+
+function memberInitials(name) {
+  const parts = String(name || '?')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (!parts.length) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
 }
 
 export function MessageComposer({
@@ -68,7 +78,6 @@ export function MessageComposer({
 
   function insertAtCursor(before, after, insertText) {
     const el = textareaRef.current
-    const cursor = el?.selectionStart ?? body.length
     const nextBody = `${before}${insertText}${after}`
     onBodyChange?.(nextBody)
     requestAnimationFrame(() => {
@@ -95,12 +104,12 @@ export function MessageComposer({
         mentions: [...normalized.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: 'todos' }],
       })
     } else {
-      const label = mentionLabel(option)
-      const token = mentionToken(label)
+      const lbl = mentionLabel(option)
+      const token = mentionToken(lbl)
       insertAtCursor(prefix, after, `${token} `)
       const entry = {
         type: 'user',
-        label,
+        label: lbl,
         participantJid: option.id,
         phone: String(option.phone || '').replace(/\D/g, '') || undefined,
       }
@@ -161,6 +170,12 @@ export function MessageComposer({
     }
   }
 
+  function openMentionPicker() {
+    textareaRef.current?.focus()
+    setMentionOpen(true)
+    setMentionQuery('')
+  }
+
   function openLinkModal() {
     setLinkUrl('')
     setLinkText('')
@@ -185,75 +200,95 @@ export function MessageComposer({
   if (mentionOptions.showTodos) flatOptions.push({ type: 'all', label: 'todos' })
   for (const u of mentionOptions.users) flatOptions.push({ type: 'user', ...u })
 
+  const showEmptyMembers =
+    groupIds.length > 0 && mentionOptions.users.length === 0 && !mentionQuery && !mentionOptions.showTodos
+
   return (
     <div className={`space-y-3 ${className}`}>
-      <div className="relative">
-        <Textarea
-          ref={textareaRef}
-          label={label}
-          rows={rows}
-          value={body}
-          onChange={onTextChange}
-          onKeyDown={onKeyDown}
-          onClick={(e) => detectMentionTrigger(body, e.target.selectionStart)}
-          placeholder={placeholder}
-        />
-        {mentionOpen && flatOptions.length > 0 && (
-          <ul
-            role="listbox"
-            className="absolute z-[120] mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-brand-700 bg-black py-1 shadow-2xl"
-          >
-            {flatOptions.map((opt, idx) => (
-              <li key={opt.type === 'all' ? '__all__' : opt.id} role="option" aria-selected={idx === mentionIndex}>
-                <button
-                  type="button"
-                  className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm transition ${
-                    idx === mentionIndex ? 'bg-accent-500/15 text-accent-300' : 'text-white hover:bg-white/10'
-                  }`}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    applyMention(opt)
-                  }}
-                >
-                  <AtSign className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                  {opt.type === 'all' ? (
-                    <span>
-                      <strong>todos</strong>
-                      <span className="ml-2 text-xs text-stone-500">mencionar o grupo inteiro</span>
-                    </span>
-                  ) : (
-                    <span className="truncate">
-                      {opt.name}
-                      <span className="ml-2 text-xs text-stone-500">{opt.phone}</span>
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => applyMention({ type: 'all' })}>
-          <AtSign className="h-4 w-4" /> @todos
-        </Button>
-        <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={openLinkModal}>
-          <Link2 className="h-4 w-4" /> Inserir link
-        </Button>
-        {onLinkPreviewChange && (
-          <div className="ml-auto">
-            <Toggle checked={linkPreview !== false} onChange={onLinkPreviewChange} label="Prévia de link" />
+      <MentionTextarea
+        label={label}
+        rows={rows}
+        value={body}
+        onChange={onTextChange}
+        onKeyDown={onKeyDown}
+        onClick={(e) => detectMentionTrigger(body, e.target.selectionStart)}
+        placeholder={placeholder}
+        mentionsJson={mentionsJson}
+        highlightRing={normalized.mentionAll}
+        textareaRef={textareaRef}
+      >
+        {mentionOpen && (
+          <div className="mention-dropdown">
+            <div className="border-b border-brand-800/80 px-3 py-2">
+              <p className="text-xs font-medium text-stone-300">Mencionar</p>
+              <p className="text-[10px] text-stone-500">↑↓ navegar · Enter selecionar · Esc fechar</p>
+            </div>
+            <ul role="listbox" className="max-h-48 overflow-y-auto py-1">
+              {flatOptions.length === 0 && (
+                <li className="px-4 py-3 text-xs text-stone-500">
+                  {showEmptyMembers
+                    ? 'Nenhum membro nos grupos selecionados. Sincronize em Membros.'
+                    : 'Nenhum resultado para esta busca.'}
+                </li>
+              )}
+              {flatOptions.map((opt, idx) => {
+                const active = idx === mentionIndex
+                const isAll = opt.type === 'all'
+                return (
+                  <li key={isAll ? '__all__' : opt.id} role="option" aria-selected={active}>
+                    <button
+                      type="button"
+                      className={`mention-dropdown-item ${isAll ? 'mention-dropdown-item--all' : ''} ${
+                        active ? 'mention-dropdown-item--active' : 'hover:bg-white/5'
+                      } ${isAll && active ? 'mention-dropdown-item--all mention-dropdown-item--active' : ''}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        applyMention(opt)
+                      }}
+                    >
+                      {isAll ? (
+                        <>
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-300">
+                            <Megaphone className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block font-semibold text-amber-200">@todos</span>
+                            <span className="block text-xs text-amber-200/60">Notifica todo o grupo</span>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-200">
+                            {memberInitials(opt.name)}
+                          </span>
+                          <span className="min-w-0 truncate">
+                            <span className="block truncate text-stone-100">{opt.name}</span>
+                            <span className="block truncate text-xs text-stone-500">{opt.phone}</span>
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
         )}
-      </div>
+      </MentionTextarea>
 
-      {(normalized.mentionAll || normalized.mentions.length > 0) && (
-        <div className="flex flex-wrap gap-2">
+      {(normalized.mentionAll || normalized.mentions.some((m) => m.type === 'user')) && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-stone-500">Menções</span>
           {normalized.mentionAll && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-accent-500/30 bg-accent-500/10 px-2.5 py-1 text-xs text-accent-200">
+            <span className="mention-chip-all">
+              <Users className="h-3 w-3 shrink-0" aria-hidden />
               @todos
-              <button type="button" className="rounded p-0.5 hover:bg-white/10" onClick={() => removeMention({ type: 'all' })} aria-label="Remover @todos">
+              <button
+                type="button"
+                className="rounded p-0.5 hover:bg-amber-500/20"
+                onClick={() => removeMention({ type: 'all' })}
+                aria-label="Remover @todos"
+              >
                 <X className="h-3 w-3" />
               </button>
             </span>
@@ -261,14 +296,12 @@ export function MessageComposer({
           {normalized.mentions
             .filter((m) => m.type === 'user')
             .map((m) => (
-              <span
-                key={m.participantJid || m.label}
-                className="inline-flex items-center gap-1 rounded-full border border-brand-700 bg-brand-900/60 px-2.5 py-1 text-xs text-stone-200"
-              >
+              <span key={m.participantJid || m.label} className="mention-chip-user">
+                <User className="h-3 w-3 shrink-0" aria-hidden />
                 @{m.label}
                 <button
                   type="button"
-                  className="rounded p-0.5 hover:bg-white/10"
+                  className="rounded p-0.5 hover:bg-sky-500/20"
                   onClick={() => removeMention(m)}
                   aria-label={`Remover @${m.label}`}
                 >
@@ -278,6 +311,21 @@ export function MessageComposer({
             ))}
         </div>
       )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="outline" className="mention-btn gap-1.5" onClick={openMentionPicker}>
+          <AtSign className="h-4 w-4" /> Mencionar
+        </Button>
+        <span className="hidden h-5 w-px bg-brand-700 sm:inline" aria-hidden />
+        <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={openLinkModal}>
+          <Link2 className="h-4 w-4" /> Inserir link
+        </Button>
+        {onLinkPreviewChange && (
+          <div className="ml-auto">
+            <Toggle checked={linkPreview !== false} onChange={onLinkPreviewChange} label="Prévia de link" />
+          </div>
+        )}
+      </div>
 
       <Modal
         isOpen={linkModal}
