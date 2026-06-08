@@ -330,16 +330,17 @@ async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize =
   return { payload: lastPayload || {}, records: [], source: "none" }
 }
 
-async function sendText(instanceName, number, text) {
+async function sendText(instanceName, number, text, options = {}) {
+  const body = { number, text, ...options }
   return requestEvolution(`/message/sendText/${encodeURIComponent(instanceName)}`, {
     method: "POST",
-    body: { number, text },
+    body,
   })
 }
 
 /** mediatype: "image" | "video". media: base64 (sem prefixo data:) ou URL. */
-async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName }) {
-  const body = { number, mediatype, media }
+async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, ...options }) {
+  const body = { number, mediatype, media, ...options }
   if (mimetype) body.mimetype = mimetype
   if (caption) body.caption = caption
   if (fileName) body.fileName = fileName

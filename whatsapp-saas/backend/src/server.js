@@ -80,6 +80,11 @@ const {
   logStartupSecurityChecks,
 } = require("./lib/security")
 const { authRateLimit } = require("./lib/authRateLimit")
+const {
+  normalizeMentionsInput,
+  resolveMentionsForGroup,
+  buildEvolutionSendOptions,
+} = require("./lib/messageMentions")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -2043,6 +2048,8 @@ function getMessageContent(source) {
     mediaBase64: source?.mediaBase64 || null,
     mediaMime: source?.mediaMime || null,
     mediaName: source?.mediaName || null,
+    mentionsJson: source?.mentionsJson != null ? normalizeMentionsInput(source.mentionsJson) : null,
+    linkPreview: source?.linkPreview !== false,
   }
 }
 
@@ -2071,7 +2078,9 @@ async function resolveGroupName(userId, groupJid) {
   return g?.name || groupJid
 }
 
-async function deliverToGroup(instanceName, groupJid, content) {
+async function deliverToGroup(instanceName, groupJid, content, userId) {
+  const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
+  const sendOpts = buildEvolutionSendOptions(mentionOpts)
   if (content.mediaType === "image" || content.mediaType === "video") {
     return sendMedia(instanceName, groupJid, {
       mediatype: content.mediaType,
@@ -2079,9 +2088,23 @@ async function deliverToGroup(instanceName, groupJid, content) {
       mimetype: content.mediaMime || undefined,
       caption: content.body || undefined,
       fileName: content.mediaName || undefined,
+      ...sendOpts,
     })
   }
-  return sendText(instanceName, groupJid, content.body)
+  return sendText(instanceName, groupJid, content.body, sendOpts)
+}
+
+async function deliverWithRetry(instanceName, groupJid, content, userId) {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await deliverToGroup(instanceName, groupJid, content, userId)
+    } catch (err) {
+      if (attempt >= MESSAGE_SEND_RETRIES || !isRetryableSendError(err)) throw err
+      attempt += 1
+      await wait(MESSAGE_SEND_RETRY_DELAY_MS)
+    }
+  }
 }
 
 function isRetryableSendError(err) {
@@ -2121,19 +2144,6 @@ async function recordOutboundAsGroupMessage(userId, groupJid, content, providerM
   })
 }
 
-async function deliverWithRetry(instanceName, groupJid, content) {
-  let attempt = 0
-  for (;;) {
-    try {
-      return await deliverToGroup(instanceName, groupJid, content)
-    } catch (err) {
-      if (attempt >= MESSAGE_SEND_RETRIES || !isRetryableSendError(err)) throw err
-      attempt += 1
-      await wait(MESSAGE_SEND_RETRY_DELAY_MS)
-    }
-  }
-}
-
 async function dispatchMessage({ userId, instanceName, groupJids, content, automationId = null, onProgress = null }) {
   const results = []
   let sent = 0
@@ -2141,7 +2151,7 @@ async function dispatchMessage({ userId, instanceName, groupJids, content, autom
   for (const [index, groupJid] of groupJids.entries()) {
     const groupName = await resolveGroupName(userId, groupJid)
     try {
-      const resp = await deliverWithRetry(instanceName, groupJid, content)
+      const resp = await deliverWithRetry(instanceName, groupJid, content, userId)
       const providerMessageId = extractProviderId(resp)
       await prisma.outboundMessage.create({
         data: {
@@ -2256,6 +2266,8 @@ function getAutomationPayload(a) {
     mediaBase64: a.mediaBase64,
     mediaMime: a.mediaMime,
     mediaName: a.mediaName,
+    mentionsJson: a.mentionsJson || null,
+    linkPreview: a.linkPreview !== false,
     frequency: a.frequency,
     scheduledAt: a.scheduledAt?.toISOString() || null,
     timeOfDay: a.timeOfDay,
@@ -2274,6 +2286,8 @@ function getTemplatePayload(t) {
     mediaBase64: t.mediaBase64,
     mediaMime: t.mediaMime,
     mediaName: t.mediaName,
+    mentionsJson: t.mentionsJson || null,
+    linkPreview: t.linkPreview !== false,
     updatedAt: t.updatedAt?.toISOString?.() || null,
   }
 }
@@ -2291,6 +2305,21 @@ function getJobPayload(j) {
   }
 }
 
+const mentionEntrySchema = z.object({
+  type: z.enum(["user", "all"]),
+  label: z.string().min(1),
+  participantJid: z.string().optional(),
+  phone: z.string().optional(),
+})
+
+const mentionsJsonSchema = z
+  .object({
+    mentionAll: z.boolean().optional(),
+    mentions: z.array(mentionEntrySchema).optional(),
+  })
+  .optional()
+  .nullable()
+
 const templateBodySchema = z.object({
   name: z.string().min(1),
   body: z.string().optional(),
@@ -2298,6 +2327,8 @@ const templateBodySchema = z.object({
   mediaBase64: z.string().optional().nullable(),
   mediaMime: z.string().optional().nullable(),
   mediaName: z.string().optional().nullable(),
+  mentionsJson: mentionsJsonSchema,
+  linkPreview: z.boolean().optional(),
 })
 
 app.get("/api/messages/templates", authMiddleware, async (req, res) => {
@@ -2359,6 +2390,8 @@ app.post("/api/messages/send", authMiddleware, async (req, res) => {
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),
+      mentionsJson: mentionsJsonSchema,
+      linkPreview: z.boolean().optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Payload inválido." })
@@ -2486,6 +2519,8 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),
+      mentionsJson: mentionsJsonSchema,
+      linkPreview: z.boolean().optional(),
       frequency: z.enum(["now", "once", "daily", "weekly"]),
       scheduledAt: z.string().optional().nullable(),
       timeOfDay: z.string().optional().nullable(),
@@ -2631,6 +2666,8 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),
+      mentionsJson: mentionsJsonSchema,
+      linkPreview: z.boolean().optional(),
       frequency: z.enum(["once", "daily", "weekly"]),
       scheduledAt: z.string().optional().nullable(),
       timeOfDay: z.string().optional().nullable(),

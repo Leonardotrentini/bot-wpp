@@ -24,7 +24,7 @@ import {
 import { Tabs } from '../../components/common/Tabs.jsx'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
-import { Textarea } from '../../components/common/Textarea.jsx'
+import { MessageComposer } from '../../components/common/MessageComposer.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -50,9 +50,11 @@ import {
   deleteCadence,
   setCadenceAutomations,
   setCadenceStatus,
+  getMembers,
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, imageMaxLabel, videoMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
+import { appendComposerFields, emptyMentionsJson, highlightMentionsInText } from '../../lib/messageMentions.js'
 import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
 
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
@@ -94,7 +96,17 @@ function readFileAsDataUrl(file) {
 }
 
 function emptyTemplateForm() {
-  return { id: null, name: '', body: '', mediaType: 'none', mediaBase64: null, mediaMime: null, mediaName: null }
+  return {
+    id: null,
+    name: '',
+    body: '',
+    mediaType: 'none',
+    mediaBase64: null,
+    mediaMime: null,
+    mediaName: null,
+    mentionsJson: emptyMentionsJson(),
+    linkPreview: true,
+  }
 }
 
 const emptyInlineMessage = () => ({
@@ -105,6 +117,8 @@ const emptyInlineMessage = () => ({
   mediaName: null,
   mediaPreviewUrl: null,
   mediaSize: null,
+  mentionsJson: emptyMentionsJson(),
+  linkPreview: true,
 })
 
 function emptyAutomationForm() {
@@ -136,6 +150,7 @@ function appendInlineMedia(payload, f) {
   payload.mediaBase64 = f.mediaBase64
   payload.mediaMime = f.mediaMime
   payload.mediaName = f.mediaName
+  appendComposerFields(payload, f)
 }
 
 function inlineMediaPreviewFields(f) {
@@ -285,6 +300,31 @@ function TemplateLibraryCard({ template, usageCount, onEdit, onDuplicate, onDele
   )
 }
 
+function MessageBodyPreview({ text, mentionsJson }) {
+  const parts = highlightMentionsInText(text, mentionsJson)
+  return (
+    <p className="whitespace-pre-wrap text-sm text-stone-100">
+      {parts.map((part, i) => {
+        if (part.type === 'link') {
+          return (
+            <span key={i} className="text-sky-300 underline underline-offset-2">
+              {part.value}
+            </span>
+          )
+        }
+        if (part.type === 'mention') {
+          return (
+            <span key={i} className="font-medium text-accent-300">
+              {part.value}
+            </span>
+          )
+        }
+        return <span key={i}>{part.value}</span>
+      })}
+    </p>
+  )
+}
+
 function PreviewBubble({ content }) {
   const hasMedia = content.mediaType === 'image' || content.mediaType === 'video'
   if (!hasMedia && !content.body?.trim()) {
@@ -305,7 +345,7 @@ function PreviewBubble({ content }) {
         />
       )}
       {content.body?.trim() ? (
-        <p className="whitespace-pre-wrap text-sm text-stone-100">{content.body}</p>
+        <MessageBodyPreview text={content.body} mentionsJson={content.mentionsJson} />
       ) : (
         hasMedia && <p className="text-xs italic text-stone-400">(sem legenda)</p>
       )}
@@ -398,6 +438,7 @@ export function Messages({ defaultTab = 'criar' }) {
   const [addMode, setAddMode] = useState('new')
   const [existingSel, setExistingSel] = useState([])
   const [cadStep, setCadStep] = useState(emptyCadStep)
+  const [mentionMembers, setMentionMembers] = useState([])
 
   const refreshTemplates = useCallback(() => getTemplates().then((r) => setTemplates(r.data.templates || [])), [])
   const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
@@ -429,6 +470,12 @@ export function Messages({ defaultTab = 'criar' }) {
   useEffect(() => {
     setTab(defaultTab)
   }, [defaultTab])
+
+  useEffect(() => {
+    getMembers({ activeGroupsOnly: true })
+      .then((r) => setMentionMembers(r.data.members || []))
+      .catch(() => setMentionMembers([]))
+  }, [])
 
   const changeTab = useCallback(
     (next) => {
@@ -527,6 +574,8 @@ export function Messages({ defaultTab = 'criar' }) {
       mediaBase64: t.mediaBase64 || null,
       mediaMime: t.mediaMime || null,
       mediaName: t.mediaName || null,
+      mentionsJson: t.mentionsJson || emptyMentionsJson(),
+      linkPreview: t.linkPreview !== false,
     })
     setTplModal(true)
   }
@@ -612,6 +661,7 @@ export function Messages({ defaultTab = 'criar' }) {
         mediaMime: tplForm.mediaMime,
         mediaName: tplForm.mediaName,
       }
+      appendComposerFields(payload, tplForm)
       if (tplForm.id) await updateTemplate(tplForm.id, payload)
       else await createTemplate(payload)
       toast.success('Mensagem salva.')
@@ -633,6 +683,8 @@ export function Messages({ defaultTab = 'criar' }) {
         mediaBase64: t.mediaBase64,
         mediaMime: t.mediaMime,
         mediaName: t.mediaName,
+        mentionsJson: t.mentionsJson,
+        linkPreview: t.linkPreview,
       })
       toast.success('Mensagem duplicada.')
       refreshTemplates()
@@ -682,12 +734,21 @@ export function Messages({ defaultTab = 'criar' }) {
     if (autoForm.source === 'template') {
       const t = templates.find((x) => x.id === autoForm.templateId)
       if (!t) return { body: '', mediaType: 'none', mediaBase64: null }
-      return { body: t.body, mediaType: t.mediaType, mediaBase64: t.mediaBase64 }
+      return {
+        body: t.body,
+        mediaType: t.mediaType,
+        mediaBase64: t.mediaBase64,
+        mentionsJson: t.mentionsJson,
+        linkPreview: t.linkPreview,
+        ...inlineMediaPreviewFields(t),
+      }
     }
     return {
       body: autoForm.body,
       mediaType: autoForm.mediaType || 'none',
       mediaBase64: autoForm.mediaBase64,
+      mentionsJson: autoForm.mentionsJson,
+      linkPreview: autoForm.linkPreview,
       ...inlineMediaPreviewFields(autoForm),
     }
   }
@@ -726,6 +787,8 @@ export function Messages({ defaultTab = 'criar' }) {
       mediaBase64: a.mediaBase64 || null,
       mediaMime: a.mediaMime || null,
       mediaName: a.mediaName || null,
+      mentionsJson: a.mentionsJson || emptyMentionsJson(),
+      linkPreview: a.linkPreview !== false,
       groupIds: a.groupJids || [],
       frequency: a.frequency === 'now' ? 'once' : a.frequency,
       scheduledAt: toLocalInput(a.scheduledAt),
@@ -1131,11 +1194,17 @@ export function Messages({ defaultTab = 'criar' }) {
               )
             ) : (
               <div className="space-y-3">
-                <Textarea
+                <MessageComposer
                   label={autoForm.mediaType === 'none' ? 'Texto' : 'Legenda (opcional)'}
                   rows={4}
-                  value={autoForm.body}
-                  onChange={(e) => setAutoForm((f) => ({ ...f, body: e.target.value }))}
+                  body={autoForm.body}
+                  onBodyChange={(body) => setAutoForm((f) => ({ ...f, body }))}
+                  mentionsJson={autoForm.mentionsJson}
+                  onMentionsChange={(mentionsJson) => setAutoForm((f) => ({ ...f, mentionsJson }))}
+                  linkPreview={autoForm.linkPreview}
+                  onLinkPreviewChange={(linkPreview) => setAutoForm((f) => ({ ...f, linkPreview }))}
+                  members={mentionMembers}
+                  groupIds={autoForm.groupIds}
                   placeholder="Olá, comunidade! ..."
                 />
                 <MediaAttachmentBlock
@@ -1540,11 +1609,17 @@ export function Messages({ defaultTab = 'criar' }) {
                     )
                   ) : (
                     <div className="space-y-3">
-                      <Textarea
+                      <MessageComposer
                         label={cadStep.mediaType === 'none' ? 'Texto' : 'Legenda (opcional)'}
                         rows={3}
-                        value={cadStep.body}
-                        onChange={(e) => setCadStep((f) => ({ ...f, body: e.target.value }))}
+                        body={cadStep.body}
+                        onBodyChange={(body) => setCadStep((f) => ({ ...f, body }))}
+                        mentionsJson={cadStep.mentionsJson}
+                        onMentionsChange={(mentionsJson) => setCadStep((f) => ({ ...f, mentionsJson }))}
+                        linkPreview={cadStep.linkPreview}
+                        onLinkPreviewChange={(linkPreview) => setCadStep((f) => ({ ...f, linkPreview }))}
+                        members={mentionMembers}
+                        groupIds={cadStep.groupIds}
                         placeholder="Olá, comunidade! ..."
                       />
                       <MediaAttachmentBlock
@@ -1706,7 +1781,18 @@ export function Messages({ defaultTab = 'criar' }) {
       >
         <div className="space-y-4">
           <Input label="Nome" value={tplForm.name} onChange={(e) => setTplForm((f) => ({ ...f, name: e.target.value }))} placeholder="Ex: Promo da semana" />
-          <Textarea label={tplForm.mediaType === 'none' ? 'Mensagem' : 'Legenda (opcional)'} rows={5} value={tplForm.body} onChange={(e) => setTplForm((f) => ({ ...f, body: e.target.value }))} placeholder="Escreva sua mensagem..." />
+          <MessageComposer
+            label={tplForm.mediaType === 'none' ? 'Mensagem' : 'Legenda (opcional)'}
+            rows={5}
+            body={tplForm.body}
+            onBodyChange={(body) => setTplForm((f) => ({ ...f, body }))}
+            mentionsJson={tplForm.mentionsJson}
+            onMentionsChange={(mentionsJson) => setTplForm((f) => ({ ...f, mentionsJson }))}
+            linkPreview={tplForm.linkPreview}
+            onLinkPreviewChange={(linkPreview) => setTplForm((f) => ({ ...f, linkPreview }))}
+            members={mentionMembers}
+            placeholder="Escreva sua mensagem..."
+          />
           <MediaAttachmentBlock
             mediaType={tplForm.mediaType}
             mediaBase64={tplForm.mediaBase64}

@@ -191,6 +191,8 @@ model MessageTemplate {
   mediaBase64 String?
   mediaMime   String?
   mediaName   String?
+  mentionsJson Json?
+  linkPreview Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -222,6 +224,8 @@ model Automation {
   mediaBase64 String?
   mediaMime   String?
   mediaName   String?
+  mentionsJson Json?
+  linkPreview Boolean   @default(true)
   frequency   String    @default("once") // once | daily | weekly
   scheduledAt DateTime?
   timeOfDay   String?
