@@ -204,4 +204,5 @@ module.exports = {
   phoneDigitsFromJid,
   displayNameFromParticipant,
   digitsOnly,
+  isLikelyPhoneDigits,
 }

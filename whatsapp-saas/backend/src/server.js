@@ -84,6 +84,8 @@ const {
   normalizeMentionsInput,
   resolveMentionsForGroup,
   buildEvolutionSendOptions,
+  isParticipantMentionable,
+  resolveMentionPhoneDigits,
 } = require("./lib/messageMentions")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
@@ -430,12 +432,18 @@ function mergeGlobalMember(map, participant, groupApi) {
   const key = participant.participantJid || participant.phone || participant.id
   if (!key) return
   const lastAt = participant.lastSyncedAt?.toISOString?.() || new Date().toISOString()
+  const isLid = jidDomain(participant.participantJid) === "lid"
+  const phoneDigits = resolveMentionPhoneDigits(participant)
+  const mentionable = isParticipantMentionable(participant)
   const existing = map.get(key)
   if (!existing) {
     map.set(key, {
       id: key,
       name: participant.name || participant.phone || "Participante",
       phone: participant.phone || "—",
+      phoneDigits: phoneDigits || undefined,
+      mentionable,
+      isLid,
       role: participant.role,
       status: participant.status || "ativo",
       tags: participantTags(participant),
@@ -457,6 +465,12 @@ function mergeGlobalMember(map, participant, groupApi) {
   if (participant.phone && participant.phone !== "—" && existing.phone === "—") {
     existing.phone = participant.phone
   }
+  if (phoneDigits && !existing.phoneDigits) existing.phoneDigits = phoneDigits
+  existing.isLid = isLid || existing.isLid
+  existing.mentionable = isParticipantMentionable({
+    ...participant,
+    phone: existing.phone !== "—" ? existing.phone : participant.phone,
+  })
   if (new Date(lastAt).getTime() > new Date(existing.lastActivity).getTime()) {
     existing.lastActivity = lastAt
   }
@@ -673,6 +687,7 @@ const {
   displayNameFromParticipant,
   phoneDigitsFromJid,
   digitsOnly,
+  jidDomain,
 } = require("./lib/participantIdentity.js")
 
 async function getUserWhatsAppConnection(userId) {
@@ -2082,6 +2097,18 @@ async function deliverToGroup(instanceName, groupJid, content, userId) {
   const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
   const sendOpts = buildEvolutionSendOptions(mentionOpts)
   const text = mentionOpts.whatsappBody ?? content.body
+  if (mentionOpts.mentionsEveryOne || (sendOpts.mentioned && sendOpts.mentioned.length)) {
+    console.log(
+      "[mentions]",
+      JSON.stringify({
+        groupJid,
+        bodyPreview: String(text || "").slice(0, 80),
+        mentionsEveryOne: sendOpts.mentionsEveryOne === true,
+        mentioned: sendOpts.mentioned || [],
+        debug: mentionOpts.mentionDebug,
+      }),
+    )
+  }
   if (content.mediaType === "image" || content.mediaType === "video") {
     return sendMedia(instanceName, groupJid, {
       mediatype: content.mediaType,

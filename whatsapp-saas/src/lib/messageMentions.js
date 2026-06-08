@@ -29,8 +29,17 @@ export function mentionLabel(member) {
   return name.split(/\s+/)[0] || name
 }
 
+export function isMemberMentionable(member) {
+  if (member?.mentionable === true) return true
+  if (member?.mentionable === false || member?.isLid) return false
+  const phone = String(member?.phoneDigits || member?.phone || '').replace(/\D/g, '')
+  if (!phone || phone.length < 10 || phone.length > 13) return false
+  if (phone.startsWith('55') && phone.length >= 12) return true
+  return phone.length === 10 || phone.length === 11
+}
+
 export function filterMembersForMention(members, groupIds, query = '') {
-  let list = members || []
+  let list = (members || []).filter(isMemberMentionable)
   if (groupIds?.length) {
     list = list.filter((m) => (m.groupIds || []).some((id) => groupIds.includes(id)))
   }

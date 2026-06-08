@@ -1,9 +1,10 @@
-function phoneFromJid(jid) {
-  if (!jid) return null
-  const raw = String(jid).split("@")[0].split(":")[0]
-  const digits = raw.replace(/\D/g, "")
-  return digits || null
-}
+const {
+  jidDomain,
+  resolvePhoneDigits,
+  phoneDigitsFromJid,
+  digitsOnly,
+  isLikelyPhoneDigits,
+} = require("./participantIdentity")
 
 function emptyMentionsJson() {
   return { mentionAll: false, mentions: [] }
@@ -32,7 +33,7 @@ function normalizeMentionsInput(raw) {
   }
 }
 
-/** Detecta @todos / @nome no texto quando mentionsJson não veio do frontend. */
+/** Detecta @todos no texto quando mentionsJson não veio do frontend. */
 function mergeMentionsFromBody(body, mentionsJson) {
   const normalized = normalizeMentionsInput(mentionsJson)
   if (normalized.mentionAll) return normalized
@@ -47,13 +48,32 @@ function mergeMentionsFromBody(body, mentionsJson) {
   return normalized
 }
 
-function participantPhone(participant) {
-  return (
-    phoneFromJid(participant?.participantJid) ||
-    (participant?.phone && String(participant.phone).replace(/\D/g, "").length >= 8
-      ? String(participant.phone).replace(/\D/g, "")
-      : null)
-  )
+/** Telefone válido para menção — ignora LID e IDs internos do webhook. */
+function resolveMentionPhoneDigits(participant) {
+  if (!participant) return null
+
+  const jid = participant.participantJid || participant.id || ""
+  const isLid = jidDomain(jid) === "lid"
+
+  const fromRaw = resolvePhoneDigits(participant.raw)
+  const fromJid = phoneDigitsFromJid(jid)
+  const fromStoredPhone =
+    participant.phone && participant.phone !== "—" ? digitsOnly(participant.phone) : null
+
+  const candidates = [fromRaw, fromJid, fromStoredPhone, participant.phoneDigits].filter(Boolean)
+
+  for (const digits of candidates) {
+    const d = String(digits).replace(/\D/g, "")
+    if (isLikelyPhoneDigits(d)) return d
+  }
+
+  if (isLid) return null
+
+  return null
+}
+
+function isParticipantMentionable(participant) {
+  return Boolean(resolveMentionPhoneDigits(participant))
 }
 
 function findParticipantForMention(m, participantByJid, participants) {
@@ -69,7 +89,7 @@ function findParticipantForMention(m, participantByJid, participants) {
   )
 }
 
-/** WhatsApp precisa de @número no texto para destacar menções individuais. */
+/** WhatsApp destaca menção quando o texto contém @telefone (só dígitos válidos). */
 function formatWhatsAppMentionBody(body, mentionsJson, participants, participantByJid) {
   let text = String(body || "")
   const normalized = normalizeMentionsInput(mentionsJson)
@@ -77,9 +97,9 @@ function formatWhatsAppMentionBody(body, mentionsJson, participants, participant
   for (const m of normalized.mentions) {
     if (m.type !== "user" || !m.label) continue
     const p = findParticipantForMention(m, participantByJid, participants)
-    const phone = participantPhone(p) || m.phone
-    if (!phone) continue
-    text = text.replace(new RegExp(`@${escapeRegex(m.label)}\\b`, "gi"), `@${phone}`)
+    const phoneDigits = resolveMentionPhoneDigits(p)
+    if (!phoneDigits) continue
+    text = text.replace(new RegExp(`@${escapeRegex(m.label)}\\b`, "gi"), `@${phoneDigits}`)
   }
   return text
 }
@@ -102,36 +122,36 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
       mentionsEveryOne: false,
       linkPreview,
       whatsappBody: content?.body || "",
+      mentionDebug: { reason: "none" },
     }
   }
 
   const mentioned = []
 
-  if (mentionsJson.mentionAll) {
-    for (const p of participants) {
-      const phone = participantPhone(p)
-      if (phone && !mentioned.includes(phone)) mentioned.push(phone)
-    }
-  }
-
   for (const m of mentionsJson.mentions) {
     if (m.type !== "user") continue
     const p = findParticipantForMention(m, participantByJid, participants)
-    if (!p) continue
-    const phone = participantPhone(p) || m.phone
-    if (phone && !mentioned.includes(phone)) mentioned.push(phone)
+    const phoneDigits = resolveMentionPhoneDigits(p)
+    if (phoneDigits && !mentioned.includes(phoneDigits)) mentioned.push(phoneDigits)
   }
 
-  const whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
+  // @todos: Evolution resolve todos os JIDs do grupo (inclui LID) via mentionsEveryOne
+  const mentionsEveryOne = mentionsJson.mentionAll === true
 
-  // Lista explícita de telefones (sync local). mentionsEveryOne só se não houver participantes.
-  const mentionsEveryOne = mentionsJson.mentionAll && mentioned.length === 0
+  const whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
 
   return {
     mentioned,
     mentionsEveryOne,
     linkPreview,
     whatsappBody,
+    mentionDebug: {
+      mentionAll: mentionsJson.mentionAll,
+      mentionsEveryOne,
+      mentionedCount: mentioned.length,
+      participantCount: participants.length,
+      skippedLid: participants.filter((p) => jidDomain(p.participantJid) === "lid").length,
+    },
   }
 }
 
@@ -146,11 +166,12 @@ function buildEvolutionSendOptions(mentionOpts = {}) {
 }
 
 module.exports = {
-  phoneFromJid,
   emptyMentionsJson,
   normalizeMentionsInput,
   mergeMentionsFromBody,
   resolveMentionsForGroup,
   buildEvolutionSendOptions,
   formatWhatsAppMentionBody,
+  resolveMentionPhoneDigits,
+  isParticipantMentionable,
 }

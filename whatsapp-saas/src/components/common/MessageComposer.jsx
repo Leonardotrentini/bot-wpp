@@ -111,7 +111,7 @@ export function MessageComposer({
         type: 'user',
         label: lbl,
         participantJid: option.id,
-        phone: String(option.phone || '').replace(/\D/g, '') || undefined,
+        phone: String(option.phoneDigits || option.phone || '').replace(/\D/g, '') || undefined,
       }
       const exists = normalized.mentions.some((m) => m.type === 'user' && m.participantJid === entry.participantJid)
       updateMentions({
@@ -282,7 +282,9 @@ export function MessageComposer({
                           </span>
                           <span className="min-w-0 truncate">
                             <span className="block truncate text-stone-100">{opt.name}</span>
-                            <span className="block truncate text-xs text-stone-500">{opt.phone}</span>
+                            <span className="block truncate text-xs text-stone-500">
+                              {opt.phoneDigits || opt.phone}
+                            </span>
                           </span>
                         </>
                       )}
