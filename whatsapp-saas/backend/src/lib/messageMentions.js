@@ -6,6 +6,20 @@ const {
   isLikelyPhoneDigits,
 } = require("./participantIdentity")
 
+const MENTION_ALL_WHATSAPP = "all"
+const MENTION_ALL_IN_TEXT_RE = /\B@(todos|all)\b/gi
+const MENTION_ALL_DETECT_RE = /\B@(todos|all)\b/i
+
+function hasMentionAllInText(text) {
+  return MENTION_ALL_DETECT_RE.test(String(text || ""))
+}
+
+/** WhatsApp nativo usa @all no texto (não @todos) junto com mentionsEveryOne. */
+function formatWhatsAppMentionAllBody(body, mentionAll) {
+  if (!mentionAll) return String(body || "")
+  return String(body || "").replace(MENTION_ALL_IN_TEXT_RE, `@${MENTION_ALL_WHATSAPP}`)
+}
+
 function emptyMentionsJson() {
   return { mentionAll: false, mentions: [] }
 }
@@ -33,16 +47,16 @@ function normalizeMentionsInput(raw) {
   }
 }
 
-/** Detecta @todos no texto quando mentionsJson não veio do frontend. */
+/** Detecta @all / @todos no texto quando mentionsJson não veio do frontend. */
 function mergeMentionsFromBody(body, mentionsJson) {
   const normalized = normalizeMentionsInput(mentionsJson)
   if (normalized.mentionAll) return normalized
 
   const text = String(body || "")
-  if (/\B@todos\b/i.test(text)) {
+  if (hasMentionAllInText(text)) {
     return {
       mentionAll: true,
-      mentions: [...normalized.mentions.filter((m) => m.type !== "all"), { type: "all", label: "todos" }],
+      mentions: [...normalized.mentions.filter((m) => m.type !== "all"), { type: "all", label: MENTION_ALL_WHATSAPP }],
     }
   }
   return normalized
@@ -101,6 +115,9 @@ function formatWhatsAppMentionBody(body, mentionsJson, participants, participant
     if (!phoneDigits) continue
     text = text.replace(new RegExp(`@${escapeRegex(m.label)}\\b`, "gi"), `@${phoneDigits}`)
   }
+  if (normalized.mentionAll) {
+    text = formatWhatsAppMentionAllBody(text, true)
+  }
   return text
 }
 
@@ -135,10 +152,13 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
     if (phoneDigits && !mentioned.includes(phoneDigits)) mentioned.push(phoneDigits)
   }
 
-  // @todos: Evolution resolve todos os JIDs do grupo (inclui LID) via mentionsEveryOne
+  // @all: Evolution resolve todos os JIDs do grupo (inclui LID) via mentionsEveryOne
   const mentionsEveryOne = mentionsJson.mentionAll === true
 
-  const whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
+  let whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
+  if (mentionsEveryOne) {
+    whatsappBody = formatWhatsAppMentionAllBody(whatsappBody, true)
+  }
 
   return {
     mentioned,
@@ -172,6 +192,9 @@ module.exports = {
   resolveMentionsForGroup,
   buildEvolutionSendOptions,
   formatWhatsAppMentionBody,
+  formatWhatsAppMentionAllBody,
+  hasMentionAllInText,
   resolveMentionPhoneDigits,
   isParticipantMentionable,
+  MENTION_ALL_WHATSAPP,
 }

@@ -85,7 +85,7 @@ export function MentionTextarea({
         </div>
         {children}
       </div>
-      <p className="mt-1.5 text-[11px] text-stone-500">Digite @ para mencionar · @todos notifica o grupo inteiro</p>
+      <p className="mt-1.5 text-[11px] text-stone-500">Digite @ para mencionar · @all notifica o grupo inteiro</p>
     </label>
   )
 }

@@ -2,6 +2,12 @@ export function emptyMentionsJson() {
   return { mentionAll: false, mentions: [] }
 }
 
+export const MENTION_ALL_TOKEN = 'all'
+
+export function hasMentionAllInText(text) {
+  return /\B@(todos|all)\b/i.test(String(text || ''))
+}
+
 export function normalizeMentionsJson(raw) {
   if (!raw || typeof raw !== 'object') return emptyMentionsJson()
   const mentions = Array.isArray(raw.mentions)
@@ -70,7 +76,7 @@ export function renderMessageBodyParts(text) {
 
 export function highlightMentionsInText(text, mentionsJson) {
   const normalized = normalizeMentionsJson(mentionsJson)
-  const labels = new Set(['todos'])
+  const labels = new Set(['all', 'todos'])
   for (const m of normalized.mentions) {
     if (m.label) labels.add(m.label)
   }
@@ -83,7 +89,7 @@ export function highlightMentionsInText(text, mentionsJson) {
     if (idx > last) parts.push(...renderMessageBodyParts(text.slice(last, idx)))
     const label = match[1] || ''
     parts.push({
-      type: label.toLowerCase() === 'todos' ? 'mention-all' : 'mention-user',
+      type: ['todos', 'all'].includes(label.toLowerCase()) ? 'mention-all' : 'mention-user',
       value: match[0],
     })
     last = idx + match[0].length

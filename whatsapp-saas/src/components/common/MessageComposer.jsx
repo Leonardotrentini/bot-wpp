@@ -8,7 +8,9 @@ import { Modal } from './Modal.jsx'
 import {
   emptyMentionsJson,
   filterMembersForMention,
+  hasMentionAllInText,
   mentionLabel,
+  MENTION_ALL_TOKEN,
   normalizeMentionsJson,
 } from '../../lib/messageMentions.js'
 
@@ -52,7 +54,10 @@ export function MessageComposer({
 
   const mentionOptions = useMemo(() => {
     const users = filterMembersForMention(members, groupIds, mentionQuery).slice(0, 12)
-    const showTodos = !mentionQuery || 'todos'.includes(mentionQuery.toLowerCase())
+    const showTodos =
+      !mentionQuery ||
+      'todos'.includes(mentionQuery.toLowerCase()) ||
+      'all'.startsWith(mentionQuery.toLowerCase())
     return { showTodos, users }
   }, [members, groupIds, mentionQuery])
 
@@ -97,11 +102,11 @@ export function MessageComposer({
     const prefix = atMatch ? before.slice(0, before.length - atMatch[0].length) : before
 
     if (option.type === 'all') {
-      const token = mentionToken('todos')
+      const token = mentionToken(MENTION_ALL_TOKEN)
       insertAtCursor(prefix, after, `${token} `)
       updateMentions({
         mentionAll: true,
-        mentions: [...normalized.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: 'todos' }],
+        mentions: [...normalized.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: MENTION_ALL_TOKEN }],
       })
     } else {
       const lbl = mentionLabel(option)
@@ -129,7 +134,9 @@ export function MessageComposer({
         mentionAll: false,
         mentions: normalized.mentions.filter((m) => m.type !== 'all'),
       })
-      if (body.includes('@todos')) onBodyChange?.(body.replace(/@todos/g, '').replace(/\s{2,}/g, ' ').trim())
+      if (hasMentionAllInText(body)) {
+        onBodyChange?.(body.replace(/\B@(todos|all)\b/gi, '').replace(/\s{2,}/g, ' ').trim())
+      }
       return
     }
     updateMentions({
@@ -141,12 +148,12 @@ export function MessageComposer({
   }
 
   function syncMentionsFromText(value) {
-    const hasTodos = /\B@todos\b/i.test(value)
+    const hasTodos = hasMentionAllInText(value)
     const next = normalizeMentionsJson(mentionsJson)
     if (hasTodos && !next.mentionAll) {
       updateMentions({
         mentionAll: true,
-        mentions: [...next.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: 'todos' }],
+        mentions: [...next.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: MENTION_ALL_TOKEN }],
       })
       return
     }
@@ -216,7 +223,7 @@ export function MessageComposer({
   }
 
   const flatOptions = []
-  if (mentionOptions.showTodos) flatOptions.push({ type: 'all', label: 'todos' })
+  if (mentionOptions.showTodos) flatOptions.push({ type: 'all', label: MENTION_ALL_TOKEN })
   for (const u of mentionOptions.users) flatOptions.push({ type: 'user', ...u })
 
   const showEmptyMembers =
@@ -271,8 +278,8 @@ export function MessageComposer({
                             <Megaphone className="h-4 w-4" />
                           </span>
                           <span className="min-w-0">
-                            <span className="block font-semibold text-amber-200">@todos</span>
-                            <span className="block text-xs text-amber-200/60">Notifica todo o grupo</span>
+                            <span className="block font-semibold text-amber-200">@all</span>
+                            <span className="block text-xs text-amber-200/60">Mencione todos os membros do grupo</span>
                           </span>
                         </>
                       ) : (
@@ -303,12 +310,12 @@ export function MessageComposer({
           {normalized.mentionAll && (
             <span className="mention-chip-all">
               <Users className="h-3 w-3 shrink-0" aria-hidden />
-              @todos
+              @all
               <button
                 type="button"
                 className="rounded p-0.5 hover:bg-amber-500/20"
                 onClick={() => removeMention({ type: 'all' })}
-                aria-label="Remover @todos"
+                aria-label="Remover @all"
               >
                 <X className="h-3 w-3" />
               </button>
