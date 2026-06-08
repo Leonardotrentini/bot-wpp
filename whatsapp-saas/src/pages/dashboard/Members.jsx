@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Tag, MessageSquare, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check } from 'lucide-react'
+import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -365,9 +365,6 @@ export function Members() {
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setTagsModal(true)}>
           <Tag className="h-4 w-4" /> Gerenciar tags
-        </Button>
-        <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => toast.info('Envio em massa em breve.')}>
-          <MessageSquare className="h-4 w-4" /> Mensagem
         </Button>
         <Button
           size="sm"
