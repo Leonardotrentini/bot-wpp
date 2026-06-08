@@ -2081,17 +2081,18 @@ async function resolveGroupName(userId, groupJid) {
 async function deliverToGroup(instanceName, groupJid, content, userId) {
   const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
   const sendOpts = buildEvolutionSendOptions(mentionOpts)
+  const text = mentionOpts.whatsappBody ?? content.body
   if (content.mediaType === "image" || content.mediaType === "video") {
     return sendMedia(instanceName, groupJid, {
       mediatype: content.mediaType,
       media: stripDataUrlPrefix(content.mediaBase64),
       mimetype: content.mediaMime || undefined,
-      caption: content.body || undefined,
+      caption: text || undefined,
       fileName: content.mediaName || undefined,
       ...sendOpts,
     })
   }
-  return sendText(instanceName, groupJid, content.body, sendOpts)
+  return sendText(instanceName, groupJid, text, sendOpts)
 }
 
 async function deliverWithRetry(instanceName, groupJid, content, userId) {

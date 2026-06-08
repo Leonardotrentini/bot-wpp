@@ -140,9 +140,28 @@ export function MessageComposer({
     if (body.includes(token)) onBodyChange?.(body.replace(new RegExp(`${token}\\s?`, 'g'), ''))
   }
 
+  function syncMentionsFromText(value) {
+    const hasTodos = /\B@todos\b/i.test(value)
+    const next = normalizeMentionsJson(mentionsJson)
+    if (hasTodos && !next.mentionAll) {
+      updateMentions({
+        mentionAll: true,
+        mentions: [...next.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: 'todos' }],
+      })
+      return
+    }
+    if (!hasTodos && next.mentionAll) {
+      updateMentions({
+        mentionAll: false,
+        mentions: next.mentions.filter((m) => m.type !== 'all'),
+      })
+    }
+  }
+
   function onTextChange(e) {
     const value = e.target.value
     onBodyChange?.(value)
+    syncMentionsFromText(value)
     detectMentionTrigger(value, e.target.selectionStart)
   }
 
