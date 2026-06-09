@@ -2060,7 +2060,7 @@ function stripDataUrlPrefix(b64) {
 function getMessageContent(source) {
   const body = source?.body || ""
   const mergedMentions = mergeMentionsFromBody(body, source?.mentionsJson)
-  const hasMentions = mergedMentions.mentionAll || mergedMentions.mentions.some((m) => m.type === "user")
+  const hasMentions = mergedMentions.mentions.some((m) => m.type === "user")
   return {
     body,
     mediaType: source?.mediaType || "none",
@@ -2098,21 +2098,16 @@ async function resolveGroupName(userId, groupJid) {
 }
 
 async function deliverToGroup(instanceName, groupJid, content, userId) {
-  const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content, {
-    instanceName,
-    fetchGroupParticipants,
-  })
+  const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
   const sendOpts = buildEvolutionSendOptions(mentionOpts)
   const text = mentionOpts.whatsappBody ?? content.body
-  if (mentionOpts.mentionAll || mentionOpts.mentionsEveryOne || (sendOpts.mentioned && sendOpts.mentioned.length)) {
+  if (sendOpts.mentioned?.length) {
     console.log(
       "[mentions]",
       JSON.stringify({
         groupJid,
         bodyPreview: String(text || "").slice(0, 80),
-        mentionsEveryOne: sendOpts.mentionsEveryOne === true,
-        mentionAll: sendOpts.mentionAll === true,
-        mentioned: sendOpts.mentioned || [],
+        mentioned: sendOpts.mentioned,
         debug: mentionOpts.mentionDebug,
       }),
     )
@@ -2342,7 +2337,7 @@ function getJobPayload(j) {
 }
 
 const mentionEntrySchema = z.object({
-  type: z.enum(["user", "all"]),
+  type: z.literal("user"),
   label: z.string().min(1),
   participantJid: z.string().optional(),
   phone: z.string().optional(),
@@ -2351,7 +2346,7 @@ const mentionEntrySchema = z.object({
 const mentionsJsonSchema = z
   .object({
     mentionAll: z.boolean().optional(),
-    mentions: z.array(mentionEntrySchema).optional(),
+    mentions: z.array(mentionEntrySchema).max(2).optional(),
   })
   .optional()
   .nullable()

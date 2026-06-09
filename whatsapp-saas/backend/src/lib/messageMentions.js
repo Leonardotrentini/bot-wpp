@@ -4,46 +4,9 @@ const {
   phoneDigitsFromJid,
   digitsOnly,
   isLikelyPhoneDigits,
-  mapEvolutionParticipant,
 } = require("./participantIdentity")
 
-const MENTION_ALL_WHATSAPP = "all"
-const MENTION_ALL_IN_TEXT_RE = /\B@(todos|all)\b/gi
-const MENTION_ALL_DETECT_RE = /\B@(todos|all)\b/i
-const PHONE_MENTION_IN_TEXT_RE = /@(\d{10,13})\b/g
-
-function hasMentionAllInText(text) {
-  return MENTION_ALL_DETECT_RE.test(String(text || ""))
-}
-
-/** @all no início (linha própria) + resto — melhor compatibilidade Evolution/Baileys. */
-function formatWhatsAppMentionAllBody(body, mentionAll) {
-  if (!mentionAll) return String(body || "")
-  const raw = String(body || "")
-  const rest = raw.replace(MENTION_ALL_IN_TEXT_RE, "").replace(/\s{2,}/g, " ").trim()
-  if (!rest) return `@${MENTION_ALL_WHATSAPP}`
-  return `@${MENTION_ALL_WHATSAPP}\n\n${rest}`
-}
-
-/** Baileys/Evolution: incluir @telefone no texto para cada membro notificado. */
-function appendMassMentionPhonesToBody(body, targets) {
-  let text = String(body || "")
-  const phonesInText = new Set()
-  for (const match of text.matchAll(PHONE_MENTION_IN_TEXT_RE)) {
-    if (match[1]) phonesInText.add(match[1])
-  }
-
-  const tokens = []
-  for (const target of targets) {
-    const phone = String(target).includes("@") ? phoneDigitsFromJid(target) : digitsOnly(target)
-    if (!phone || !isLikelyPhoneDigits(phone) || phonesInText.has(phone)) continue
-    tokens.push(`@${phone}`)
-    phonesInText.add(phone)
-  }
-
-  if (!tokens.length) return text
-  return `${text}\n${tokens.join(" ")}`.trim()
-}
+const MAX_MENTIONS = 2
 
 function emptyMentionsJson() {
   return { mentionAll: false, mentions: [] }
@@ -57,41 +20,30 @@ function normalizeMentionsInput(raw) {
   if (!raw || typeof raw !== "object") return emptyMentionsJson()
   const mentions = Array.isArray(raw.mentions)
     ? raw.mentions
-        .filter((m) => m && typeof m === "object" && m.type && m.label)
+        .filter((m) => m && typeof m === "object" && m.type === "user" && m.label)
         .map((m) => ({
-          type: m.type === "all" ? "all" : "user",
+          type: "user",
           label: String(m.label).trim(),
           participantJid: m.participantJid ? String(m.participantJid) : undefined,
           phone: m.phone ? String(m.phone).replace(/\D/g, "") : undefined,
         }))
     : []
-  const mentionAll = raw.mentionAll === true || mentions.some((m) => m.type === "all")
-  return {
-    mentionAll,
-    mentions: mentions.filter((m) => m.type === "user" || m.type === "all"),
+
+  const seen = new Set()
+  const unique = []
+  for (const m of mentions) {
+    const key = m.participantJid || m.label.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(m)
+    if (unique.length >= MAX_MENTIONS) break
   }
+
+  return { mentionAll: false, mentions: unique }
 }
 
-/** Detecta @all / @todos no texto quando mentionsJson não veio do frontend. */
-function mergeMentionsFromBody(body, mentionsJson) {
-  const normalized = normalizeMentionsInput(mentionsJson)
-  if (normalized.mentionAll) return normalized
-
-  const text = String(body || "")
-  if (hasMentionAllInText(text)) {
-    return {
-      mentionAll: true,
-      mentions: [...normalized.mentions.filter((m) => m.type !== "all"), { type: "all", label: MENTION_ALL_WHATSAPP }],
-    }
-  }
-  return normalized
-}
-
-function normalizeEvolutionParticipantsList(payload) {
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload?.participants)) return payload.participants
-  if (Array.isArray(payload?.data?.participants)) return payload.data.participants
-  return []
+function mergeMentionsFromBody(_body, mentionsJson) {
+  return normalizeMentionsInput(mentionsJson)
 }
 
 /** Telefone válido para menção — ignora LID e IDs internos do webhook. */
@@ -128,16 +80,6 @@ function participantMentionTarget(participant) {
   return null
 }
 
-function extractMentionTargetsFromEvolutionPayload(payload) {
-  const targets = []
-  for (const raw of normalizeEvolutionParticipantsList(payload)) {
-    const mapped = mapEvolutionParticipant(raw)
-    const target = participantMentionTarget(mapped)
-    if (target && !targets.includes(target)) targets.push(target)
-  }
-  return targets
-}
-
 function isParticipantMentionable(participant) {
   return Boolean(resolveMentionPhoneDigits(participant))
 }
@@ -161,22 +103,18 @@ function formatWhatsAppMentionBody(body, mentionsJson, participants, participant
   const normalized = normalizeMentionsInput(mentionsJson)
 
   for (const m of normalized.mentions) {
-    if (m.type !== "user" || !m.label) continue
+    if (!m.label) continue
     const p = findParticipantForMention(m, participantByJid, participants)
     const phoneDigits = resolveMentionPhoneDigits(p)
     if (!phoneDigits) continue
     text = text.replace(new RegExp(`@${escapeRegex(m.label)}\\b`, "gi"), `@${phoneDigits}`)
   }
-  if (normalized.mentionAll) {
-    text = formatWhatsAppMentionAllBody(text, true)
-  }
   return text
 }
 
-async function resolveMentionsForGroup(prisma, userId, groupJid, content, sendContext = {}) {
+async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
   const linkPreview = content?.linkPreview !== false
   const mentionsJson = mergeMentionsFromBody(content?.body, content?.mentionsJson)
-  const { instanceName, fetchGroupParticipants } = sendContext
 
   const group = await prisma.whatsAppGroup.findUnique({
     where: { userId_groupJid: { userId, groupJid } },
@@ -186,93 +124,34 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content, sendCo
   const participants = group?.participants || []
   const participantByJid = new Map(participants.map((p) => [p.participantJid, p]))
 
-  if (!mentionsJson.mentionAll && !mentionsJson.mentions.some((m) => m.type === "user")) {
+  if (!mentionsJson.mentions.some((m) => m.type === "user")) {
     return {
       mentioned: [],
-      mentionsEveryOne: false,
       linkPreview,
       whatsappBody: content?.body || "",
       mentionDebug: { reason: "none" },
     }
   }
 
-  const individualMentioned = []
+  const mentioned = []
   for (const m of mentionsJson.mentions) {
-    if (m.type !== "user") continue
     const p = findParticipantForMention(m, participantByJid, participants)
     const target = participantMentionTarget(p)
-    if (target && !individualMentioned.includes(target)) individualMentioned.push(target)
+    if (target && !mentioned.includes(target)) mentioned.push(target)
+    if (mentioned.length >= MAX_MENTIONS) break
   }
 
-  let mentionsEveryOne = false
-  let liveFetchCount = 0
-  let allTargets = []
-  let mentionStrategy = "none"
-
-  if (mentionsJson.mentionAll === true) {
-    if (instanceName && typeof fetchGroupParticipants === "function") {
-      try {
-        const payload = await fetchGroupParticipants(instanceName, groupJid)
-        allTargets = extractMentionTargetsFromEvolutionPayload(payload)
-        liveFetchCount = allTargets.length
-      } catch (err) {
-        console.warn("[mentions] fetchGroupParticipants falhou:", groupJid, err?.message || err)
-      }
-    }
-
-    const dbTargets = participants.map((p) => participantMentionTarget(p)).filter(Boolean)
-    allTargets = [...new Set([...allTargets, ...dbTargets])]
-
-    if (allTargets.length > 0) {
-      mentionStrategy = "mentioned+phonesInText"
-    } else if (participants.length > 0) {
-      mentionsEveryOne = true
-      mentionStrategy = "mentionsEveryOne+fallback"
-    } else {
-      mentionsEveryOne = true
-      mentionStrategy = "mentionsEveryOne+bare"
-    }
-  }
-
-  let whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
-
-  let mentioned = []
-
-  if (mentionsJson.mentionAll && allTargets.length > 0) {
-    // Caminho que funciona na prática: mentioned[] + @telefone de cada membro no texto
-    mentioned = [...new Set([...allTargets, ...individualMentioned])]
-    whatsappBody = appendMassMentionPhonesToBody(whatsappBody, allTargets)
-    mentionsEveryOne = false
-    mentionStrategy = "mentioned+phonesInText"
-  } else if (mentionsJson.mentionAll) {
-    // Último recurso: cache Evolution
-    mentionsEveryOne = true
-    mentioned = []
-    mentionStrategy = "mentionsEveryOne+bare"
-  } else {
-    mentioned = [...individualMentioned]
-  }
-
-  if (mentionsJson.mentionAll && individualMentioned.length && mentionStrategy === "mentioned+phonesInText") {
-    mentionStrategy = "mentioned+phonesInText+individual"
-  }
+  const whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
 
   return {
     mentioned,
-    mentionsEveryOne,
-    mentionAll: mentionsJson.mentionAll === true,
     linkPreview,
     whatsappBody,
     mentionDebug: {
-      mentionAll: mentionsJson.mentionAll,
-      mentionsEveryOne,
-      mentionStrategy,
+      mentionStrategy: mentioned.length ? "individual" : "none",
       mentionedCount: mentioned.length,
-      individualCount: individualMentioned.length,
-      allTargetsCount: allTargets.length,
       participantCount: participants.length,
-      liveFetchCount,
-      skippedLid: participants.filter((p) => jidDomain(p.participantJid) === "lid").length,
+      maxMentions: MAX_MENTIONS,
     },
   }
 }
@@ -280,34 +159,21 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content, sendCo
 function buildEvolutionSendOptions(mentionOpts = {}) {
   const opts = {}
   if (mentionOpts.linkPreview === true) opts.linkPreview = true
-
-  // mentionsEveryOne tem prioridade para @all (Evolution ignora mentioned[] quando usa if/else interno)
-  if (mentionOpts.mentionsEveryOne === true) {
-    opts.mentionsEveryOne = true
-  } else if (Array.isArray(mentionOpts.mentioned) && mentionOpts.mentioned.length) {
-    opts.mentioned = mentionOpts.mentioned
-  }
-
-  // mentionAll (nonJidMentions) só no fallback mentionsEveryOne — com mentioned[] a Evolution pode ignorar a lista
-  if (mentionOpts.mentionAll === true && mentionOpts.mentionsEveryOne === true && !opts.mentioned?.length) {
-    opts.mentionAll = true
+  if (Array.isArray(mentionOpts.mentioned) && mentionOpts.mentioned.length) {
+    opts.mentioned = mentionOpts.mentioned.slice(0, MAX_MENTIONS)
   }
   return opts
 }
 
 module.exports = {
+  MAX_MENTIONS,
   emptyMentionsJson,
   normalizeMentionsInput,
   mergeMentionsFromBody,
   resolveMentionsForGroup,
   buildEvolutionSendOptions,
   formatWhatsAppMentionBody,
-  formatWhatsAppMentionAllBody,
-  appendMassMentionPhonesToBody,
-  hasMentionAllInText,
   resolveMentionPhoneDigits,
   isParticipantMentionable,
   participantMentionTarget,
-  extractMentionTargetsFromEvolutionPayload,
-  MENTION_ALL_WHATSAPP,
 }

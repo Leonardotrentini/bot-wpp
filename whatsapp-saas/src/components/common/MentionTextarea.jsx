@@ -53,7 +53,7 @@ export function MentionTextarea({
         <div
           className={`relative overflow-hidden rounded-xl border bg-brand-900/50 transition ${
             highlightRing
-              ? 'border-amber-500/35 ring-2 ring-amber-500/15'
+              ? 'border-sky-500/35 ring-2 ring-sky-500/15'
               : 'border-brand-700 focus-within:border-sky-500/40 focus-within:ring-2 focus-within:ring-sky-500/15'
           }`}
         >
@@ -85,7 +85,7 @@ export function MentionTextarea({
         </div>
         {children}
       </div>
-      <p className="mt-1.5 text-[11px] text-stone-500">Digite @ para mencionar · @all notifica o grupo inteiro</p>
+      <p className="mt-1.5 text-[11px] text-stone-500">Digite @ para mencionar · máximo 2 pessoas por mensagem</p>
     </label>
   )
 }

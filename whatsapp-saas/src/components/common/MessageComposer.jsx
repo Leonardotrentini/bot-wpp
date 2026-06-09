@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AtSign, Link2, Megaphone, User, Users, X } from 'lucide-react'
+import { AtSign, Link2, User, X } from 'lucide-react'
 import { MentionTextarea } from './MentionTextarea.jsx'
 import { Input } from './Input.jsx'
 import { Button } from './Button.jsx'
 import { Toggle } from './Toggle.jsx'
 import { Modal } from './Modal.jsx'
 import {
-  emptyMentionsJson,
   filterMembersForMention,
-  hasMentionAllInText,
+  MAX_MENTIONS,
   mentionLabel,
-  MENTION_ALL_TOKEN,
   normalizeMentionsJson,
 } from '../../lib/messageMentions.js'
 
@@ -46,24 +44,29 @@ export function MessageComposer({
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionQuery, setMentionQuery] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
+  const [mentionLimitHint, setMentionLimitHint] = useState(false)
   const [linkModal, setLinkModal] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
   const [linkText, setLinkText] = useState('')
 
   const normalized = useMemo(() => normalizeMentionsJson(mentionsJson), [mentionsJson])
+  const mentionCount = normalized.mentions.length
+  const atMentionLimit = mentionCount >= MAX_MENTIONS
 
-  const mentionOptions = useMemo(() => {
-    const users = filterMembersForMention(members, groupIds, mentionQuery).slice(0, 12)
-    const showTodos =
-      !mentionQuery ||
-      'todos'.includes(mentionQuery.toLowerCase()) ||
-      'all'.startsWith(mentionQuery.toLowerCase())
-    return { showTodos, users }
-  }, [members, groupIds, mentionQuery])
+  const mentionOptions = useMemo(
+    () => filterMembersForMention(members, groupIds, mentionQuery).slice(0, 12),
+    [members, groupIds, mentionQuery],
+  )
 
   useEffect(() => {
     setMentionIndex(0)
   }, [mentionQuery, mentionOpen])
+
+  useEffect(() => {
+    if (!mentionLimitHint) return undefined
+    const t = setTimeout(() => setMentionLimitHint(false), 3000)
+    return () => clearTimeout(t)
+  }, [mentionLimitHint])
 
   function updateMentions(next) {
     onMentionsChange?.(normalizeMentionsJson(next))
@@ -94,6 +97,13 @@ export function MessageComposer({
   }
 
   function applyMention(option) {
+    const exists = normalized.mentions.some((m) => m.participantJid === option.id)
+    if (!exists && atMentionLimit) {
+      setMentionLimitHint(true)
+      setMentionOpen(false)
+      return
+    }
+
     const el = textareaRef.current
     const cursor = el?.selectionStart ?? body.length
     const before = body.slice(0, cursor)
@@ -101,95 +111,50 @@ export function MessageComposer({
     const atMatch = before.match(/@([\w\u00C0-\u024f.]*)$/)
     const prefix = atMatch ? before.slice(0, before.length - atMatch[0].length) : before
 
-    if (option.type === 'all') {
-      const token = mentionToken(MENTION_ALL_TOKEN)
-      insertAtCursor(prefix, after, `${token} `)
-      updateMentions({
-        mentionAll: true,
-        mentions: [...normalized.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: MENTION_ALL_TOKEN }],
-      })
-    } else {
-      const lbl = mentionLabel(option)
-      const token = mentionToken(lbl)
-      insertAtCursor(prefix, after, `${token} `)
-      const entry = {
-        type: 'user',
-        label: lbl,
-        participantJid: option.id,
-        phone: String(option.phoneDigits || option.phone || '').replace(/\D/g, '') || undefined,
-      }
-      const exists = normalized.mentions.some((m) => m.type === 'user' && m.participantJid === entry.participantJid)
-      updateMentions({
-        mentionAll: normalized.mentionAll,
-        mentions: exists ? normalized.mentions : [...normalized.mentions, entry],
-      })
+    const lbl = mentionLabel(option)
+    const token = mentionToken(lbl)
+    insertAtCursor(prefix, after, `${token} `)
+    const entry = {
+      type: 'user',
+      label: lbl,
+      participantJid: option.id,
+      phone: String(option.phoneDigits || option.phone || '').replace(/\D/g, '') || undefined,
     }
+    updateMentions({
+      mentionAll: false,
+      mentions: exists ? normalized.mentions : [...normalized.mentions, entry],
+    })
     setMentionOpen(false)
     setMentionQuery('')
   }
 
   function removeMention(entry) {
-    if (entry.type === 'all') {
-      updateMentions({
-        mentionAll: false,
-        mentions: normalized.mentions.filter((m) => m.type !== 'all'),
-      })
-      if (hasMentionAllInText(body)) {
-        onBodyChange?.(body.replace(/\B@(todos|all)\b/gi, '').replace(/\s{2,}/g, ' ').trim())
-      }
-      return
-    }
     updateMentions({
-      mentionAll: normalized.mentionAll,
+      mentionAll: false,
       mentions: normalized.mentions.filter((m) => m.participantJid !== entry.participantJid),
     })
     const token = mentionToken(entry.label)
     if (body.includes(token)) onBodyChange?.(body.replace(new RegExp(`${token}\\s?`, 'g'), ''))
   }
 
-  function syncMentionsFromText(value) {
-    const hasTodos = hasMentionAllInText(value)
-    const next = normalizeMentionsJson(mentionsJson)
-    if (hasTodos && !next.mentionAll) {
-      updateMentions({
-        mentionAll: true,
-        mentions: [...next.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: MENTION_ALL_TOKEN }],
-      })
-      return
-    }
-    if (!hasTodos && next.mentionAll) {
-      updateMentions({
-        mentionAll: false,
-        mentions: next.mentions.filter((m) => m.type !== 'all'),
-      })
-    }
-  }
-
   function onTextChange(e) {
     const value = e.target.value
     onBodyChange?.(value)
-    syncMentionsFromText(value)
     detectMentionTrigger(value, e.target.selectionStart)
   }
 
   function onKeyDown(e) {
     if (!mentionOpen) return
-    const total = (mentionOptions.showTodos ? 1 : 0) + mentionOptions.users.length
-    if (!total) return
+    if (!mentionOptions.length) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setMentionIndex((i) => (i + 1) % total)
+      setMentionIndex((i) => (i + 1) % mentionOptions.length)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setMentionIndex((i) => (i - 1 + total) % total)
+      setMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length)
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
-      let idx = mentionIndex
-      if (mentionOptions.showTodos) {
-        if (idx === 0) return applyMention({ type: 'all' })
-        idx -= 1
-      }
-      const user = mentionOptions.users[idx]
+      const user = mentionOptions[mentionIndex]
       if (user) applyMention(user)
     } else if (e.key === 'Escape') {
       setMentionOpen(false)
@@ -197,6 +162,10 @@ export function MessageComposer({
   }
 
   function openMentionPicker() {
+    if (atMentionLimit) {
+      setMentionLimitHint(true)
+      return
+    }
     textareaRef.current?.focus()
     setMentionOpen(true)
     setMentionQuery('')
@@ -222,12 +191,8 @@ export function MessageComposer({
     setLinkModal(false)
   }
 
-  const flatOptions = []
-  if (mentionOptions.showTodos) flatOptions.push({ type: 'all', label: MENTION_ALL_TOKEN })
-  for (const u of mentionOptions.users) flatOptions.push({ type: 'user', ...u })
-
   const showEmptyMembers =
-    groupIds.length > 0 && mentionOptions.users.length === 0 && !mentionQuery && !mentionOptions.showTodos
+    groupIds.length > 0 && mentionOptions.length === 0 && !mentionQuery
 
   return (
     <div className={`space-y-3 ${className}`}>
@@ -240,61 +205,56 @@ export function MessageComposer({
         onClick={(e) => detectMentionTrigger(body, e.target.selectionStart)}
         placeholder={placeholder}
         mentionsJson={mentionsJson}
-        highlightRing={normalized.mentionAll}
+        highlightRing={mentionCount > 0}
         textareaRef={textareaRef}
       >
         {mentionOpen && (
           <div className="mention-dropdown">
             <div className="border-b border-brand-800/80 px-3 py-2">
-              <p className="text-xs font-medium text-stone-300">Mencionar</p>
-              <p className="text-[10px] text-stone-500">↑↓ navegar · Enter selecionar · Esc fechar</p>
+              <p className="text-xs font-medium text-stone-300">Mencionar membro</p>
+              <p className="text-[10px] text-stone-500">
+                ↑↓ navegar · Enter selecionar · máx. {MAX_MENTIONS} pessoas
+              </p>
             </div>
             <ul role="listbox" className="max-h-48 overflow-y-auto py-1">
-              {flatOptions.length === 0 && (
+              {atMentionLimit && (
+                <li className="px-4 py-2 text-xs text-amber-300/90">
+                  Limite de {MAX_MENTIONS} menções atingido. Remova uma para adicionar outra.
+                </li>
+              )}
+              {mentionOptions.length === 0 && !atMentionLimit && (
                 <li className="px-4 py-3 text-xs text-stone-500">
                   {showEmptyMembers
                     ? 'Nenhum membro nos grupos selecionados. Sincronize em Membros.'
                     : 'Nenhum resultado para esta busca.'}
                 </li>
               )}
-              {flatOptions.map((opt, idx) => {
+              {mentionOptions.map((opt, idx) => {
                 const active = idx === mentionIndex
-                const isAll = opt.type === 'all'
+                const alreadyMentioned = normalized.mentions.some((m) => m.participantJid === opt.id)
+                const disabled = atMentionLimit && !alreadyMentioned
                 return (
-                  <li key={isAll ? '__all__' : opt.id} role="option" aria-selected={active}>
+                  <li key={opt.id} role="option" aria-selected={active}>
                     <button
                       type="button"
-                      className={`mention-dropdown-item ${isAll ? 'mention-dropdown-item--all' : ''} ${
-                        active ? 'mention-dropdown-item--active' : 'hover:bg-white/5'
-                      } ${isAll && active ? 'mention-dropdown-item--all mention-dropdown-item--active' : ''}`}
+                      disabled={disabled}
+                      className={`mention-dropdown-item ${active ? 'mention-dropdown-item--active' : 'hover:bg-white/5'} ${
+                        disabled ? 'cursor-not-allowed opacity-40' : ''
+                      }`}
                       onMouseDown={(e) => {
                         e.preventDefault()
-                        applyMention(opt)
+                        if (!disabled) applyMention(opt)
                       }}
                     >
-                      {isAll ? (
-                        <>
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-300">
-                            <Megaphone className="h-4 w-4" />
-                          </span>
-                          <span className="min-w-0">
-                            <span className="block font-semibold text-amber-200">@all</span>
-                            <span className="block text-xs text-amber-200/60">Mencione todos os membros do grupo</span>
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-200">
-                            {memberInitials(opt.name)}
-                          </span>
-                          <span className="min-w-0 truncate">
-                            <span className="block truncate text-stone-100">{opt.name}</span>
-                            <span className="block truncate text-xs text-stone-500">
-                              {opt.phoneDigits || opt.phone}
-                            </span>
-                          </span>
-                        </>
-                      )}
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-200">
+                        {memberInitials(opt.name)}
+                      </span>
+                      <span className="min-w-0 truncate">
+                        <span className="block truncate text-stone-100">{opt.name}</span>
+                        <span className="block truncate text-xs text-stone-500">
+                          {opt.phoneDigits || opt.phone}
+                        </span>
+                      </span>
                     </button>
                   </li>
                 )
@@ -304,44 +264,43 @@ export function MessageComposer({
         )}
       </MentionTextarea>
 
-      {(normalized.mentionAll || normalized.mentions.some((m) => m.type === 'user')) && (
+      {mentionLimitHint && (
+        <p className="text-xs text-amber-300/90">
+          Você pode mencionar no máximo {MAX_MENTIONS} pessoas por mensagem.
+        </p>
+      )}
+
+      {normalized.mentions.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-stone-500">Menções</span>
-          {normalized.mentionAll && (
-            <span className="mention-chip-all">
-              <Users className="h-3 w-3 shrink-0" aria-hidden />
-              @all
+          <span className="text-[11px] font-medium uppercase tracking-wide text-stone-500">
+            Menções ({mentionCount}/{MAX_MENTIONS})
+          </span>
+          {normalized.mentions.map((m) => (
+            <span key={m.participantJid || m.label} className="mention-chip-user">
+              <User className="h-3 w-3 shrink-0" aria-hidden />
+              @{m.label}
               <button
                 type="button"
-                className="rounded p-0.5 hover:bg-amber-500/20"
-                onClick={() => removeMention({ type: 'all' })}
-                aria-label="Remover @all"
+                className="rounded p-0.5 hover:bg-sky-500/20"
+                onClick={() => removeMention(m)}
+                aria-label={`Remover @${m.label}`}
               >
                 <X className="h-3 w-3" />
               </button>
             </span>
-          )}
-          {normalized.mentions
-            .filter((m) => m.type === 'user')
-            .map((m) => (
-              <span key={m.participantJid || m.label} className="mention-chip-user">
-                <User className="h-3 w-3 shrink-0" aria-hidden />
-                @{m.label}
-                <button
-                  type="button"
-                  className="rounded p-0.5 hover:bg-sky-500/20"
-                  onClick={() => removeMention(m)}
-                  aria-label={`Remover @${m.label}`}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
+          ))}
         </div>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" className="mention-btn gap-1.5" onClick={openMentionPicker}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mention-btn gap-1.5"
+          onClick={openMentionPicker}
+          disabled={atMentionLimit}
+        >
           <AtSign className="h-4 w-4" /> Mencionar
         </Button>
         <span className="hidden h-5 w-px bg-brand-700 sm:inline" aria-hidden />

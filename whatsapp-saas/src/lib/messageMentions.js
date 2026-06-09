@@ -1,36 +1,42 @@
+export const MAX_MENTIONS = 2
+
 export function emptyMentionsJson() {
   return { mentionAll: false, mentions: [] }
 }
 
-export const MENTION_ALL_TOKEN = 'all'
-
-export function hasMentionAllInText(text) {
-  return /\B@(todos|all)\b/i.test(String(text || ''))
+export function countUserMentions(mentionsJson) {
+  return normalizeMentionsJson(mentionsJson).mentions.length
 }
 
 export function normalizeMentionsJson(raw) {
   if (!raw || typeof raw !== 'object') return emptyMentionsJson()
   const mentions = Array.isArray(raw.mentions)
-    ? raw.mentions.filter((m) => m && m.label).map((m) => ({
-        type: m.type === 'all' ? 'all' : 'user',
-        label: String(m.label).trim(),
-        participantJid: m.participantJid || undefined,
-        phone: m.phone || undefined,
-      }))
+    ? raw.mentions
+        .filter((m) => m && m.type === 'user' && m.label)
+        .map((m) => ({
+          type: 'user',
+          label: String(m.label).trim(),
+          participantJid: m.participantJid || undefined,
+          phone: m.phone || undefined,
+        }))
     : []
-  const mentionAll = raw.mentionAll === true || mentions.some((m) => m.type === 'all')
-  return { mentionAll, mentions }
+
+  const seen = new Set()
+  const unique = []
+  for (const m of mentions) {
+    const key = m.participantJid || m.label.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(m)
+    if (unique.length >= MAX_MENTIONS) break
+  }
+
+  return { mentionAll: false, mentions: unique }
 }
 
 export function appendComposerFields(payload, form) {
-  let mentionsJson = normalizeMentionsJson(form.mentionsJson)
-  if (hasMentionAllInText(form.body) && !mentionsJson.mentionAll) {
-    mentionsJson = {
-      mentionAll: true,
-      mentions: [...mentionsJson.mentions.filter((m) => m.type !== 'all'), { type: 'all', label: MENTION_ALL_TOKEN }],
-    }
-  }
-  if (mentionsJson.mentionAll || mentionsJson.mentions.length) {
+  const mentionsJson = normalizeMentionsJson(form.mentionsJson)
+  if (mentionsJson.mentions.length) {
     payload.mentionsJson = mentionsJson
   }
   payload.linkPreview = form.linkPreview !== false
@@ -82,22 +88,19 @@ export function renderMessageBodyParts(text) {
 
 export function highlightMentionsInText(text, mentionsJson) {
   const normalized = normalizeMentionsJson(mentionsJson)
-  const labels = new Set(['all', 'todos'])
+  const labels = new Set()
   for (const m of normalized.mentions) {
     if (m.label) labels.add(m.label)
   }
-  if (!text) return [{ type: 'text', value: '' }]
+  if (!labels.size || !text) return renderMessageBodyParts(text || '')
+
   const regex = new RegExp(`@(${[...labels].map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'gi')
   const parts = []
   let last = 0
   for (const match of text.matchAll(regex)) {
     const idx = match.index ?? 0
     if (idx > last) parts.push(...renderMessageBodyParts(text.slice(last, idx)))
-    const label = match[1] || ''
-    parts.push({
-      type: ['todos', 'all'].includes(label.toLowerCase()) ? 'mention-all' : 'mention-user',
-      value: match[0],
-    })
+    parts.push({ type: 'mention-user', value: match[0] })
     last = idx + match[0].length
   }
   if (last < text.length) parts.push(...renderMessageBodyParts(text.slice(last)))
@@ -105,7 +108,6 @@ export function highlightMentionsInText(text, mentionsJson) {
 }
 
 export function mentionPartClass(type) {
-  if (type === 'mention-all') return 'mention-inline-all'
   if (type === 'mention-user') return 'mention-inline-user'
   if (type === 'link') return 'mention-inline-link'
   return ''

@@ -1,19 +1,17 @@
 /**
- * Testes unitários para menções WhatsApp (LID vs telefone real, @todos).
+ * Testes unitários para menções WhatsApp (LID vs telefone real, limite de 2).
  * Uso: node scripts/test-message-mentions.js
  */
 const assert = require("assert")
 const {
+  MAX_MENTIONS,
   mergeMentionsFromBody,
   formatWhatsAppMentionBody,
-  formatWhatsAppMentionAllBody,
-  appendMassMentionPhonesToBody,
   buildEvolutionSendOptions,
   resolveMentionPhoneDigits,
   isParticipantMentionable,
   normalizeMentionsInput,
   resolveMentionsForGroup,
-  extractMentionTargetsFromEvolutionPayload,
 } = require("../src/lib/messageMentions")
 
 function test(name, fn) {
@@ -42,7 +40,14 @@ const brParticipant = {
   raw: { id: "5511999887766@s.whatsapp.net" },
 }
 
-const participants = [lidParticipant, brParticipant]
+const brParticipant2 = {
+  participantJid: "5511888776655@s.whatsapp.net",
+  name: "João Santos",
+  phone: "+55 (11) 88877-6655",
+  raw: { id: "5511888776655@s.whatsapp.net" },
+}
+
+const participants = [lidParticipant, brParticipant, brParticipant2]
 const participantByJid = new Map(participants.map((p) => [p.participantJid, p]))
 
 let passed = 0
@@ -65,115 +70,83 @@ run("JID BR válido gera telefone", () => {
   assert.strictEqual(isParticipantMentionable(brParticipant), true)
 })
 
-run("@all no body move token para linha inicial", () => {
-  assert.strictEqual(formatWhatsAppMentionAllBody("teste @all menção", true), "@all\n\nteste menção")
-})
-
-run("appendMassMentionPhonesToBody adiciona @telefones", () => {
-  const out = appendMassMentionPhonesToBody("Olá pessoal", ["5511999887766", "5511888776655"])
-  assert.ok(out.includes("@5511999887766"))
-  assert.ok(out.includes("@5511888776655"))
-})
-
-run("@all com participantes → mentioned[] no payload", () => {
-  const sendOpts = buildEvolutionSendOptions({
-    mentioned: ["5511999887766", "5511888776655"],
-    mentionsEveryOne: false,
+run("normalize ignora mentionAll e tipo all", () => {
+  const out = normalizeMentionsInput({
     mentionAll: true,
+    mentions: [
+      { type: "all", label: "all" },
+      { type: "user", label: "Maria", participantJid: brParticipant.participantJid },
+    ],
   })
-  assert.strictEqual(sendOpts.mentionsEveryOne, undefined)
-  assert.deepStrictEqual(sendOpts.mentioned, ["5511999887766", "5511888776655"])
+  assert.strictEqual(out.mentionAll, false)
+  assert.strictEqual(out.mentions.length, 1)
+  assert.strictEqual(out.mentions[0].label, "Maria")
+})
+
+run("normalize limita a MAX_MENTIONS", () => {
+  const out = normalizeMentionsInput({
+    mentions: [
+      { type: "user", label: "Maria", participantJid: brParticipant.participantJid },
+      { type: "user", label: "João", participantJid: brParticipant2.participantJid },
+      { type: "user", label: "Extra", participantJid: "5511777666555@s.whatsapp.net" },
+    ],
+  })
+  assert.strictEqual(out.mentions.length, MAX_MENTIONS)
 })
 
 run("menção individual substitui @nome por @telefone no body", () => {
   const mentionsJson = normalizeMentionsInput({
-    mentionAll: false,
     mentions: [{ type: "user", label: "Maria", participantJid: brParticipant.participantJid }],
   })
   const body = formatWhatsAppMentionBody("Oi @Maria tudo bem?", mentionsJson, participants, participantByJid)
   assert.strictEqual(body, "Oi @5511999887766 tudo bem?")
 })
 
+run("buildEvolutionSendOptions envia mentioned[] até o limite", () => {
+  const sendOpts = buildEvolutionSendOptions({
+    mentioned: ["5511999887766", "5511888776655", "5511777666555"],
+  })
+  assert.deepStrictEqual(sendOpts.mentioned, ["5511999887766", "5511888776655"])
+})
+
 async function runAsyncTests() {
   const mockPrisma = {
     whatsAppGroup: {
       findUnique: async () => ({
-        participants: [
-          {
-            participantJid: "20742526832803@lid",
-            name: "Oculto",
-            phone: "—",
-            status: "ativo",
-            raw: { id: "20742526832803@lid" },
-          },
-          {
-            participantJid: "5511999887766@s.whatsapp.net",
-            name: "Maria Silva",
-            phone: "+55 (11) 99988-7766",
-            status: "ativo",
-            raw: { id: "5511999887766@s.whatsapp.net" },
-          },
-        ],
+        participants: participants.map((p) => ({ ...p, status: "ativo" })),
       }),
     },
   }
 
-  const mockFetch = async () => ({
-    participants: [
-      { id: "5511999887766@s.whatsapp.net" },
-      { id: "5511888776655@s.whatsapp.net" },
-    ],
-  })
-
-  await testAsync("@all → mentioned[] + @telefones no texto (notifica todos)", async () => {
-    const r = await resolveMentionsForGroup(
-      mockPrisma,
-      "user1",
-      "120363@g.us",
-      { body: "teste @all menção", mentionsJson: { mentionAll: true, mentions: [{ type: "all", label: "all" }] } },
-      { instanceName: "inst", fetchGroupParticipants: mockFetch },
-    )
-    assert.strictEqual(r.mentionsEveryOne, false)
-    assert.ok(r.mentioned.length >= 2)
-    assert.strictEqual(r.mentionDebug.mentionStrategy, "mentioned+phonesInText")
-    assert.ok(r.whatsappBody.includes("@5511999887766"))
-    assert.ok(r.whatsappBody.includes("@5511888776655"))
-    assert.strictEqual(r.whatsappBody.startsWith("@all"), true)
-  })
-
-  await testAsync("@all + @Maria → mentioned[] completo + texto individual", async () => {
-    const r = await resolveMentionsForGroup(
-      mockPrisma,
-      "user1",
-      "120363@g.us",
-      {
-        body: "teste @Maria @all",
-        mentionsJson: {
-          mentionAll: true,
-          mentions: [
-            { type: "all", label: "all" },
-            { type: "user", label: "Maria", participantJid: "5511999887766@s.whatsapp.net" },
-          ],
-        },
-      },
-      { instanceName: "inst", fetchGroupParticipants: mockFetch },
-    )
-    assert.strictEqual(r.mentionsEveryOne, false)
-    assert.ok(r.mentioned.length >= 2)
-    assert.ok(r.whatsappBody.includes("@5511999887766"))
-    assert.ok(r.whatsappBody.includes("@all"))
-  })
-
-  await testAsync("menção Maria sem @all", async () => {
+  await testAsync("menção Maria individual", async () => {
     const r = await resolveMentionsForGroup(mockPrisma, "user1", "120363@g.us", {
       body: "Oi @Maria",
       mentionsJson: {
-        mentionAll: false,
-        mentions: [{ type: "user", label: "Maria", participantJid: "5511999887766@s.whatsapp.net" }],
+        mentions: [{ type: "user", label: "Maria", participantJid: brParticipant.participantJid }],
       },
     })
-    assert.strictEqual(r.mentionsEveryOne, false)
     assert.deepStrictEqual(r.mentioned, ["5511999887766"])
+    assert.strictEqual(r.mentionDebug.mentionStrategy, "individual")
+  })
+
+  await testAsync("duas menções no máximo", async () => {
+    const r = await resolveMentionsForGroup(mockPrisma, "user1", "120363@g.us", {
+      body: "Oi @Maria e @João",
+      mentionsJson: {
+        mentions: [
+          { type: "user", label: "Maria", participantJid: brParticipant.participantJid },
+          { type: "user", label: "João", participantJid: brParticipant2.participantJid },
+          { type: "user", label: "Extra", participantJid: "5511777666555@s.whatsapp.net" },
+        ],
+      },
+    })
+    assert.strictEqual(r.mentioned.length, MAX_MENTIONS)
+  })
+
+  await testAsync("mergeMentionsFromBody ignora @all no texto", async () => {
+    const merged = mergeMentionsFromBody("teste @all @todos", { mentionAll: true, mentions: [] })
+    assert.strictEqual(merged.mentionAll, false)
+    assert.strictEqual(merged.mentions.length, 0)
   })
 }
 
