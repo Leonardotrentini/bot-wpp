@@ -4,6 +4,7 @@ const {
   phoneDigitsFromJid,
   digitsOnly,
   isLikelyPhoneDigits,
+  mapEvolutionParticipant,
 } = require("./participantIdentity")
 
 const MENTION_ALL_WHATSAPP = "all"
@@ -14,10 +15,13 @@ function hasMentionAllInText(text) {
   return MENTION_ALL_DETECT_RE.test(String(text || ""))
 }
 
-/** WhatsApp nativo usa @all no texto (não @todos) junto com mentionsEveryOne. */
+/** @all no início (linha própria) + resto — melhor compatibilidade Evolution/Baileys. */
 function formatWhatsAppMentionAllBody(body, mentionAll) {
   if (!mentionAll) return String(body || "")
-  return String(body || "").replace(MENTION_ALL_IN_TEXT_RE, `@${MENTION_ALL_WHATSAPP}`)
+  const raw = String(body || "")
+  const rest = raw.replace(MENTION_ALL_IN_TEXT_RE, "").replace(/\s{2,}/g, " ").trim()
+  if (!rest) return `@${MENTION_ALL_WHATSAPP}`
+  return `@${MENTION_ALL_WHATSAPP}\n\n${rest}`
 }
 
 function emptyMentionsJson() {
@@ -62,6 +66,13 @@ function mergeMentionsFromBody(body, mentionsJson) {
   return normalized
 }
 
+function normalizeEvolutionParticipantsList(payload) {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.participants)) return payload.participants
+  if (Array.isArray(payload?.data?.participants)) return payload.data.participants
+  return []
+}
+
 /** Telefone válido para menção — ignora LID e IDs internos do webhook. */
 function resolveMentionPhoneDigits(participant) {
   if (!participant) return null
@@ -84,6 +95,26 @@ function resolveMentionPhoneDigits(participant) {
   if (isLid) return null
 
   return null
+}
+
+/** Valor para mentioned[] da Evolution: telefone (s.whatsapp.net) ou JID completo (@lid). */
+function participantMentionTarget(participant) {
+  if (!participant) return null
+  const phoneDigits = resolveMentionPhoneDigits(participant)
+  if (phoneDigits) return phoneDigits
+  const jid = String(participant.participantJid || participant.id || "").trim()
+  if (jid && (jidDomain(jid) === "lid" || jid.includes("@"))) return jid
+  return null
+}
+
+function extractMentionTargetsFromEvolutionPayload(payload) {
+  const targets = []
+  for (const raw of normalizeEvolutionParticipantsList(payload)) {
+    const mapped = mapEvolutionParticipant(raw)
+    const target = participantMentionTarget(mapped)
+    if (target && !targets.includes(target)) targets.push(target)
+  }
+  return targets
 }
 
 function isParticipantMentionable(participant) {
@@ -121,9 +152,10 @@ function formatWhatsAppMentionBody(body, mentionsJson, participants, participant
   return text
 }
 
-async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
+async function resolveMentionsForGroup(prisma, userId, groupJid, content, sendContext = {}) {
   const linkPreview = content?.linkPreview !== false
   const mentionsJson = mergeMentionsFromBody(content?.body, content?.mentionsJson)
+  const { instanceName, fetchGroupParticipants } = sendContext
 
   const group = await prisma.whatsAppGroup.findUnique({
     where: { userId_groupJid: { userId, groupJid } },
@@ -148,31 +180,45 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
   for (const m of mentionsJson.mentions) {
     if (m.type !== "user") continue
     const p = findParticipantForMention(m, participantByJid, participants)
-    const phoneDigits = resolveMentionPhoneDigits(p)
-    if (phoneDigits && !mentioned.includes(phoneDigits)) mentioned.push(phoneDigits)
+    const target = participantMentionTarget(p)
+    if (target && !mentioned.includes(target)) mentioned.push(target)
   }
 
   let mentionsEveryOne = false
+  let liveFetchCount = 0
 
-  // @all: enviar JIDs do sync local — mentionsEveryOne depende do cache da Evolution (muitas vezes vazio)
   if (mentionsJson.mentionAll === true) {
-    const participantJids = participants.map((p) => p.participantJid).filter(Boolean)
-    for (const jid of participantJids) {
-      if (!mentioned.includes(jid)) mentioned.push(jid)
+    let liveTargets = []
+    if (instanceName && typeof fetchGroupParticipants === "function") {
+      try {
+        const payload = await fetchGroupParticipants(instanceName, groupJid)
+        liveTargets = extractMentionTargetsFromEvolutionPayload(payload)
+        liveFetchCount = liveTargets.length
+      } catch (err) {
+        console.warn("[mentions] fetchGroupParticipants falhou:", groupJid, err?.message || err)
+      }
     }
-    if (!participantJids.length) {
+
+    const dbTargets = participants
+      .map((p) => participantMentionTarget(p))
+      .filter(Boolean)
+
+    const merged = [...new Set([...liveTargets, ...dbTargets])]
+    for (const target of merged) {
+      if (!mentioned.includes(target)) mentioned.push(target)
+    }
+
+    if (!merged.length) {
       mentionsEveryOne = true
     }
   }
 
-  let whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
-  if (mentionsJson.mentionAll) {
-    whatsappBody = formatWhatsAppMentionAllBody(whatsappBody, true)
-  }
+  const whatsappBody = formatWhatsAppMentionBody(content?.body, mentionsJson, participants, participantByJid)
 
   return {
     mentioned,
     mentionsEveryOne,
+    mentionAll: mentionsJson.mentionAll === true,
     linkPreview,
     whatsappBody,
     mentionDebug: {
@@ -180,6 +226,7 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
       mentionsEveryOne,
       mentionedCount: mentioned.length,
       participantCount: participants.length,
+      liveFetchCount,
       participantJidsUsed: mentionsJson.mentionAll && !mentionsEveryOne,
       skippedLid: participants.filter((p) => jidDomain(p.participantJid) === "lid").length,
     },
@@ -189,13 +236,12 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
 function buildEvolutionSendOptions(mentionOpts = {}) {
   const opts = {}
   if (mentionOpts.linkPreview === true) opts.linkPreview = true
-  // mentionsEveryOne só quando não temos JIDs locais; senão mentioned[] tem prioridade na Evolution
-  if (mentionOpts.mentionsEveryOne === true && !(mentionOpts.mentioned?.length > 0)) {
-    opts.mentionsEveryOne = true
-  }
   if (Array.isArray(mentionOpts.mentioned) && mentionOpts.mentioned.length) {
     opts.mentioned = mentionOpts.mentioned
+  } else if (mentionOpts.mentionsEveryOne === true) {
+    opts.mentionsEveryOne = true
   }
+  if (mentionOpts.mentionAll === true) opts.mentionAll = true
   return opts
 }
 
@@ -210,5 +256,7 @@ module.exports = {
   hasMentionAllInText,
   resolveMentionPhoneDigits,
   isParticipantMentionable,
+  participantMentionTarget,
+  extractMentionTargetsFromEvolutionPayload,
   MENTION_ALL_WHATSAPP,
 }

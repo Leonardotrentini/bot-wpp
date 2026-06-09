@@ -2098,16 +2098,20 @@ async function resolveGroupName(userId, groupJid) {
 }
 
 async function deliverToGroup(instanceName, groupJid, content, userId) {
-  const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
+  const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content, {
+    instanceName,
+    fetchGroupParticipants,
+  })
   const sendOpts = buildEvolutionSendOptions(mentionOpts)
   const text = mentionOpts.whatsappBody ?? content.body
-  if (mentionOpts.mentionsEveryOne || (sendOpts.mentioned && sendOpts.mentioned.length)) {
+  if (mentionOpts.mentionAll || mentionOpts.mentionsEveryOne || (sendOpts.mentioned && sendOpts.mentioned.length)) {
     console.log(
       "[mentions]",
       JSON.stringify({
         groupJid,
         bodyPreview: String(text || "").slice(0, 80),
         mentionsEveryOne: sendOpts.mentionsEveryOne === true,
+        mentionAll: sendOpts.mentionAll === true,
         mentioned: sendOpts.mentioned || [],
         debug: mentionOpts.mentionDebug,
       }),

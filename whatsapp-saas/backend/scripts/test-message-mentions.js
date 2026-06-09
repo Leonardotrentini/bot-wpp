@@ -12,6 +12,7 @@ const {
   isParticipantMentionable,
   normalizeMentionsInput,
   resolveMentionsForGroup,
+  extractMentionTargetsFromEvolutionPayload,
 } = require("../src/lib/messageMentions")
 
 function test(name, fn) {
@@ -68,25 +69,35 @@ run("@todos / @all no texto ativa mentionAll", () => {
   assert.strictEqual(mergeMentionsFromBody("Olá @all!", null).mentionAll, true)
 })
 
-run("@todos legado vira @all no body enviado ao WhatsApp", () => {
-  assert.strictEqual(formatWhatsAppMentionAllBody("Aviso @todos", true), "Aviso @all")
-  assert.strictEqual(formatWhatsAppMentionAllBody("Aviso @all", true), "Aviso @all")
+run("@all no body move token para linha inicial", () => {
+  assert.strictEqual(formatWhatsAppMentionAllBody("teste @all menção", true), "@all\n\nteste menção")
+  assert.strictEqual(formatWhatsAppMentionAllBody("Aviso @todos", true), "@all\n\nAviso")
+  assert.strictEqual(formatWhatsAppMentionAllBody("@all", true), "@all")
 })
 
-run("@all → mentioned com JIDs locais (sem mentionsEveryOne)", () => {
-  const mentionsJson = mergeMentionsFromBody("Aviso @all", { mentionAll: true, mentions: [{ type: "all", label: "all" }] })
-  const participantJids = ["20742526832803@lid", "5511999887766@s.whatsapp.net"]
-  const mentioned = [...participantJids]
-  const mentionsEveryOne = false
-  const sendOpts = buildEvolutionSendOptions({ mentioned, mentionsEveryOne, linkPreview: true })
-  assert.strictEqual(sendOpts.mentionsEveryOne, undefined)
+run("extractMentionTargetsFromEvolutionPayload", () => {
+  const targets = extractMentionTargetsFromEvolutionPayload({
+    participants: [{ id: "5511999887766@s.whatsapp.net" }, { id: "20742526832803@lid" }],
+  })
+  assert.ok(targets.includes("5511999887766"))
+  assert.ok(targets.includes("20742526832803@lid"))
+})
+
+run("@all → mentioned com JIDs + mentionAll no payload", () => {
+  const participantJids = ["20742526832803@lid", "5511999887766"]
+  const sendOpts = buildEvolutionSendOptions({
+    mentioned: participantJids,
+    mentionAll: true,
+    linkPreview: true,
+  })
+  assert.strictEqual(sendOpts.mentionAll, true)
   assert.deepStrictEqual(sendOpts.mentioned, participantJids)
 })
 
 run("@all sem participantes sync → fallback mentionsEveryOne", () => {
-  const sendOpts = buildEvolutionSendOptions({ mentioned: [], mentionsEveryOne: true, linkPreview: true })
+  const sendOpts = buildEvolutionSendOptions({ mentioned: [], mentionsEveryOne: true, mentionAll: true })
   assert.strictEqual(sendOpts.mentionsEveryOne, true)
-  assert.strictEqual(sendOpts.mentioned, undefined)
+  assert.strictEqual(sendOpts.mentionAll, true)
 })
 
 run("menção individual substitui @nome por @telefone no body", () => {
@@ -98,15 +109,6 @@ run("menção individual substitui @nome por @telefone no body", () => {
   assert.strictEqual(body, "Oi @5511999887766 tudo bem?")
 })
 
-run("menção LID não substitui @nome por número inválido", () => {
-  const mentionsJson = normalizeMentionsInput({
-    mentionAll: false,
-    mentions: [{ type: "user", label: "Contato", participantJid: lidParticipant.participantJid }],
-  })
-  const body = formatWhatsAppMentionBody("Oi @Contato", mentionsJson, participants, participantByJid)
-  assert.strictEqual(body, "Oi @Contato")
-})
-
 run("buildEvolutionSendOptions inclui mentioned só com telefones", () => {
   const opts = buildEvolutionSendOptions({
     mentioned: ["5511999887766"],
@@ -115,7 +117,6 @@ run("buildEvolutionSendOptions inclui mentioned só com telefones", () => {
   })
   assert.deepStrictEqual(opts.mentioned, ["5511999887766"])
   assert.strictEqual(opts.linkPreview, true)
-  assert.strictEqual(opts.mentionsEveryOne, undefined)
 })
 
 async function runAsyncTests() {
@@ -142,35 +143,42 @@ async function runAsyncTests() {
     },
   }
 
+  const mockFetch = async () => ({
+    participants: [{ id: "5511888776655@s.whatsapp.net" }],
+  })
+
   await testAsync("@all via resolveMentionsForGroup → mentioned com JIDs do grupo", async () => {
     const r = await resolveMentionsForGroup(mockPrisma, "user1", "120363@g.us", {
       body: "Aviso @all",
       mentionsJson: { mentionAll: true, mentions: [{ type: "all", label: "all" }] },
     })
     assert.strictEqual(r.mentionsEveryOne, false)
+    assert.strictEqual(r.mentionAll, true)
     assert.strictEqual(r.mentioned.length, 2)
-    assert.ok(r.mentioned.includes("5511999887766@s.whatsapp.net"))
+    assert.ok(r.mentioned.includes("5511999887766"))
     assert.ok(r.mentioned.includes("20742526832803@lid"))
-    assert.strictEqual(r.whatsappBody, "Aviso @all")
+    assert.strictEqual(r.whatsappBody, "@all\n\nAviso")
   })
 
-  await testAsync("@all só no texto (sem mentionsJson) detecta e monta JIDs", async () => {
+  await testAsync("@all só no texto detecta e formata body", async () => {
     const r = await resolveMentionsForGroup(mockPrisma, "user1", "120363@g.us", {
       body: "teste @all menção",
     })
     assert.strictEqual(r.mentionsEveryOne, false)
     assert.strictEqual(r.mentioned.length, 2)
-    assert.strictEqual(r.whatsappBody, "teste @all menção")
+    assert.strictEqual(r.whatsappBody, "@all\n\nteste menção")
   })
 
-  await testAsync("@todos legado vira @all no resolveMentionsForGroup", async () => {
-    const r = await resolveMentionsForGroup(mockPrisma, "user1", "120363@g.us", {
-      body: "Aviso @todos",
-      mentionsJson: { mentionAll: true, mentions: [{ type: "all", label: "todos" }] },
-    })
-    assert.strictEqual(r.mentionsEveryOne, false)
-    assert.strictEqual(r.mentioned.length, 2)
-    assert.strictEqual(r.whatsappBody, "Aviso @all")
+  await testAsync("fetch Evolution ao vivo complementa mentioned[]", async () => {
+    const r = await resolveMentionsForGroup(
+      mockPrisma,
+      "user1",
+      "120363@g.us",
+      { body: "@all", mentionsJson: { mentionAll: true, mentions: [{ type: "all", label: "all" }] } },
+      { instanceName: "inst", fetchGroupParticipants: mockFetch },
+    )
+    assert.ok(r.mentioned.includes("5511888776655"))
+    assert.strictEqual(r.mentionDebug.liveFetchCount, 1)
   })
 
   await testAsync("menção Maria via resolveMentionsForGroup", async () => {

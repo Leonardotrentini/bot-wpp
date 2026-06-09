@@ -331,7 +331,7 @@ async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize =
 }
 
 async function sendText(instanceName, number, text, options = {}) {
-  const { linkPreview, mentionsEveryOne, mentioned, ...rest } = options
+  const { linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest } = options
   const body = {
     number,
     text,
@@ -340,6 +340,8 @@ async function sendText(instanceName, number, text, options = {}) {
   if (mentionsEveryOne === true) body.mentionsEveryOne = true
   if (Array.isArray(mentioned) && mentioned.length) body.mentioned = mentioned
   if (linkPreview === true) body.linkPreview = true
+  // Campo experimental — Evolution/Baileys recentes podem repassar mentionAll (nonJidMentions)
+  if (mentionAll === true) body.mentionAll = true
   return requestEvolution(`/message/sendText/${encodeURIComponent(instanceName)}`, {
     method: "POST",
     body,
@@ -347,7 +349,7 @@ async function sendText(instanceName, number, text, options = {}) {
 }
 
 /** mediatype: "image" | "video". media: base64 (sem prefixo data:) ou URL. */
-async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, linkPreview, mentionsEveryOne, mentioned, ...rest }) {
+async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest }) {
   const body = { number, mediatype, media, ...rest }
   if (mimetype) body.mimetype = mimetype
   if (caption) body.caption = caption
@@ -355,6 +357,7 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
   if (mentionsEveryOne === true) body.mentionsEveryOne = true
   if (Array.isArray(mentioned) && mentioned.length) body.mentioned = mentioned
   if (linkPreview === true) body.linkPreview = true
+  if (mentionAll === true) body.mentionAll = true
   const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
   const opts = { method: "POST", body, timeoutMs }
   return firstSuccess([
