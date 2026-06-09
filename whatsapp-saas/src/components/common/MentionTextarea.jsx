@@ -1,12 +1,18 @@
 import { useCallback, useRef } from 'react'
-import { highlightMentionsInText, mentionPartClass } from '../../lib/messageMentions.js'
+import { highlightMentionsInText } from '../../lib/messageMentions.js'
 
-function HighlightLayer({ text, mentionsJson }) {
+function editorPartClass(type) {
+  if (type === 'mention-user') return 'mention-editor-user'
+  if (type === 'link') return 'mention-editor-link'
+  return ''
+}
+
+function EditorHighlightLayer({ text, mentionsJson }) {
   const parts = highlightMentionsInText(text || '', mentionsJson)
   return (
     <>
       {parts.map((part, i) => {
-        const cls = mentionPartClass(part.type)
+        const cls = editorPartClass(part.type)
         if (cls) {
           return (
             <span key={i} className={cls}>
@@ -40,11 +46,14 @@ export function MentionTextarea({
   const syncScroll = useCallback(() => {
     const ta = textareaRef.current
     const bd = backdropRef.current
-    if (ta && bd) bd.scrollTop = ta.scrollTop
+    if (ta && bd) {
+      bd.scrollTop = ta.scrollTop
+      bd.scrollLeft = ta.scrollLeft
+    }
   }, [textareaRef])
 
   const fieldClass =
-    'w-full resize-y rounded-xl border bg-transparent px-4 py-2.5 text-sm leading-relaxed outline-none transition focus:ring-2'
+    'mention-editor-field w-full resize-y rounded-xl border bg-transparent px-4 py-2.5 outline-none transition focus:ring-2'
 
   return (
     <label className="block w-full">
@@ -64,7 +73,7 @@ export function MentionTextarea({
             style={{ minHeight: `${rows * 1.625}rem` }}
           >
             {value ? (
-              <HighlightLayer text={value} mentionsJson={mentionsJson} />
+              <EditorHighlightLayer text={value} mentionsJson={mentionsJson} />
             ) : (
               <span className="text-stone-500">{placeholder}</span>
             )}
@@ -73,14 +82,24 @@ export function MentionTextarea({
             ref={textareaRef}
             rows={rows}
             value={value}
-            onChange={onChange}
+            onChange={(e) => {
+              onChange?.(e)
+              requestAnimationFrame(syncScroll)
+            }}
             onKeyDown={onKeyDown}
-            onClick={onClick}
+            onClick={(e) => {
+              onClick?.(e)
+              syncScroll()
+            }}
+            onKeyUp={syncScroll}
+            onSelect={syncScroll}
             onScroll={syncScroll}
             placeholder=""
             spellCheck={false}
-            className={`${fieldClass} relative text-transparent caret-stone-100 placeholder:text-transparent`}
-            style={{ WebkitTextFillColor: 'transparent' }}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            className={`${fieldClass} relative text-transparent caret-stone-100 selection:bg-sky-500/30 selection:text-transparent`}
           />
         </div>
         {children}

@@ -89,6 +89,29 @@
     @apply text-sky-400 underline underline-offset-2;
   }
 
+  /* Editor: só cor — padding/peso extra desalinha o cursor do textarea espelhado */
+  .mention-editor-field {
+    @apply text-sm leading-relaxed;
+    font-variant-ligatures: none;
+    font-feature-settings: normal;
+    tab-size: 8;
+  }
+  .mention-editor-user {
+    @apply text-sky-300;
+    font-weight: inherit;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border-radius: 0;
+  }
+  .mention-editor-link {
+    @apply text-sky-400;
+    font-weight: inherit;
+    text-decoration: none;
+    padding: 0;
+    margin: 0;
+  }
+
   .mention-chip-all {
     @apply inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-200;
   }
