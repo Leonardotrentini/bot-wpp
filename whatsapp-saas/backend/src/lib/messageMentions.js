@@ -288,7 +288,10 @@ function buildEvolutionSendOptions(mentionOpts = {}) {
     opts.mentioned = mentionOpts.mentioned
   }
 
-  if (mentionOpts.mentionAll === true) opts.mentionAll = true
+  // mentionAll (nonJidMentions) só no fallback mentionsEveryOne — com mentioned[] a Evolution pode ignorar a lista
+  if (mentionOpts.mentionAll === true && mentionOpts.mentionsEveryOne === true && !opts.mentioned?.length) {
+    opts.mentionAll = true
+  }
   return opts
 }
 
