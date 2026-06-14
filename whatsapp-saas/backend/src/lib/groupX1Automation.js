@@ -10,9 +10,9 @@ const DEFAULT_KIND_SETTINGS = {
 }
 
 const DEFAULT_X1_CONFIG = {
-  enabled: true,
-  sendX1OnJoin: true,
-  sendX1OnLeave: true,
+  enabled: false,
+  sendX1OnJoin: false,
+  sendX1OnLeave: false,
   join: {
     ...DEFAULT_KIND_SETTINGS,
     template: "Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.",
@@ -87,9 +87,9 @@ function normalizeX1Config(raw) {
   const leave = normalizeKindBlock(src.leave, { kind: "leave", legacyFlat: src })
 
   return {
-    enabled: src.enabled !== false,
-    sendX1OnJoin: src.sendX1OnJoin !== false,
-    sendX1OnLeave: src.sendX1OnLeave !== false,
+    enabled: src.enabled === true,
+    sendX1OnJoin: src.sendX1OnJoin === true,
+    sendX1OnLeave: src.sendX1OnLeave === true,
     join,
     leave,
     // compat legado (leitores antigos)
@@ -274,6 +274,33 @@ async function countRecentDeliveries(prisma, { userId, groupId, participantJid, 
   return prisma.groupX1Delivery.count({ where })
 }
 
+function isGroupX1Eligible(groupRow) {
+  return Boolean(groupRow?.monitoringEnabled) && groupRow?.status === "ativo"
+}
+
+async function cancelPendingX1DeliveriesForGroups(prisma, userId, groupJids) {
+  if (!groupJids?.length) return 0
+  const groups = await prisma.whatsAppGroup.findMany({
+    where: { userId, groupJid: { in: groupJids } },
+    select: { id: true },
+  })
+  const groupIds = groups.map((g) => g.id)
+  if (!groupIds.length) return 0
+  const result = await prisma.groupX1Delivery.updateMany({
+    where: {
+      userId,
+      groupId: { in: groupIds },
+      status: { in: ["pending", "sending"] },
+    },
+    data: {
+      status: "skipped",
+      error: "Monitoramento do grupo inativo.",
+    },
+  })
+  if (result.count) console.log(`[x1] ${result.count} envio(s) pendente(s) cancelado(s) — grupo inativo`)
+  return result.count
+}
+
 async function enqueueX1ForParticipant(deps, ctx) {
   const { prisma } = deps
   const {
@@ -289,8 +316,8 @@ async function enqueueX1ForParticipant(deps, ctx) {
     force = false,
   } = ctx
 
-  if (!groupRow?.monitoringEnabled) {
-    console.log("[x1] ignorado — grupo sem monitoramento:", groupRow?.groupJid)
+  if (!isGroupX1Eligible(groupRow)) {
+    console.log("[x1] ignorado — grupo sem monitoramento ativo:", groupRow?.groupJid, groupRow?.status)
     return { ok: false, reason: "MONITORING_DISABLED" }
   }
 
@@ -431,6 +458,7 @@ async function processOneDelivery(deps, deliveryId) {
         id: true,
         userId: true,
         groupJid: true,
+        status: true,
         monitoringEnabled: true,
         groupX1Automation: true,
         instanceName: true,
@@ -440,6 +468,14 @@ async function processOneDelivery(deps, deliveryId) {
       await prisma.groupX1Delivery.update({
         where: { id: deliveryId },
         data: { status: "failed", error: "Grupo não encontrado." },
+      })
+      return null
+    }
+
+    if (!isGroupX1Eligible(groupRow)) {
+      await prisma.groupX1Delivery.update({
+        where: { id: deliveryId },
+        data: { status: "skipped", error: "Monitoramento do grupo inativo." },
       })
       return null
     }
@@ -536,6 +572,11 @@ async function handleGroupParticipantsX1Webhook(deps, instanceName, body) {
   })
   if (!groupRow) {
     console.log("[x1] grupo não cadastrado:", parsed.groupJid)
+    return 0
+  }
+
+  if (!isGroupX1Eligible(groupRow)) {
+    console.log("[x1] ignorado — grupo inativo:", parsed.groupJid, groupRow.status)
     return 0
   }
 
@@ -666,6 +707,8 @@ module.exports = {
   mapParticipantAction,
   isInQuietHours,
   computeScheduledAt,
+  isGroupX1Eligible,
+  cancelPendingX1DeliveriesForGroups,
   enqueueX1ForParticipant,
   processPendingX1Deliveries,
   processOneDelivery,

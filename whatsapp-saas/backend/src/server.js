@@ -70,6 +70,8 @@ const {
   resolveParticipantMeta,
   normalizeX1Config,
   migrateStoredX1Templates,
+  cancelPendingX1DeliveriesForGroups,
+  isGroupX1Eligible,
 } = require("./lib/groupX1Automation")
 const adminRoutes = require("./routes/admin")
 const {
@@ -630,7 +632,7 @@ async function syncParticipantsForGroupRow(conn, groupRow) {
   })
 
   const freshGroupRow = await prisma.whatsAppGroup.findUnique({ where: { id: groupRow.id } })
-  if (freshGroupRow && (joinedForX1.length || leftForX1.length)) {
+  if (freshGroupRow && isGroupX1Eligible(freshGroupRow) && (joinedForX1.length || leftForX1.length)) {
     void notifyX1FromParticipantSync(getX1Deps(), {
       conn,
       groupRow: freshGroupRow,
@@ -1343,6 +1345,7 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
         where: { userId: req.user.sub, groupJid: { in: groupIds } },
         data,
       })
+      await cancelPendingX1DeliveriesForGroups(prisma, req.user.sub, groupIds)
     }
 
     const cachedGroups = await readCachedGroups(req.user.sub)
@@ -1514,7 +1517,11 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       !groupRow.participantsSyncedAt ||
       Date.now() - groupRow.participantsSyncedAt.getTime() > PARTICIPANTS_SYNC_MIN_INTERVAL_MS
 
-    if (needsParticipantSync && (!conn.groupSyncRetryAfter || conn.groupSyncRetryAfter <= new Date())) {
+    if (
+      needsParticipantSync &&
+      isGroupX1Eligible(groupRow) &&
+      (!conn.groupSyncRetryAfter || conn.groupSyncRetryAfter <= new Date())
+    ) {
       void syncParticipantsForGroupRow(conn, groupRow).catch((err) => {
         if (isRateLimitError(err)) {
           return updateConnectionSync(conn.userId, {

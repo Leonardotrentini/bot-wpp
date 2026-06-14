@@ -37,6 +37,13 @@ test("normalizeX1Config aceita delay zero", () => {
   assert.strictEqual(cfg.join.maxDelaySec, 0)
 })
 
+test("normalizeX1Config desligado por padrão", () => {
+  const cfg = normalizeX1Config({})
+  assert.strictEqual(cfg.enabled, false)
+  assert.strictEqual(cfg.sendX1OnJoin, false)
+  assert.strictEqual(cfg.sendX1OnLeave, false)
+})
+
 test("normalizeX1Config aplica defaults", () => {
   const cfg = normalizeX1Config({ enabled: true, minDelaySec: 5, maxDelaySec: 2 })
   assert.strictEqual(cfg.join.minDelaySec, 5)

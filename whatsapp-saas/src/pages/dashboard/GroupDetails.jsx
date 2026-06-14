@@ -108,9 +108,9 @@ const defaultX1KindSettings = (template) => ({
 })
 
 const defaultX1Automation = () => ({
-  enabled: true,
-  sendX1OnJoin: true,
-  sendX1OnLeave: true,
+  enabled: false,
+  sendX1OnJoin: false,
+  sendX1OnLeave: false,
   join: defaultX1KindSettings(
     'Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.',
   ),
@@ -169,9 +169,9 @@ function migrateX1Automation(raw) {
   })
 
   return {
-    enabled: raw.enabled !== false,
-    sendX1OnJoin: raw.sendX1OnJoin !== false,
-    sendX1OnLeave: raw.sendX1OnLeave !== false,
+    enabled: raw.enabled === true,
+    sendX1OnJoin: raw.sendX1OnJoin === true,
+    sendX1OnLeave: raw.sendX1OnLeave === true,
     join,
     leave,
   }
@@ -785,8 +785,10 @@ export function GroupDetails() {
   }, [id])
 
   const saveX1Automation = () => {
+    const monitoringActive = payload?.group?.status === 'ativo' && payload?.group?.monitoringEnabled
     const safe = migrateX1Automation({
       ...x1Automation,
+      ...(monitoringActive ? {} : { enabled: false, sendX1OnJoin: false, sendX1OnLeave: false }),
       join: sanitizeX1KindBlock(x1Automation.join),
       leave: sanitizeX1KindBlock(x1Automation.leave),
     })
@@ -892,6 +894,8 @@ export function GroupDetails() {
   }
 
   const { group, activity } = payload
+  const monitoringActive = group.status === 'ativo' && group.monitoringEnabled
+  const x1ControlsDisabled = !monitoringActive
   const inactiveCount = members.filter((m) => m.status === 'inativo').length
   const healthScore = Math.max(0, Math.min(100, Math.round(((members.length - inactiveCount) / Math.max(1, members.length)) * 100)))
   const alertList = [
@@ -1539,30 +1543,33 @@ export function GroupDetails() {
 
       {tab === 'config' && (
         <div className="max-w-4xl space-y-6">
-          {!payload?.group?.monitoringEnabled && (
+          {!monitoringActive && (
             <Card className="border-amber-700/60 bg-amber-950/20">
               <div className="flex gap-3">
                 <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-medium text-amber-200">Monitoramento inativo</p>
                   <p className="text-xs text-amber-200/80 mt-1">
-                    Ative o monitoramento deste grupo na lista de grupos para a automação X1 disparar em entradas e saídas reais.
+                    A automação de entrada e saída está desligada. Marque o grupo como ativo na lista de grupos para
+                    habilitar os disparos X1.
                   </p>
                 </div>
               </div>
             </Card>
           )}
 
-          <Card className="relative z-10 space-y-5">
+          <Card className={`relative z-10 space-y-5 ${x1ControlsDisabled ? 'opacity-90' : ''}`}>
             <div className="flex items-center justify-between gap-4">
               <div>
                 <h3 className="text-stone-50 font-semibold font-heading">Automação de entrada e saída (X1)</h3>
                 <p className="text-xs text-stone-500">
                   Disparo automático no X1 quando entra/sai do grupo, com limite e janela de envio.
+                  {!monitoringActive && ' Desligada enquanto o grupo não estiver ativo.'}
                 </p>
               </div>
               <Toggle
-                checked={x1Automation.enabled}
+                checked={monitoringActive && x1Automation.enabled}
+                disabled={x1ControlsDisabled}
                 onChange={(v) => setX1Automation((s) => ({ ...s, enabled: v }))}
                 label="Ativar"
               />
@@ -1570,12 +1577,14 @@ export function GroupDetails() {
 
             <div className="grid gap-4 md:grid-cols-2">
               <Toggle
-                checked={x1Automation.sendX1OnJoin}
+                checked={monitoringActive && x1Automation.sendX1OnJoin}
+                disabled={x1ControlsDisabled}
                 onChange={(v) => setX1Automation((s) => ({ ...s, sendX1OnJoin: v }))}
                 label="Enviar X1 na entrada"
               />
               <Toggle
-                checked={x1Automation.sendX1OnLeave}
+                checked={monitoringActive && x1Automation.sendX1OnLeave}
+                disabled={x1ControlsDisabled}
                 onChange={(v) => setX1Automation((s) => ({ ...s, sendX1OnLeave: v }))}
                 label="Enviar X1 na saída"
               />
