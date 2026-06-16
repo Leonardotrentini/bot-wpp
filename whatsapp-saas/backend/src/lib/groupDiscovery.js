@@ -1,6 +1,6 @@
 /**
- * Filtra entradas fantasma que a Evolution/WhatsApp devolve (JID sem nome, 1 membro).
- * Grupos reais têm subject ou mais de um participante.
+ * Filtra entradas fantasma que a Evolution/WhatsApp devolve (JID no lugar do nome).
+ * Grupo plausível precisa de subject/nome legível — contagem de membros sozinha não basta.
  */
 
 function parseRaw(raw) {
@@ -15,10 +15,14 @@ function parseRaw(raw) {
 
 function extractSubject(mapped) {
   const raw = parseRaw(mapped?.raw)
+  const groupJid = mapped?.groupJid
   const fromRaw = raw?.subject || raw?.name
-  if (fromRaw && String(fromRaw).trim()) return String(fromRaw).trim()
+  if (fromRaw && String(fromRaw).trim() && !isJidLikeName(fromRaw, groupJid)) {
+    return String(fromRaw).trim()
+  }
   const name = String(mapped?.name || "").trim()
-  return name || ""
+  if (name && !isJidLikeName(name, groupJid)) return name
+  return ""
 }
 
 function isJidLikeName(name, groupJid) {
@@ -27,6 +31,10 @@ function isJidLikeName(name, groupJid) {
   if (!n) return true
   if (jid && n === jid) return true
   if (n.endsWith("@g.us")) return true
+  const jidUser = jid.split("@")[0]
+  if (jidUser && n === jidUser) return true
+  // ID numérico longo (ex.: 120363317378211775) sem subject — cache fantasma comum
+  if (/^\d{12,}$/.test(n)) return true
   return false
 }
 
@@ -36,12 +44,7 @@ function isPlausibleWhatsAppGroup(mapped) {
   if (!groupJid || !String(groupJid).endsWith("@g.us")) return false
 
   const subject = extractSubject(mapped)
-  const memberCount = Number(mapped?.memberCount) || 0
-  const hasRealName = !isJidLikeName(subject, groupJid)
-
-  if (hasRealName) return true
-  // Sem nome: só aceita se claramente tem vários membros
-  return memberCount >= 2
+  return Boolean(subject) && !isJidLikeName(subject, groupJid)
 }
 
 /** Marca como inativo grupos fantasma que ainda não estão sendo monitorados. */

@@ -14,6 +14,7 @@
     "test:x1:flow": "node scripts/test-x1-flow-mock.js",
     "test:x1:integration": "node scripts/test-x1-integration.js",
     "test:mentions": "node scripts/test-message-mentions.js",
+    "test:groups": "node scripts/test-group-discovery.js",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "prisma": {
