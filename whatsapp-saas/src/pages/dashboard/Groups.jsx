@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { RefreshCw, Settings2, Check } from 'lucide-react'
+import { RefreshCw, Settings2, Check, Power, PowerOff, X } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -85,8 +85,8 @@ export function Groups() {
     }
   }, [applyData, toast])
 
-  const changeStatus = useCallback(async (status) => {
-    const groupIds = Array.from(selected)
+  const changeStatus = useCallback(async (status, groupIdsArg) => {
+    const groupIds = groupIdsArg?.length ? groupIdsArg : Array.from(selected)
     if (!groupIds.length) {
       toast.info('Selecione ao menos um grupo.')
       return
@@ -110,7 +110,14 @@ export function Groups() {
     try {
       const { data } = await setGroupsStatus(groupIds, status)
       applyData(data)
-      setSelected(new Set())
+      setSelected((prev) => {
+        if (groupIdsArg?.length) {
+          const next = new Set(prev)
+          groupIds.forEach((id) => next.delete(id))
+          return next
+        }
+        return new Set()
+      })
       if (data.message) {
         if (data.meta?.skipped) {
           toast.info(data.message)
@@ -185,9 +192,10 @@ export function Groups() {
 
   const selectAll = useCallback(() => setSelected(new Set(filtered.map((g) => g.id))), [filtered])
   const clearAll = useCallback(() => setSelected(new Set()), [])
+  const hasSelection = selected.size > 0
 
   return (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${hasSelection ? 'pb-28' : ''}`}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-stone-50">Seus grupos</h2>
@@ -265,17 +273,14 @@ export function Groups() {
       {groups.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 text-xs text-stone-400">
           <span>{selected.size} selecionado(s)</span>
-          <button type="button" className="text-accent-400 hover:underline" onClick={selectAll}>Selecionar todos</button>
-          <button type="button" className="text-stone-400 hover:underline" onClick={clearAll}>Limpar</button>
-          {selected.size > 0 && (
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="secondary" disabled={actionLoading} onClick={() => changeStatus('ativo')}>
-                Marcar ativo
-              </Button>
-              <Button size="sm" variant="ghost" className="border border-brand-700" disabled={actionLoading} onClick={() => changeStatus('inativo')}>
-                Marcar inativo
-              </Button>
-            </div>
+          <button type="button" className="text-accent-400 hover:underline" onClick={selectAll}>
+            Selecionar todos {filter !== 'ativos' ? 'visíveis' : ''}
+          </button>
+          <button type="button" className="text-stone-400 hover:underline" onClick={clearAll}>
+            Limpar
+          </button>
+          {hasSelection && (
+            <span className="hidden text-stone-500 sm:inline">· ações na barra inferior</span>
           )}
         </div>
       )}
@@ -317,6 +322,9 @@ export function Groups() {
         <div className="grid gap-4 md:grid-cols-2">
           {filtered.map((g) => {
             const isSelected = selected.has(g.id)
+            const monitored = isMonitoredGroup(g)
+            const canActivate = !monitored
+            const canDeactivate = monitored
             return (
               <Card key={g.id} className={isSelected ? 'ring-1 ring-accent-500/40' : ''}>
                 <div className="flex gap-4">
@@ -345,6 +353,30 @@ export function Groups() {
                     )}
                     <p className="text-sm text-stone-400 mt-2 line-clamp-2">&ldquo;{g.lastMessage}&rdquo;</p>
                     <div className="mt-4 flex flex-wrap gap-2">
+                      {canActivate && (
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          className="gap-1.5"
+                          disabled={actionLoading || atLimit}
+                          onClick={() => changeStatus('ativo', [g.id])}
+                        >
+                          <Power className="h-3.5 w-3.5" />
+                          Ativar
+                        </Button>
+                      )}
+                      {canDeactivate && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="gap-1.5 border border-brand-700 text-stone-300"
+                          disabled={actionLoading}
+                          onClick={() => changeStatus('inativo', [g.id])}
+                        >
+                          <PowerOff className="h-3.5 w-3.5" />
+                          Desativar
+                        </Button>
+                      )}
                       <Link to={`/dashboard/groups/${encodeURIComponent(g.id)}`}>
                         <Button size="sm" variant="secondary">Ver detalhes</Button>
                       </Link>
@@ -359,6 +391,60 @@ export function Groups() {
               </Card>
             )
           })}
+        </div>
+      )}
+
+      {hasSelection && (
+        <div
+          className="fixed inset-x-0 bottom-0 z-50 border-t border-brand-700/80 bg-brand-950/95 px-4 py-3 shadow-[0_-8px_32px_rgba(0,0,0,0.45)] backdrop-blur-md"
+          role="region"
+          aria-label="Ações em massa para grupos selecionados"
+        >
+          <div className="mx-auto flex max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="font-medium text-stone-100">
+                {selected.size} grupo{selected.size !== 1 ? 's' : ''} selecionado{selected.size !== 1 ? 's' : ''}
+              </span>
+              <button type="button" className="text-xs text-accent-400 hover:underline" onClick={selectAll}>
+                Todos visíveis
+              </button>
+              <button type="button" className="text-xs text-stone-400 hover:underline" onClick={clearAll}>
+                Limpar
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="primary"
+                className="gap-1.5"
+                disabled={actionLoading || atLimit}
+                onClick={() => changeStatus('ativo')}
+              >
+                <Power className="h-4 w-4" />
+                Marcar ativo
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="gap-1.5 border border-brand-700"
+                disabled={actionLoading}
+                onClick={() => changeStatus('inativo')}
+              >
+                <PowerOff className="h-4 w-4" />
+                Marcar inativo
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="gap-1 px-2"
+                disabled={actionLoading}
+                onClick={clearAll}
+                aria-label="Fechar seleção"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>
