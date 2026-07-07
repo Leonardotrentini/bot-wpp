@@ -10,6 +10,8 @@ import { Connect } from './pages/dashboard/Connect.jsx'
 import { Groups } from './pages/dashboard/Groups.jsx'
 import { GroupDetails } from './pages/dashboard/GroupDetails.jsx'
 import { Messages } from './pages/dashboard/Messages.jsx'
+import { Chat } from './pages/dashboard/Chat.jsx'
+import { Crm } from './pages/dashboard/Crm.jsx'
 import { Members } from './pages/dashboard/Members.jsx'
 import { Integrations } from './pages/dashboard/Integrations.jsx'
 import { Settings } from './pages/dashboard/Settings.jsx'
@@ -54,6 +56,8 @@ export default function App() {
         <Route path="connect" element={<Connect />} />
         <Route path="groups" element={<Groups />} />
         <Route path="groups/:id" element={<GroupDetails />} />
+        <Route path="chat" element={<Chat />} />
+        <Route path="crm" element={<Crm />} />
         <Route path="automations" element={<Messages defaultTab="automacoes" />} />
         <Route path="automations/library" element={<Messages defaultTab="criar" />} />
         <Route path="automations/cadences" element={<Messages defaultTab="cadencia" />} />

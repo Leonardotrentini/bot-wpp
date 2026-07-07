@@ -35,6 +35,8 @@ const {
   findContacts,
   fetchProfile,
   fetchGroupMessages,
+  findChats,
+  fetchChatMessages,
   sendText,
   sendMedia,
   logoutInstance,
@@ -90,6 +92,18 @@ const {
   isParticipantMentionable,
   resolveMentionPhoneDigits,
 } = require("./lib/messageMentions")
+const jwt = require("jsonwebtoken")
+const { createCrmRouter } = require("./routes/crm")
+const {
+  isIndividualJid,
+  ingestCrmMessage,
+  emitCrmEvent,
+  formatMessageRow: formatCrmMessageRow,
+  formatConversationRow: formatCrmConversationRow,
+} = require("./lib/crmCore")
+const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
+const { maybeReplyWithAi } = require("./lib/crmAiAgent")
+const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -124,6 +138,18 @@ const io = new Server(httpServer, {
   },
 })
 
+// Autentica o socket via JWT e entra na sala do usuário (eventos privados do CRM).
+io.on("connection", (socket) => {
+  const token = socket.handshake?.auth?.token || null
+  if (!token) return
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET)
+    if (payload?.sub) socket.join(`user:${payload.sub}`)
+  } catch {
+    /* socket sem sala privada; ainda recebe eventos globais */
+  }
+})
+
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff")
   res.setHeader("X-Frame-Options", "DENY")
@@ -140,6 +166,7 @@ app.use(
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
 
 app.use("/api/admin", adminRoutes)
+app.use("/api/crm", createCrmRouter({ io }))
 
 app.get("/health", async (_req, res) => {
   try {
@@ -3056,6 +3083,36 @@ async function updateGroupsFromWebhook(instanceName, body) {
   return saved
 }
 
+/** Deps compartilhadas dos motores do CRM (fluxos, IA, fila de envio). */
+function getCrmDeps() {
+  return { prisma, io, sendText, findChats, fetchChatMessages }
+}
+
+/** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */
+async function handleCrmIncomingRecord(userId, record) {
+  const result = await ingestCrmMessage(getCrmDeps(), { userId, record, source: "webhook" })
+  if (!result || !result.created) return
+
+  emitCrmEvent(io, userId, "crm:message", {
+    conversationId: result.conversation.id,
+    message: formatCrmMessageRow(result.message),
+    conversation: formatCrmConversationRow(result.conversation),
+  })
+
+  if (!result.message.fromMe) {
+    onCrmMessage(getCrmDeps(), {
+      conversation: result.conversation,
+      message: result.message,
+      isNewConversation: result.isNewConversation,
+    }).catch((err) => console.error("[crm-flow] onMessage:", err?.message || err))
+
+    maybeReplyWithAi(getCrmDeps(), {
+      conversation: result.conversation,
+      message: result.message,
+    }).catch((err) => console.error("[crm-ai] reply:", err?.message || err))
+  }
+}
+
 /** Mensagens novas (a partir da conexão). Só grava em grupos monitorados; sem histórico antigo. */
 async function storeIncomingMessages(instanceName, body) {
   const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
@@ -3075,7 +3132,16 @@ async function storeIncomingMessages(instanceName, body) {
 
   for (const record of records) {
     const groupJid = record?.key?.remoteJid || record?.remoteJid
-    if (!groupJid || !String(groupJid).endsWith("@g.us")) continue
+    if (!groupJid) continue
+    if (!String(groupJid).endsWith("@g.us")) {
+      // Chats 1:1 (@s.whatsapp.net / @lid) alimentam o CRM em tempo real.
+      if (isIndividualJid(groupJid) && !isReactionRecord(record)) {
+        await handleCrmIncomingRecord(conn.userId, record).catch((err) =>
+          console.error("[crm] ingest webhook:", err?.message || err),
+        )
+      }
+      continue
+    }
 
     let group = touchedGroups.get(groupJid)
     if (!group) {
@@ -3419,6 +3485,10 @@ httpServer.listen(port, () => {
         .catch((err) => console.error("[scheduler] tick:", err?.message || err))
         .then(() => processPendingX1Deliveries(getX1Deps()))
         .catch((err) => console.error("[x1] scheduler:", err?.message || err))
+        .then(() => processPendingCrmDeliveries(getCrmDeps()))
+        .catch((err) => console.error("[crm] delivery scheduler:", err?.message || err))
+        .then(() => processNoReplyFlows(getCrmDeps()))
+        .catch((err) => console.error("[crm] no-reply flows:", err?.message || err))
         .finally(() => {
           schedulerTickBusy = false
         })

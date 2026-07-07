@@ -183,18 +183,18 @@ model MessageEngagement {
 }
 
 model MessageTemplate {
-  id          String   @id @default(cuid())
-  userId      String
-  name        String
-  body        String?
-  mediaType   String   @default("none") // none | image | video
-  mediaBase64 String?
-  mediaMime   String?
-  mediaName   String?
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
+  body         String?
+  mediaType    String   @default("none") // none | image | video
+  mediaBase64  String?
+  mediaMime    String?
+  mediaName    String?
   mentionsJson Json?
-  linkPreview Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  linkPreview  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([userId])
 }
@@ -211,30 +211,30 @@ model Cadence {
 }
 
 model Automation {
-  id          String    @id @default(cuid())
-  userId      String
-  cadenceId   String?
-  name        String
-  status      String    @default("ativa") // ativa | pausada | concluida
-  groupJids   String[]
-  groupNames  String[]
-  templateId  String?
-  body        String?
-  mediaType   String    @default("none")
-  mediaBase64 String?
-  mediaMime   String?
-  mediaName   String?
+  id           String    @id @default(cuid())
+  userId       String
+  cadenceId    String?
+  name         String
+  status       String    @default("ativa") // ativa | pausada | concluida
+  groupJids    String[]
+  groupNames   String[]
+  templateId   String?
+  body         String?
+  mediaType    String    @default("none")
+  mediaBase64  String?
+  mediaMime    String?
+  mediaName    String?
   mentionsJson Json?
-  linkPreview Boolean   @default(true)
-  frequency   String    @default("once") // once | daily | weekly
-  scheduledAt DateTime?
-  timeOfDay   String?
-  weekday     Int?
-  timezone    String    @default("America/Sao_Paulo")
-  nextRunAt   DateTime?
-  lastRunAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  linkPreview  Boolean   @default(true)
+  frequency    String    @default("once") // once | daily | weekly
+  scheduledAt  DateTime?
+  timeOfDay    String?
+  weekday      Int?
+  timezone     String    @default("America/Sao_Paulo")
+  nextRunAt    DateTime?
+  lastRunAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([userId])
   @@index([status])
@@ -295,22 +295,248 @@ model WhatsAppGroupParticipant {
   @@index([participantJid])
 }
 
+// ============================= CRM =============================
+
+model CrmContact {
+  id           String           @id @default(cuid())
+  userId       String
+  remoteJid    String
+  name         String?
+  pushName     String?
+  phone        String?
+  avatarUrl    String?
+  isLid        Boolean          @default(false)
+  notes        String?
+  customFields Json?
+  lastSeenAt   DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  tags         CrmContactTag[]
+  conversation CrmConversation?
+
+  @@unique([userId, remoteJid])
+  @@index([userId])
+}
+
+model CrmConversation {
+  id                 String          @id @default(cuid())
+  userId             String
+  contactId          String          @unique
+  contact            CrmContact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  remoteJid          String
+  status             String          @default("open") // open | pending | resolved | archived
+  unreadCount        Int             @default(0)
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  lastMessageFromMe  Boolean         @default(false)
+  assignedTo         String          @default("human") // human | ai
+  aiAgentId          String?
+  aiEnabled          Boolean         @default(false)
+  kanbanStageId      String?
+  kanbanStage        CrmKanbanStage? @relation(fields: [kanbanStageId], references: [id], onDelete: SetNull)
+  kanbanOrder        Int             @default(0)
+  syncStatus         String          @default("IDLE") // IDLE | SYNCING | READY | RATE_LIMITED | ERROR
+  syncedCount        Int             @default(0)
+  oldestSyncedAt     DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  messages           CrmMessage[]
+
+  @@unique([userId, remoteJid])
+  @@index([userId, status])
+  @@index([userId, lastMessageAt])
+  @@index([kanbanStageId])
+}
+
+model CrmMessage {
+  id             String          @id @default(cuid())
+  userId         String
+  conversationId String
+  conversation   CrmConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  messageId      String
+  fromMe         Boolean         @default(false)
+  senderJid      String?
+  type           String          @default("text")
+  body           String?
+  mediaMime      String?
+  status         String          @default("received") // received | sent | delivered | read | failed
+  source         String          @default("webhook") // webhook | import | manual | flow | ai
+  timestamp      DateTime
+  raw            Json?
+  createdAt      DateTime        @default(now())
+
+  @@unique([conversationId, messageId])
+  @@index([userId])
+  @@index([conversationId, timestamp])
+}
+
+model CrmTag {
+  id        String          @id @default(cuid())
+  userId    String
+  name      String
+  color     String          @default("#22c55e")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  contacts  CrmContactTag[]
+
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+model CrmContactTag {
+  id        String     @id @default(cuid())
+  contactId String
+  contact   CrmContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tagId     String
+  tag       CrmTag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@unique([contactId, tagId])
+  @@index([tagId])
+}
+
+model CrmKanbanStage {
+  id            String            @id @default(cuid())
+  userId        String
+  name          String
+  color         String            @default("#64748b")
+  sortOrder     Int               @default(0)
+  isDefault     Boolean           @default(false)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  conversations CrmConversation[]
+
+  @@index([userId, sortOrder])
+}
+
+model CrmQuickReply {
+  id          String   @id @default(cuid())
+  userId      String
+  shortcut    String
+  title       String?
+  body        String
+  mediaType   String   @default("none") // none | image | video
+  mediaBase64 String?
+  mediaMime   String?
+  mediaName   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, shortcut])
+  @@index([userId])
+}
+
+model CrmFlow {
+  id                      String       @id @default(cuid())
+  userId                  String
+  name                    String
+  enabled                 Boolean      @default(false)
+  trigger                 Json // { type: "new_conversation" | "keyword" | "no_reply" | "stage_change", ... }
+  conditions              Json? // [{ field, op, value }]
+  actions                 Json // [{ type: "send_message" | "add_tag" | "move_stage" | "assign_ai" | "set_status", ... }]
+  cooldownPerContactHours Int          @default(24)
+  quietHours              Json? // { enabled, start: "22:00", end: "08:00" }
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  runs                    CrmFlowRun[]
+
+  @@index([userId, enabled])
+}
+
+model CrmFlowRun {
+  id             String   @id @default(cuid())
+  userId         String
+  flowId         String
+  flow           CrmFlow  @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  conversationId String
+  status         String   @default("ok") // ok | error | skipped
+  detail         String?
+  createdAt      DateTime @default(now())
+
+  @@index([flowId, conversationId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model CrmAiAgent {
+  id                        String   @id @default(cuid())
+  userId                    String
+  name                      String
+  enabled                   Boolean  @default(false)
+  systemPrompt              String
+  model                     String   @default("gpt-4o-mini")
+  temperature               Float    @default(0.7)
+  maxTokens                 Int      @default(400)
+  maxRepliesPerConversation Int      @default(10)
+  handoffKeywords           String[] @default(["humano", "atendente"])
+  quietHours                Json?
+  replyDelayMinSec          Int      @default(5)
+  replyDelayMaxSec          Int      @default(20)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model CrmDelivery {
+  id                String    @id @default(cuid())
+  userId            String
+  conversationId    String
+  remoteJid         String
+  kind              String    @default("flow") // flow | ai
+  sourceId          String? // flowId ou aiAgentId
+  body              String?
+  mediaType         String    @default("none")
+  mediaBase64       String?
+  mediaMime         String?
+  mediaName         String?
+  status            String    @default("pending") // pending | sending | sent | failed | cancelled
+  error             String?
+  scheduledAt       DateTime  @default(now())
+  sentAt            DateTime?
+  providerMessageId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([userId, conversationId])
+}
+
+model CrmSyncJob {
+  id            String    @id @default(cuid())
+  userId        String
+  scope         String    @default("all") // all | remoteJid específico
+  status        String    @default("running") // running | done | error | rate_limited | cancelled
+  totalChats    Int       @default(0)
+  doneChats     Int       @default(0)
+  totalMessages Int       @default(0)
+  currentChat   String?
+  cutoffDate    DateTime?
+  error         String?
+  retryAfter    DateTime?
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, startedAt])
+}
+
 model GroupX1Delivery {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   userId            String
   groupId           String
   participantJid    String
   participantName   String?
   kind              String // join | leave | test
   body              String?
-  status            String   @default("pending") // pending | sending | sent | failed | skipped
+  status            String    @default("pending") // pending | sending | sent | failed | skipped
   error             String?
-  source            String   @default("webhook") // webhook | sync | test
-  scheduledAt       DateTime @default(now())
+  source            String    @default("webhook") // webhook | sync | test
+  scheduledAt       DateTime  @default(now())
   sentAt            DateTime?
   providerMessageId String?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([userId, groupId])
   @@index([userId, groupId, participantJid, createdAt])

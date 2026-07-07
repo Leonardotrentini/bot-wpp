@@ -11,6 +11,8 @@ const titles = {
   '/dashboard': 'Visão geral',
   '/dashboard/connect': 'Conectar WhatsApp',
   '/dashboard/groups': 'Grupos',
+  '/dashboard/chat': 'Conversas',
+  '/dashboard/crm': 'CRM',
   '/dashboard/messages': 'Mensagens',
   '/dashboard/automations': 'Automações',
   '/dashboard/members': 'Membros',

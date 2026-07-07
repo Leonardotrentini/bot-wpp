@@ -1,17 +1,48 @@
-/**
- * Cliente Socket.io — preparado para uso com backend real.
- *
- * Exemplo (descomente quando o servidor estiver pronto):
- *
- * import { io } from 'socket.io-client'
- * const URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000'
- * export const socket = io(URL, { autoConnect: false, transports: ['websocket'] })
- * export function connectSocket(token) {
- *   socket.auth = { token }
- *   socket.connect()
- * }
- */
+import { io } from 'socket.io-client'
+import { resolveApiBaseURL, resolveUseRealApi } from '../lib/runtimeEnv.js'
 
-export const socket = null
-export function connectSocket() {}
-export function disconnectSocket() {}
+let socket = null
+
+function socketBaseUrl() {
+  // API base termina em /api — o socket fica na raiz do mesmo host
+  return resolveApiBaseURL().replace(/\/api\/?$/, '')
+}
+
+export function getSocket() {
+  return socket
+}
+
+/** Conecta o socket autenticado (sala privada do usuário no backend). */
+export function connectSocket() {
+  if (!resolveUseRealApi()) return null
+  const token = localStorage.getItem('vg_auth_token')
+  if (!token) return null
+
+  if (socket) {
+    socket.auth = { token }
+    if (!socket.connected) socket.connect()
+    return socket
+  }
+
+  socket = io(socketBaseUrl(), {
+    autoConnect: true,
+    transports: ['websocket', 'polling'],
+    auth: { token },
+  })
+  return socket
+}
+
+export function disconnectSocket() {
+  if (socket) {
+    socket.disconnect()
+    socket = null
+  }
+}
+
+/** Assina um evento e devolve função de unsubscribe. */
+export function onSocketEvent(event, handler) {
+  const s = connectSocket()
+  if (!s) return () => {}
+  s.on(event, handler)
+  return () => s.off(event, handler)
+}

@@ -330,6 +330,20 @@ async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize =
   return { payload: lastPayload || {}, records: [], source: "none" }
 }
 
+/** Lista chats da instância (Evolution v2 `POST /chat/findChats/{instance}`). */
+async function findChats(instanceName, { limit } = {}) {
+  const body = limit ? { where: {}, take: limit } : { where: {} }
+  return firstSuccess([
+    () => requestEvolution(`/chat/findChats/${encodeURIComponent(instanceName)}`, { method: "POST", body, timeoutMs: GROUPS_TIMEOUT_MS }),
+    () => requestEvolution(`/chat/findChats/${encodeURIComponent(instanceName)}`, { method: "POST", body: {}, timeoutMs: GROUPS_TIMEOUT_MS }),
+  ])
+}
+
+/** Histórico paginado de um chat 1:1 (mesmo findMessages usado para grupos). */
+async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize = 50, cutoffMs } = {}) {
+  return fetchGroupMessages(instanceName, remoteJid, { page, pageSize, cutoffMs })
+}
+
 async function sendText(instanceName, number, text, options = {}) {
   const { linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest } = options
   const body = {
@@ -383,6 +397,8 @@ module.exports = {
   findContacts,
   fetchProfile,
   fetchGroupMessages,
+  findChats,
+  fetchChatMessages,
   sendText,
   sendMedia,
   logoutInstance,

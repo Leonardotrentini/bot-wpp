@@ -9,6 +9,8 @@ import {
   ChevronRight,
   Smartphone,
   Shield,
+  MessageSquare,
+  Kanban,
 } from 'lucide-react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -18,6 +20,8 @@ const nav = [
   { to: '/dashboard', label: 'Visão geral', icon: LayoutDashboard, end: true },
   { to: '/dashboard/connect', label: 'Conectar WhatsApp', icon: Smartphone },
   { to: '/dashboard/groups', label: 'Grupos', icon: Users },
+  { to: '/dashboard/chat', label: 'Conversas', icon: MessageSquare, beta: true },
+  { to: '/dashboard/crm', label: 'CRM', icon: Kanban, beta: true },
   { to: '/dashboard/automations', label: 'Automações', icon: Zap, beta: true },
   { to: '/dashboard/members', label: 'Membros', icon: UserCircle2 },
   { to: '/dashboard/settings', label: 'Configurações', icon: Settings },

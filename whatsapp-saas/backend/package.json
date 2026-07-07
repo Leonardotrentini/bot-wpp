@@ -15,6 +15,7 @@
     "test:x1:integration": "node scripts/test-x1-integration.js",
     "test:mentions": "node scripts/test-message-mentions.js",
     "test:groups": "node scripts/test-group-discovery.js",
+    "test:crm": "node scripts/test-crm.js",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "prisma": {

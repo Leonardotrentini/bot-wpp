@@ -559,3 +559,191 @@ export async function getWhatsAppStatus() {
   if (resolveUseRealApi()) return apiClient.get('/whatsapp/status')
   return mockResponse({ connected: whatsappConnected, lastSync: mockWhatsAppStatus.lastSync })
 }
+
+// ============================= CRM =============================
+
+export async function getCrmConversations(params = {}) {
+  if (resolveUseRealApi()) return apiClient.get('/crm/conversations', { params })
+  return mockResponse({ conversations: [], total: 0, limit: 100, offset: 0 })
+}
+
+export async function getCrmConversationMessages(id, params = {}) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/conversations/${encodeURIComponent(id)}/messages`, { params })
+  return mockResponse({ messages: [], hasMore: false })
+}
+
+export async function sendCrmMessage(id, payload) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/conversations/${encodeURIComponent(id)}/send`, payload, { timeout: 120000 })
+  }
+  return mockResponse({ message: null, conversation: null })
+}
+
+export async function markCrmConversationRead(id) {
+  if (resolveUseRealApi()) return apiClient.post(`/crm/conversations/${encodeURIComponent(id)}/read`)
+  return mockResponse({ conversation: null })
+}
+
+export async function patchCrmConversation(id, payload) {
+  if (resolveUseRealApi()) return apiClient.patch(`/crm/conversations/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ conversation: null })
+}
+
+export async function patchCrmContact(id, payload) {
+  if (resolveUseRealApi()) return apiClient.patch(`/crm/contacts/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ contact: null })
+}
+
+export async function addCrmContactTag(contactId, tagId) {
+  if (resolveUseRealApi()) return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/tags`, { tagId })
+  return mockResponse({ contact: null })
+}
+
+export async function removeCrmContactTag(contactId, tagId) {
+  if (resolveUseRealApi()) {
+    return apiClient.delete(`/crm/contacts/${encodeURIComponent(contactId)}/tags/${encodeURIComponent(tagId)}`)
+  }
+  return mockResponse({ contact: null })
+}
+
+export async function getCrmTags() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/tags')
+  return mockResponse({ tags: [] })
+}
+
+export async function createCrmTag(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/tags', payload)
+  return mockResponse({ tag: { id: `tag-${Date.now()}`, ...payload } })
+}
+
+export async function updateCrmTag(id, payload) {
+  if (resolveUseRealApi()) return apiClient.patch(`/crm/tags/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ tag: { id, ...payload } })
+}
+
+export async function deleteCrmTag(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/crm/tags/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function getCrmStages() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/stages')
+  return mockResponse({ stages: [] })
+}
+
+export async function createCrmStage(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/stages', payload)
+  return mockResponse({ stage: { id: `stage-${Date.now()}`, ...payload } })
+}
+
+export async function updateCrmStage(id, payload) {
+  if (resolveUseRealApi()) return apiClient.patch(`/crm/stages/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ stage: { id, ...payload } })
+}
+
+export async function reorderCrmStages(order) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/stages/reorder', { order })
+  return mockResponse({ stages: [] })
+}
+
+export async function deleteCrmStage(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/crm/stages/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function getCrmQuickReplies() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/quick-replies')
+  return mockResponse({ quickReplies: [] })
+}
+
+export async function createCrmQuickReply(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/quick-replies', payload)
+  return mockResponse({ quickReply: { id: `qr-${Date.now()}`, ...payload } })
+}
+
+export async function updateCrmQuickReply(id, payload) {
+  if (resolveUseRealApi()) return apiClient.put(`/crm/quick-replies/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ quickReply: { id, ...payload } })
+}
+
+export async function deleteCrmQuickReply(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/crm/quick-replies/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function getCrmQuickReplyContent(id) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/quick-replies/${encodeURIComponent(id)}/content`)
+  return mockResponse({ quickReply: null })
+}
+
+export async function getCrmFlows() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/flows')
+  return mockResponse({ flows: [] })
+}
+
+export async function createCrmFlow(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/flows', payload)
+  return mockResponse({ flow: { id: `flow-${Date.now()}`, ...payload } })
+}
+
+export async function updateCrmFlow(id, payload) {
+  if (resolveUseRealApi()) return apiClient.put(`/crm/flows/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ flow: { id, ...payload } })
+}
+
+export async function toggleCrmFlow(id, enabled) {
+  if (resolveUseRealApi()) return apiClient.patch(`/crm/flows/${encodeURIComponent(id)}`, { enabled })
+  return mockResponse({ flow: { id, enabled } })
+}
+
+export async function deleteCrmFlow(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/crm/flows/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function getCrmFlowRuns(id) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/flows/${encodeURIComponent(id)}/runs`)
+  return mockResponse({ runs: [] })
+}
+
+export async function getCrmAgents() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/agents')
+  return mockResponse({ agents: [], aiConfigured: false })
+}
+
+export async function createCrmAgent(payload) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/agents', payload)
+  return mockResponse({ agent: { id: `agent-${Date.now()}`, ...payload } })
+}
+
+export async function updateCrmAgent(id, payload) {
+  if (resolveUseRealApi()) return apiClient.put(`/crm/agents/${encodeURIComponent(id)}`, payload)
+  return mockResponse({ agent: { id, ...payload } })
+}
+
+export async function deleteCrmAgent(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/crm/agents/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true })
+}
+
+export async function testCrmAgent(id, message) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/agents/${encodeURIComponent(id)}/test`, { message }, { timeout: 90000 })
+  }
+  return mockResponse({ reply: 'Resposta de teste (modo demonstração).' })
+}
+
+export async function startCrmSync(payload = {}) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/sync', payload)
+  return mockResponse({ started: true, job: null })
+}
+
+export async function getCrmSyncStatus() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/sync/status')
+  return mockResponse({ job: null })
+}
+
+export async function getCrmOverview() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/overview')
+  return mockResponse({ open: 0, pending: 0, resolved: 0, unread: 0, contacts: 0, aiConfigured: false })
+}
