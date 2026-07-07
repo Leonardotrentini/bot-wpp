@@ -1034,25 +1034,28 @@ export function Crm() {
 
       {tab === 'kanban' && (
         <>
-          {conversations.length === 0 ? (
-            <Card className="py-12 text-center">
-              <Kanban className="mx-auto h-10 w-10 text-stone-600" />
-              <p className="mt-3 text-sm text-stone-400">Nenhuma conversa no CRM ainda.</p>
-              <p className="mt-1 text-xs text-stone-500">
-                Vá em Conversas e sincronize o histórico, ou aguarde novas mensagens.
-              </p>
-              <Button className="mt-4" variant="secondary" onClick={() => navigate('/dashboard/chat')}>
+          {conversations.length === 0 && (
+            <Card className="flex flex-col items-center gap-3 py-5 text-center sm:flex-row sm:justify-between sm:px-6 sm:text-left">
+              <div className="flex items-center gap-3">
+                <Kanban className="h-8 w-8 shrink-0 text-stone-600" />
+                <div>
+                  <p className="text-sm text-stone-300">Nenhuma conversa no CRM ainda.</p>
+                  <p className="text-xs text-stone-500">
+                    Vá em Conversas e sincronize o histórico, ou aguarde novas mensagens. Elas aparecem aqui como cards.
+                  </p>
+                </div>
+              </div>
+              <Button variant="secondary" onClick={() => navigate('/dashboard/chat')}>
                 <MessageSquare className="h-4 w-4" /> Abrir Conversas
               </Button>
             </Card>
-          ) : (
-            <KanbanBoard
-              stages={stages}
-              conversations={conversations}
-              onMove={handleMove}
-              onOpenChat={(c) => navigate(`/dashboard/chat?c=${c.id}`)}
-            />
           )}
+          <KanbanBoard
+            stages={stages}
+            conversations={conversations}
+            onMove={handleMove}
+            onOpenChat={(c) => navigate(`/dashboard/chat?c=${c.id}`)}
+          />
         </>
       )}
 
