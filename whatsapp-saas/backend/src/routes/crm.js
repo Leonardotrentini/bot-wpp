@@ -7,7 +7,7 @@ const express = require("express")
 const { z } = require("zod")
 const { prisma } = require("../lib/prisma")
 const { authMiddleware } = require("../lib/auth")
-const { sendText, sendMedia, findChats, fetchChatMessages } = require("../lib/evolution")
+const { sendText, sendMedia, findChats, findContacts, fetchChatMessages, fetchProfile } = require("../lib/evolution")
 const { enqueueUserSend } = require("../lib/sendQueue")
 const { validateMediaContentSize } = require("../lib/mediaLimits")
 const {
@@ -19,6 +19,7 @@ const {
   CONVERSATION_INCLUDE,
 } = require("../lib/crmCore")
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
+const { syncContactProfiles } = require("../lib/crmProfile")
 const { onStageChange } = require("../lib/crmFlows")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
 
@@ -109,7 +110,7 @@ function createCrmRouter({ io }) {
   const router = express.Router()
   router.use(authMiddleware)
 
-  const syncDeps = { prisma, io, findChats, fetchChatMessages }
+  const syncDeps = { prisma, io, findChats, findContacts, fetchChatMessages, fetchProfile }
 
   // ------------------------- Conversas -------------------------
 
@@ -779,6 +780,26 @@ function createCrmRouter({ io }) {
   router.get("/sync/status", async (req, res) => {
     const job = await getCrmSyncStatus(prisma, req.user.sub)
     return res.json({ job })
+  })
+
+  router.post("/profiles/refresh", async (req, res) => {
+    const userId = req.user.sub
+    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+    if (!conn || !conn.connected) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    const result = await syncContactProfiles(syncDeps, { userId, instanceName: conn.instanceName })
+    return res.json({
+      ok: true,
+      enriched: result.enriched,
+      queued: result.queued,
+      directorySize: result.directorySize,
+      message:
+        result.enriched || result.queued
+          ? "Nomes e fotos estão sendo atualizados. A lista recarrega automaticamente."
+          : "Nenhum perfil novo encontrado na agenda do WhatsApp.",
+    })
   })
 
   // ------------------------- Visão geral (contadores) -------------------------

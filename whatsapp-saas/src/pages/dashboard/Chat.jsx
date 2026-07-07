@@ -15,6 +15,7 @@ import {
   Loader2,
   MessageSquare,
   ChevronDown,
+  User,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -42,6 +43,7 @@ import {
   getCrmAgents,
   startCrmSync,
   getCrmSyncStatus,
+  refreshCrmProfiles,
 } from '../../services/api.js'
 
 // ---------------------------------------------------------------- helpers
@@ -96,7 +98,7 @@ const STATUS_LABELS = {
 
 // ---------------------------------------------------------------- sync banner
 
-function SyncBanner({ job, onStartSync, syncStarting }) {
+function SyncBanner({ job, onStartSync, syncStarting, onRefreshProfiles, profileRefreshing }) {
   const [days, setDays] = useState('30')
   if (!job || ['done', 'error', 'cancelled'].includes(job.status)) {
     return (
@@ -109,7 +111,11 @@ function SyncBanner({ job, onStartSync, syncStarting }) {
               ? 'Última sincronização falhou.'
               : 'Importe as conversas antigas do seu WhatsApp.'}
         </span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={onRefreshProfiles} disabled={profileRefreshing || syncStarting}>
+            {profileRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <User className="h-3.5 w-3.5" />}
+            Nomes e fotos
+          </Button>
           <select
             value={days}
             onChange={(e) => setDays(e.target.value)}
@@ -120,7 +126,7 @@ function SyncBanner({ job, onStartSync, syncStarting }) {
             <option value="90">90 dias</option>
             <option value="180">180 dias</option>
           </select>
-          <Button size="sm" variant="secondary" onClick={() => onStartSync(Number(days))} disabled={syncStarting}>
+          <Button size="sm" variant="secondary" onClick={() => onStartSync(Number(days))} disabled={syncStarting || profileRefreshing}>
             {syncStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Sincronizar
           </Button>
@@ -190,6 +196,7 @@ export function Chat() {
 
   const [syncJob, setSyncJob] = useState(null)
   const [syncStarting, setSyncStarting] = useState(false)
+  const [profileRefreshing, setProfileRefreshing] = useState(false)
 
   const [showPanel, setShowPanel] = useState(true)
   const [notesDraft, setNotesDraft] = useState('')
@@ -448,6 +455,23 @@ export function Chat() {
     }
   }, [newTagName, toast])
 
+  const handleRefreshProfiles = useCallback(async () => {
+    setProfileRefreshing(true)
+    try {
+      const { data } = await refreshCrmProfiles()
+      await loadConversations()
+      if (data.enriched || data.queued) {
+        toast.success(data.message || 'Nomes e fotos atualizados.')
+      } else {
+        toast.info(data.message || 'Nenhum perfil novo encontrado.')
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar nomes e fotos.')
+    } finally {
+      setProfileRefreshing(false)
+    }
+  }, [loadConversations, toast])
+
   const handleStartSync = useCallback(
     async (days) => {
       setSyncStarting(true)
@@ -532,7 +556,13 @@ export function Chat() {
     <div className="flex h-[calc(100vh-7.5rem)] min-h-[480px] overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/40">
       {/* Lista de conversas */}
       <div className="flex w-full max-w-xs shrink-0 flex-col border-r border-brand-800">
-        <SyncBanner job={syncJob} onStartSync={handleStartSync} syncStarting={syncStarting} />
+        <SyncBanner
+          job={syncJob}
+          onStartSync={handleStartSync}
+          syncStarting={syncStarting}
+          onRefreshProfiles={handleRefreshProfiles}
+          profileRefreshing={profileRefreshing}
+        />
         <div className="space-y-2 border-b border-brand-800 p-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />

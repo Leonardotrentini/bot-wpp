@@ -743,6 +743,11 @@ export async function getCrmSyncStatus() {
   return mockResponse({ job: null })
 }
 
+export async function refreshCrmProfiles() {
+  if (resolveUseRealApi()) return apiClient.post('/crm/profiles/refresh')
+  return mockResponse({ ok: true, enriched: 0, queued: 0, directorySize: 0 })
+}
+
 export async function getCrmOverview() {
   if (resolveUseRealApi()) return apiClient.get('/crm/overview')
   return mockResponse({ open: 0, pending: 0, resolved: 0, unread: 0, contacts: 0, aiConfigured: false })

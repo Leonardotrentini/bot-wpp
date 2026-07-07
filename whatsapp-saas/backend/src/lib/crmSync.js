@@ -8,6 +8,7 @@
 
 const { normalizeEvolutionMessages, filterMessagesForGroup, toIsoFromEvolutionTimestamp } = require("./evolutionMessages")
 const { isIndividualJid, ingestCrmMessage, emitCrmEvent, formatConversationRow } = require("./crmCore")
+const { syncContactProfiles, lookupDirectoryInfo } = require("./crmProfile")
 
 const CRM_SYNC_PAGE_SIZE = Number(process.env.CRM_SYNC_PAGE_SIZE || 50)
 const CRM_SYNC_MAX_PAGES_PER_CHAT = Number(process.env.CRM_SYNC_MAX_PAGES_PER_CHAT || 20)
@@ -47,6 +48,7 @@ function extractIndividualChats(payload) {
     out.push({
       remoteJid: norm,
       pushName: chat?.pushName || chat?.name || null,
+      avatarUrl: chat?.profilePicUrl || chat?.profilePictureUrl || null,
       lastActivityAt: tsIso ? new Date(tsIso) : null,
     })
   }
@@ -201,10 +203,28 @@ async function runSyncJob(deps, { userId, instanceName, job }) {
 
     current = await updateJob(deps, current, { totalChats: chats.length })
 
-    // Garante contato/conversa antes de importar (lista aparece já na UI)
-    const { ensureContactAndConversation } = require("./crmCore")
+    const profileResult = await syncContactProfiles(deps, { userId, instanceName, chats }).catch(() => ({
+      enriched: 0,
+      queued: 0,
+      directorySize: 0,
+      directory: new Map(),
+    }))
+    if (profileResult.enriched || profileResult.queued) {
+      console.log(
+        `[crm-sync] perfis: ${profileResult.enriched} atualizados, ${profileResult.queued} na fila (${profileResult.directorySize} no diretório)`,
+      )
+    }
+
+    const { ensureContactAndConversation, phoneFromJid } = require("./crmCore")
     for (const chat of chats) {
-      await ensureContactAndConversation(prisma, userId, chat.remoteJid, { pushName: chat.pushName }).catch(() => {})
+      const info = lookupDirectoryInfo(profileResult.directory, {
+        remoteJid: chat.remoteJid,
+        phone: phoneFromJid(chat.remoteJid),
+      })
+      await ensureContactAndConversation(prisma, userId, chat.remoteJid, {
+        pushName: info?.pushName || chat.pushName,
+        avatarUrl: info?.avatarUrl || chat.avatarUrl,
+      }).catch(() => {})
     }
 
     let totalMessages = current.totalMessages

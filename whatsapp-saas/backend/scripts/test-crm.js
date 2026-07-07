@@ -3,7 +3,7 @@
  * Uso: node scripts/test-crm.js
  */
 const assert = require("assert")
-const { isIndividualJid, isLidJid, phoneFromJid, previewFromBody } = require("../src/lib/crmCore")
+const { isIndividualJid, isLidJid, phoneFromJid, previewFromBody, formatContactRow } = require("../src/lib/crmCore")
 const {
   normalizeTrigger,
   keywordMatches,
@@ -12,6 +12,7 @@ const {
   deliveryDelayMs,
 } = require("../src/lib/crmFlows")
 const { extractIndividualChats } = require("../src/lib/crmSync")
+const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, contactNeedsProfile, lookupDirectoryInfo } = require("../src/lib/crmProfile")
 const { containsHandoffKeyword } = require("../src/lib/crmAiAgent")
 
 let passed = 0
@@ -147,6 +148,114 @@ test("extractIndividualChats aceita formatos records/chats", () => {
   assert.strictEqual(fromRecords.length, 1)
   const fromChats = extractIndividualChats({ chats: [{ remoteJid: "5511777777777@s.whatsapp.net" }] })
   assert.strictEqual(fromChats.length, 1)
+})
+
+test("extractIndividualChats preserva foto de perfil quando vem no chat", () => {
+  const chats = extractIndividualChats([
+    { remoteJid: "5511999999999@s.whatsapp.net", profilePicUrl: "https://pps.whatsapp.net/foto.jpg" },
+  ])
+  assert.strictEqual(chats[0].avatarUrl, "https://pps.whatsapp.net/foto.jpg")
+})
+
+// ---------------- crmProfile
+
+test("buildContactDirectory normaliza formatos e ignora entradas vazias", () => {
+  const dir = buildContactDirectory([
+    { remoteJid: "5511999999999@s.whatsapp.net", pushName: "Maria", profilePicUrl: "https://pps.whatsapp.net/m.jpg" },
+    { id: "123456@lid", name: "Contato LID" },
+    { remoteJid: "5511888888888@s.whatsapp.net" }, // sem nome nem foto → fora
+    { remoteJid: null, pushName: "Fantasma" },
+  ])
+  assert.strictEqual(dir.size, 3)
+  assert.deepStrictEqual(dir.get("5511999999999@s.whatsapp.net"), {
+    pushName: "Maria",
+    avatarUrl: "https://pps.whatsapp.net/m.jpg",
+  })
+  assert.strictEqual(dir.get("123456@lid").pushName, "Contato LID")
+})
+
+test("buildContactDirectory aceita payload embrulhado (records/data)", () => {
+  const dir = buildContactDirectory({ records: [{ remoteJid: "5511777777777@s.whatsapp.net", pushName: "João" }] })
+  assert.strictEqual(dir.get("5511777777777@s.whatsapp.net").pushName, "João")
+})
+
+test("buildContactDirectory rejeita url de foto inválida", () => {
+  const dir = buildContactDirectory([
+    { remoteJid: "5511999999999@s.whatsapp.net", profilePicUrl: "changed" },
+  ])
+  assert.strictEqual(dir.size, 0)
+})
+
+test("mergeChatsIntoDirectory complementa sem sobrescrever o findContacts", () => {
+  const dir = buildContactDirectory([
+    { remoteJid: "5511999999999@s.whatsapp.net", pushName: "Maria (agenda)" },
+  ])
+  mergeChatsIntoDirectory(dir, [
+    { remoteJid: "5511999999999@s.whatsapp.net", pushName: "Maria (chat)", avatarUrl: "https://pps.whatsapp.net/m.jpg" },
+    { remoteJid: "5511666666666@s.whatsapp.net", pushName: "Novo do chat" },
+  ])
+  const maria = dir.get("5511999999999@s.whatsapp.net")
+  assert.strictEqual(maria.pushName, "Maria (agenda)") // findContacts tem prioridade
+  assert.strictEqual(maria.avatarUrl, "https://pps.whatsapp.net/m.jpg") // foto complementada
+  assert.strictEqual(dir.get("5511666666666@s.whatsapp.net").pushName, "Novo do chat")
+})
+
+test("pickProfileFields lê variações do fetchProfile", () => {
+  assert.deepStrictEqual(pickProfileFields({ name: "Ana", picture: "https://pps.whatsapp.net/a.jpg" }), {
+    pushName: "Ana",
+    avatarUrl: "https://pps.whatsapp.net/a.jpg",
+  })
+  assert.deepStrictEqual(pickProfileFields({ data: { pushName: "Bia", profilePictureUrl: "https://pps.whatsapp.net/b.jpg" } }), {
+    pushName: "Bia",
+    avatarUrl: "https://pps.whatsapp.net/b.jpg",
+  })
+  assert.deepStrictEqual(pickProfileFields(null), { pushName: null, avatarUrl: null })
+})
+
+test("contactNeedsProfile detecta contato sem nome ou sem foto", () => {
+  assert.strictEqual(contactNeedsProfile({ pushName: null, name: null, avatarUrl: null }), true)
+  assert.strictEqual(contactNeedsProfile({ pushName: "Maria", avatarUrl: null }), true)
+  assert.strictEqual(contactNeedsProfile({ pushName: "Maria", avatarUrl: "https://pps.whatsapp.net/m.jpg" }), false)
+  assert.strictEqual(contactNeedsProfile(null), false)
+})
+
+test("lookupDirectoryInfo encontra perfil pelo telefone quando JID difere", () => {
+  const dir = buildContactDirectory([
+    { remoteJid: "5511999999999@s.whatsapp.net", pushName: "Maria", profilePicUrl: "https://pps.whatsapp.net/m.jpg" },
+  ])
+  const info = lookupDirectoryInfo(dir, { remoteJid: "123456@lid", phone: "5511999999999" })
+  assert.strictEqual(info.pushName, "Maria")
+  assert.strictEqual(info.avatarUrl, "https://pps.whatsapp.net/m.jpg")
+})
+
+test("formatContactRow formata telefone BR quando não há nome salvo", () => {
+  const row = formatContactRow({
+    id: "c1",
+    remoteJid: "553299377780@s.whatsapp.net",
+    phone: "553299377780",
+    pushName: null,
+    avatarUrl: null,
+    isLid: false,
+    notes: "",
+    tags: [],
+  })
+  assert.match(row.name, /\+55/)
+  assert.notStrictEqual(row.name, "553299377780")
+})
+
+test("formatContactRow usa pushName do WhatsApp quando disponível", () => {
+  const row = formatContactRow({
+    id: "c2",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    phone: "5511999999999",
+    pushName: "Leonardo",
+    avatarUrl: "https://pps.whatsapp.net/l.jpg",
+    isLid: false,
+    notes: "",
+    tags: [],
+  })
+  assert.strictEqual(row.name, "Leonardo")
+  assert.strictEqual(row.avatarUrl, "https://pps.whatsapp.net/l.jpg")
 })
 
 // ---------------- crmAiAgent

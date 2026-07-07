@@ -7,6 +7,12 @@
  */
 
 const { mapEvolutionMessage } = require("./evolutionMessages")
+const {
+  displayNameFromParticipant,
+  formatPhoneBr,
+  looksLikeInternalIdName,
+  phoneDigitsFromJid,
+} = require("./participantIdentity")
 
 const INDIVIDUAL_JID_RE = /@(s\.whatsapp\.net|lid)$/i
 
@@ -40,14 +46,34 @@ function previewFromBody(body, type) {
   return "Mensagem"
 }
 
+function resolveContactDisplayName(contact) {
+  if (!contact) return "Contato"
+  const manual = String(contact.name || "").trim()
+  if (manual) return manual
+
+  const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
+  const fromWa = displayNameFromParticipant(
+    { pushName: contact.pushName, name: contact.pushName, notify: contact.pushName },
+    phoneDigits,
+  )
+  if (fromWa) return fromWa
+
+  if (contact.isLid) return "Contato"
+  if (phoneDigits) return formatPhoneBr(phoneDigits)
+  return "Contato"
+}
+
 function formatContactRow(contact, { tags } = {}) {
   if (!contact) return null
+  const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
+  const pushName =
+    contact.pushName && !looksLikeInternalIdName(contact.pushName, phoneDigits) ? contact.pushName : null
   return {
     id: contact.id,
     remoteJid: contact.remoteJid,
-    name: contact.name || contact.pushName || contact.phone || contact.remoteJid.split("@")[0],
-    pushName: contact.pushName || null,
-    phone: contact.phone || null,
+    name: resolveContactDisplayName(contact),
+    pushName,
+    phone: phoneDigits || null,
     avatarUrl: contact.avatarUrl || null,
     isLid: Boolean(contact.isLid),
     notes: contact.notes || "",
@@ -104,8 +130,17 @@ const CONVERSATION_INCLUDE = {
   contact: { include: { tags: { include: { tag: true } } } },
 }
 
+function cleanIncomingPushName(value, remoteJid) {
+  const phoneDigits = phoneFromJid(remoteJid) || phoneDigitsFromJid(remoteJid)
+  const name = displayNameFromParticipant({ pushName: value, name: value }, phoneDigits)
+  if (name) return name
+  const raw = String(value || "").trim()
+  if (!raw || looksLikeInternalIdName(raw, phoneDigits)) return null
+  return raw
+}
+
 /** Garante contato + conversa para um JID individual. */
-async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName } = {}) {
+async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl } = {}) {
   const jid = String(remoteJid).trim()
   const phone = phoneFromJid(jid)
 
@@ -118,15 +153,21 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
         userId,
         remoteJid: jid,
         pushName: pushName || null,
+        avatarUrl: avatarUrl || null,
         phone,
         isLid: isLidJid(jid),
       },
     })
-  } else if (pushName && contact.pushName !== pushName) {
-    contact = await prisma.crmContact.update({
-      where: { id: contact.id },
-      data: { pushName },
-    })
+  } else {
+    const data = {}
+    if (pushName && contact.pushName !== pushName) data.pushName = pushName
+    if (avatarUrl && contact.avatarUrl !== avatarUrl) data.avatarUrl = avatarUrl
+    if (Object.keys(data).length) {
+      contact = await prisma.crmContact.update({
+        where: { id: contact.id },
+        data,
+      })
+    }
   }
 
   let conversation = await prisma.crmConversation.findUnique({
@@ -177,9 +218,13 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   const mapped = mapEvolutionMessage(record)
   if (!mapped.messageId || !mapped.timestamp || Number.isNaN(mapped.timestamp.getTime())) return null
 
-  const { conversation } = await ensureContactAndConversation(prisma, userId, remoteJid, {
-    pushName: !mapped.fromMe ? record?.pushName || null : null,
-  })
+  const pushName = !mapped.fromMe
+    ? cleanIncomingPushName(record?.pushName, remoteJid)
+    : source === "import"
+      ? cleanIncomingPushName(record?.pushName, remoteJid)
+      : null
+
+  const { conversation } = await ensureContactAndConversation(prisma, userId, remoteJid, { pushName })
   const isNewConversation = Boolean(conversation.__isNew)
 
   const existing = await prisma.crmMessage.findUnique({

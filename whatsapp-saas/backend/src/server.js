@@ -101,6 +101,7 @@ const {
   formatMessageRow: formatCrmMessageRow,
   formatConversationRow: formatCrmConversationRow,
 } = require("./lib/crmCore")
+const { scheduleProfileFetch, contactNeedsProfile } = require("./lib/crmProfile")
 const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
 const { maybeReplyWithAi } = require("./lib/crmAiAgent")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
@@ -3089,7 +3090,7 @@ function getCrmDeps() {
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */
-async function handleCrmIncomingRecord(userId, record) {
+async function handleCrmIncomingRecord(userId, record, instanceName = null) {
   const result = await ingestCrmMessage(getCrmDeps(), { userId, record, source: "webhook" })
   if (!result || !result.created) return
 
@@ -3098,6 +3099,14 @@ async function handleCrmIncomingRecord(userId, record) {
     message: formatCrmMessageRow(result.message),
     conversation: formatCrmConversationRow(result.conversation),
   })
+
+  // Contato sem nome/foto: busca perfil na Evolution (fila com throttle anti-ban)
+  if (instanceName && contactNeedsProfile(result.conversation.contact)) {
+    scheduleProfileFetch(
+      { prisma, io, fetchProfile },
+      { userId, instanceName, remoteJid: result.conversation.remoteJid },
+    )
+  }
 
   if (!result.message.fromMe) {
     onCrmMessage(getCrmDeps(), {
@@ -3136,7 +3145,7 @@ async function storeIncomingMessages(instanceName, body) {
     if (!String(groupJid).endsWith("@g.us")) {
       // Chats 1:1 (@s.whatsapp.net / @lid) alimentam o CRM em tempo real.
       if (isIndividualJid(groupJid) && !isReactionRecord(record)) {
-        await handleCrmIncomingRecord(conn.userId, record).catch((err) =>
+        await handleCrmIncomingRecord(conn.userId, record, instanceName).catch((err) =>
           console.error("[crm] ingest webhook:", err?.message || err),
         )
       }
