@@ -3100,10 +3100,10 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
     conversation: formatCrmConversationRow(result.conversation),
   })
 
-  // Contato sem nome/foto: busca perfil na Evolution (fila com throttle anti-ban)
+  // Contato sem foto: busca perfil na Evolution (fila com throttle anti-ban)
   if (instanceName && contactNeedsProfile(result.conversation.contact)) {
     scheduleProfileFetch(
-      { prisma, io, fetchProfile },
+      { prisma, io, fetchProfile, fetchProfilePictureUrl },
       { userId, instanceName, remoteJid: result.conversation.remoteJid },
     )
   }

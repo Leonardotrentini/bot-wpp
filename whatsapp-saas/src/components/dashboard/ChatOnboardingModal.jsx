@@ -87,8 +87,10 @@ export function ChatOnboardingModal({ isOpen, user, onComplete }) {
 
         <Section icon={User} title="Nomes e fotos de perfil">
           <p>
-            Use <strong className="text-stone-300">Nomes e fotos</strong> para puxar o nome salvo na sua agenda do
-            WhatsApp e a foto de perfil. Isso também roda automaticamente no início de cada sincronização.
+            Use <strong className="text-stone-300">Nomes e fotos</strong> para buscar a foto de perfil do WhatsApp —{' '}
+            <strong className="text-stone-300">mesmo sem ter o contato salvo na agenda</strong>. O nome da agenda só
+            aparece se você já salvou o número no celular; caso contrário, use &quot;Salvar contato&quot; no painel à
+            direita.
           </p>
           <ul className="list-disc space-y-1 pl-5">
             <li>Nome só aparece se o contato estiver na agenda do número conectado ou se o WhatsApp expuser o pushName.</li>

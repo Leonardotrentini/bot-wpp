@@ -7,7 +7,7 @@ const express = require("express")
 const { z } = require("zod")
 const { prisma } = require("../lib/prisma")
 const { authMiddleware } = require("../lib/auth")
-const { sendText, sendMedia, findChats, findContacts, fetchChatMessages, fetchProfile } = require("../lib/evolution")
+const { sendText, sendMedia, findChats, findContacts, fetchChatMessages, fetchProfile, fetchProfilePictureUrl, saveContact } = require("../lib/evolution")
 const { enqueueUserSend } = require("../lib/sendQueue")
 const { validateMediaContentSize } = require("../lib/mediaLimits")
 const {
@@ -110,7 +110,7 @@ function createCrmRouter({ io }) {
   const router = express.Router()
   router.use(authMiddleware)
 
-  const syncDeps = { prisma, io, findChats, findContacts, fetchChatMessages, fetchProfile }
+  const syncDeps = { prisma, io, findChats, findContacts, fetchChatMessages, fetchProfile, fetchProfilePictureUrl }
 
   // ------------------------- Conversas -------------------------
 
@@ -338,12 +338,88 @@ function createCrmRouter({ io }) {
     const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
 
+    const data = { ...parsed.data }
+    if (data.name !== undefined) data.name = data.name ? String(data.name).trim() : null
+
     const updated = await prisma.crmContact.update({
       where: { id: contact.id },
-      data: parsed.data,
+      data,
       include: { tags: { include: { tag: true } } },
     })
+
+    const conversation = await prisma.crmConversation.findFirst({
+      where: { contactId: contact.id, userId },
+      include: CONVERSATION_INCLUDE,
+    })
+    if (conversation) {
+      emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(conversation) })
+    }
+
     return res.json({ contact: formatContactRow(updated) })
+  })
+
+  router.post("/contacts/:id/save", async (req, res) => {
+    const userId = req.user.sub
+    const schema = z.object({
+      name: z.string().min(1).max(120),
+      saveOnWhatsapp: z.boolean().optional().default(false),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um nome válido." })
+
+    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+
+    const savedName = parsed.data.name.trim()
+    const phone = contact.phone || contact.remoteJid.split("@")[0].replace(/\D/g, "")
+    if (!phone || phone.length < 8) {
+      return res.status(400).json({
+        error: "NO_PHONE",
+        message: "Este contato não tem número de telefone — não é possível salvar na agenda do WhatsApp.",
+      })
+    }
+
+    let whatsappSaved = false
+    let whatsappWarning = null
+    if (parsed.data.saveOnWhatsapp) {
+      const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+      if (!conn || !conn.connected) {
+        whatsappWarning = "WhatsApp desconectado — nome salvo apenas no Vesto."
+      } else {
+        try {
+          await saveContact(conn.instanceName, { number: phone, name: savedName, saveOnDevice: true })
+          whatsappSaved = true
+        } catch (err) {
+          console.warn("[crm] saveContact WhatsApp:", err?.message || err)
+          whatsappWarning = "Não foi possível salvar na agenda do WhatsApp — nome salvo apenas no Vesto."
+        }
+      }
+    }
+
+    const updated = await prisma.crmContact.update({
+      where: { id: contact.id },
+      data: { name: savedName },
+      include: { tags: { include: { tag: true } } },
+    })
+
+    const conversation = await prisma.crmConversation.findFirst({
+      where: { contactId: contact.id, userId },
+      include: CONVERSATION_INCLUDE,
+    })
+    if (conversation) {
+      emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(conversation) })
+    }
+
+    let message = whatsappSaved
+      ? "Contato salvo no Vesto e na agenda do WhatsApp."
+      : "Contato salvo no Vesto."
+    if (whatsappWarning) message = whatsappWarning
+
+    return res.json({
+      contact: formatContactRow(updated),
+      whatsappSaved,
+      message,
+    })
   })
 
   router.post("/contacts/:id/tags", async (req, res) => {
@@ -797,8 +873,8 @@ function createCrmRouter({ io }) {
       directorySize: result.directorySize,
       message:
         result.enriched || result.queued
-          ? "Nomes e fotos estão sendo atualizados. A lista recarrega automaticamente."
-          : "Nenhum perfil novo encontrado na agenda do WhatsApp.",
+          ? `Perfis atualizados: ${result.enriched} imediato(s), ${result.queued} na fila (fotos aparecem aos poucos, inclusive sem contato salvo).`
+          : "Nenhum perfil novo encontrado. Alguns contatos podem não expor foto no WhatsApp.",
     })
   })
 

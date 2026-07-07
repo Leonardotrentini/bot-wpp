@@ -16,6 +16,7 @@ import {
   MessageSquare,
   ChevronDown,
   User,
+  UserPlus,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -36,6 +37,7 @@ import {
   markCrmConversationRead,
   patchCrmConversation,
   patchCrmContact,
+  saveCrmContact,
   getCrmTags,
   createCrmTag,
   addCrmContactTag,
@@ -205,6 +207,9 @@ export function Chat() {
 
   const [showPanel, setShowPanel] = useState(true)
   const [notesDraft, setNotesDraft] = useState('')
+  const [nameDraft, setNameDraft] = useState('')
+  const [saveOnWhatsapp, setSaveOnWhatsapp] = useState(true)
+  const [savingContact, setSavingContact] = useState(false)
   const [newTagModal, setNewTagModal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
 
@@ -349,7 +354,8 @@ export function Chat() {
 
   useEffect(() => {
     setNotesDraft(active?.contact?.notes || '')
-  }, [activeId, active?.contact?.notes])
+    setNameDraft(active?.contact?.savedName || '')
+  }, [activeId, active?.contact?.notes, active?.contact?.savedName])
 
   // ------------------------------------------------ ações
 
@@ -424,7 +430,7 @@ export function Chat() {
       const { data } = await patchCrmContact(active.contact.id, { notes: notesDraft })
       if (data.contact) {
         setConversations((prev) =>
-          prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, notes: data.contact.notes } } : c)),
+          prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...data.contact } } : c)),
         )
         toast.success('Notas salvas.')
       }
@@ -432,6 +438,28 @@ export function Chat() {
       toast.error('Falha ao salvar notas.')
     }
   }, [active, notesDraft, activeId, toast])
+
+  const saveContactName = useCallback(async () => {
+    const name = nameDraft.trim()
+    if (!active?.contact?.id || !name) return
+    setSavingContact(true)
+    try {
+      const { data } = await saveCrmContact(active.contact.id, { name, saveOnWhatsapp })
+      if (data.contact) {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...data.contact } } : c)),
+        )
+        setNameDraft(data.contact.savedName || name)
+      }
+      if (data.whatsappSaved) toast.success(data.message || 'Contato salvo.')
+      else if (data.message?.includes('apenas no Vesto')) toast.info(data.message)
+      else toast.success(data.message || 'Nome salvo no Vesto.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao salvar contato.')
+    } finally {
+      setSavingContact(false)
+    }
+  }, [active, nameDraft, saveOnWhatsapp, activeId, toast])
 
   const toggleContactTag = useCallback(
     async (tag) => {
@@ -839,12 +867,49 @@ export function Chat() {
           <div className="flex flex-col items-center gap-2 border-b border-brand-800 px-4 py-5">
             <UserAvatar name={active.contact?.name} src={active.contact?.avatarUrl} size="md" />
             <p className="text-center text-sm font-semibold text-stone-100">{active.contact?.name}</p>
+            {active.contact?.pushName && active.contact.pushName !== active.contact?.savedName && (
+              <p className="text-center text-xs text-stone-500">WhatsApp: {active.contact.pushName}</p>
+            )}
             <p className="text-xs text-stone-500">
               {active.contact?.phone ? `+${active.contact.phone}` : active.remoteJid.split('@')[0]}
             </p>
           </div>
 
           <div className="space-y-4 p-4">
+            <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                <UserPlus className="mr-1 inline h-3 w-3" />
+                Salvar contato
+              </p>
+              <input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                placeholder="Nome para identificar este contato"
+                className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+              />
+              {active.contact?.phone && (
+                <label className="mt-2 flex cursor-pointer items-start gap-2 text-[11px] leading-snug text-stone-400">
+                  <input
+                    type="checkbox"
+                    checked={saveOnWhatsapp}
+                    onChange={(e) => setSaveOnWhatsapp(e.target.checked)}
+                    className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-brand-600 bg-brand-900 text-accent-500"
+                  />
+                  Salvar também na agenda do WhatsApp conectado
+                </label>
+              )}
+              <Button
+                size="sm"
+                variant="secondary"
+                className="mt-2 w-full"
+                onClick={saveContactName}
+                disabled={savingContact || !nameDraft.trim()}
+              >
+                {savingContact ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+                Salvar contato
+              </Button>
+            </div>
+
             <div>
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Status</p>
               <Select

@@ -24,9 +24,9 @@ const {
 } = require("./crmCore")
 
 const PROFILE_RETRY_MS = Number(process.env.CRM_PROFILE_RETRY_MS || 12 * 3600 * 1000)
-const PROFILE_FETCH_GAP_MS = Number(process.env.CRM_PROFILE_FETCH_GAP_MS || 2500)
-const PROFILE_QUEUE_MAX = Number(process.env.CRM_PROFILE_QUEUE_MAX || 30)
-const PROFILE_BATCH_QUEUE_MAX = Number(process.env.CRM_PROFILE_BATCH_QUEUE_MAX || 40)
+const PROFILE_FETCH_GAP_MS = Number(process.env.CRM_PROFILE_FETCH_GAP_MS || 2000)
+const PROFILE_QUEUE_MAX = Number(process.env.CRM_PROFILE_QUEUE_MAX || 60)
+const PROFILE_BATCH_QUEUE_MAX = Number(process.env.CRM_PROFILE_BATCH_QUEUE_MAX || 120)
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -106,13 +106,19 @@ function mergeChatsIntoDirectory(directory, chats = []) {
   return directory
 }
 
+/** Extrai URL da foto (fetchProfilePictureUrl ou fetchProfile). */
+function pickAvatarFromPicturePayload(payload) {
+  const p = payload?.data || payload?.response || payload || {}
+  return cleanUrl(p?.profilePictureUrl || p?.profilePicUrl || p?.picture || p?.imgUrl)
+}
+
 /** Extrai { pushName, avatarUrl } da resposta do fetchProfile (formatos variados). */
 function pickProfileFields(payload) {
   const p = payload?.data || payload?.response || payload?.profile || payload || {}
   const phoneDigits = resolvePhoneDigits(p) || phoneDigitsFromJid(p?.id || p?.remoteJid)
   return {
     pushName: cleanText(displayNameFromParticipant(p, phoneDigits) || p?.name || p?.pushName || p?.verifiedName),
-    avatarUrl: cleanUrl(p?.picture || p?.profilePicUrl || p?.profilePictureUrl),
+    avatarUrl: pickAvatarFromPicturePayload(p),
   }
 }
 
@@ -179,19 +185,26 @@ async function syncContactProfiles(deps, { userId, instanceName, chats = [] } = 
 
 function queueMissingProfileFetches(deps, { userId, instanceName, limit = PROFILE_BATCH_QUEUE_MAX }) {
   const { prisma } = deps
-  if (!prisma || !instanceName) return 0
+  if (!prisma || !instanceName) return Promise.resolve(0)
 
   return prisma.crmContact
     .findMany({
       where: { userId },
       select: { remoteJid: true, pushName: true, name: true, avatarUrl: true, isLid: true },
-      take: Math.max(limit * 3, 50),
     })
     .then((contacts) => {
+      const pending = contacts
+        .filter((c) => contactNeedsProfile(c))
+        .sort((a, b) => {
+          const aScore = !a.avatarUrl ? 0 : 1
+          const bScore = !b.avatarUrl ? 0 : 1
+          if (aScore !== bScore) return aScore - bScore
+          return Number(a.isLid) - Number(b.isLid)
+        })
+
       let queued = 0
-      for (const contact of contacts) {
+      for (const contact of pending) {
         if (queued >= limit) break
-        if (!contactNeedsProfile(contact)) continue
         if (scheduleProfileFetch(deps, { userId, instanceName, remoteJid: contact.remoteJid })) queued += 1
       }
       return queued
@@ -210,9 +223,8 @@ let queuedCount = 0
  * deps: { prisma, io, fetchProfile }. Retorna true se entrou na fila.
  */
 function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
-  const { prisma, io, fetchProfile } = deps
-  if (!fetchProfile || !instanceName || !remoteJid) return false
-  if (String(remoteJid).endsWith("@lid")) return false
+  const { prisma, io, fetchProfile, fetchProfilePictureUrl } = deps
+  if (!instanceName || !remoteJid) return false
 
   const key = `${userId}:${remoteJid}`
   const last = lastAttemptByKey.get(key) || 0
@@ -225,8 +237,29 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
   fetchChain = fetchChain
     .then(async () => {
       await wait(PROFILE_FETCH_GAP_MS)
-      const payload = await fetchProfile(instanceName, remoteJid.split("@")[0])
-      const { pushName, avatarUrl } = pickProfileFields(payload)
+
+      let pushName = null
+      let avatarUrl = null
+
+      // Foto: endpoint dedicado — funciona sem contato salvo na agenda
+      if (typeof fetchProfilePictureUrl === "function") {
+        try {
+          avatarUrl = pickAvatarFromPicturePayload(await fetchProfilePictureUrl(instanceName, remoteJid))
+        } catch {
+          /* tenta fetchProfile abaixo */
+        }
+      }
+
+      if ((!avatarUrl || !pushName) && typeof fetchProfile === "function" && !String(remoteJid).endsWith("@lid")) {
+        try {
+          const fields = pickProfileFields(await fetchProfile(instanceName, remoteJid.split("@")[0]))
+          pushName = pushName || fields.pushName
+          avatarUrl = avatarUrl || fields.avatarUrl
+        } catch {
+          /* ignore */
+        }
+      }
+
       if (!pushName && !avatarUrl) return
 
       const contact = await prisma.crmContact.findUnique({
@@ -260,17 +293,23 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
   return true
 }
 
-/** true quando o contato ainda não tem nome nem foto (candidato a enriquecimento). */
+/** true quando falta foto ou nome do WhatsApp (candidato a enriquecimento). */
 function contactNeedsProfile(contact) {
   if (!contact) return false
-  if (contact.isLid) return !contact.avatarUrl
-  return !contact.avatarUrl || !(contact.pushName || contact.name)
+  return contactNeedsAvatar(contact) || !(contact.pushName || contact.name)
+}
+
+/** true quando ainda não tem foto de perfil. */
+function contactNeedsAvatar(contact) {
+  if (!contact) return false
+  return !contact.avatarUrl
 }
 
 module.exports = {
   buildContactDirectory,
   mergeChatsIntoDirectory,
   pickProfileFields,
+  pickAvatarFromPicturePayload,
   lookupDirectoryInfo,
   buildProfileDirectory,
   enrichContactsFromDirectory,
@@ -278,4 +317,5 @@ module.exports = {
   queueMissingProfileFetches,
   scheduleProfileFetch,
   contactNeedsProfile,
+  contactNeedsAvatar,
 }

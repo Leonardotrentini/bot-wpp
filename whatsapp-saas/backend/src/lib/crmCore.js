@@ -72,6 +72,7 @@ function formatContactRow(contact, { tags } = {}) {
     id: contact.id,
     remoteJid: contact.remoteJid,
     name: resolveContactDisplayName(contact),
+    savedName: contact.name || null,
     pushName,
     phone: phoneDigits || null,
     avatarUrl: contact.avatarUrl || null,

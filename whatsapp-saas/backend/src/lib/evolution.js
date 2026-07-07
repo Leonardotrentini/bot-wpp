@@ -253,6 +253,35 @@ async function fetchProfile(instanceName, number) {
   ])
 }
 
+/** Foto de perfil — funciona mesmo sem o contato salvo na agenda. */
+async function fetchProfilePictureUrl(instanceName, numberOrJid) {
+  const raw = String(numberOrJid || "").trim()
+  const digits = raw.replace(/\D/g, "")
+  const bodyVariants = []
+  if (raw.includes("@")) bodyVariants.push({ number: raw })
+  if (digits) {
+    bodyVariants.push({ number: digits })
+    bodyVariants.push({ number: `${digits}@s.whatsapp.net` })
+  }
+  const attempts = []
+  for (const body of bodyVariants) {
+    attempts.push(() =>
+      requestEvolution(`/chat/fetchProfilePictureUrl/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    )
+  }
+  return firstSuccess(attempts)
+}
+
+/** Salva contato na agenda do WhatsApp conectado. */
+async function saveContact(instanceName, { number, name, saveOnDevice = true }) {
+  const digits = String(number || "").replace(/\D/g, "")
+  const body = { number: digits, name: String(name || "").trim(), saveOnDevice: Boolean(saveOnDevice) }
+  return firstSuccess([
+    () => requestEvolution(`/contact/save/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+    () => requestEvolution(`/chat/saveContact/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+  ])
+}
+
 /** Lista contatos da instância (pushName / número quando disponível). */
 async function findContacts(instanceName, where = {}) {
   return firstSuccess([
@@ -396,6 +425,8 @@ module.exports = {
   fetchGroupParticipants,
   findContacts,
   fetchProfile,
+  fetchProfilePictureUrl,
+  saveContact,
   fetchGroupMessages,
   findChats,
   fetchChatMessages,

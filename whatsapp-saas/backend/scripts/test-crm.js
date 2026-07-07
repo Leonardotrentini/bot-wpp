@@ -12,7 +12,7 @@ const {
   deliveryDelayMs,
 } = require("../src/lib/crmFlows")
 const { extractIndividualChats } = require("../src/lib/crmSync")
-const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, contactNeedsProfile, lookupDirectoryInfo } = require("../src/lib/crmProfile")
+const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, pickAvatarFromPicturePayload, contactNeedsProfile, contactNeedsAvatar, lookupDirectoryInfo } = require("../src/lib/crmProfile")
 const { containsHandoffKeyword } = require("../src/lib/crmAiAgent")
 
 let passed = 0
@@ -212,11 +212,24 @@ test("pickProfileFields lê variações do fetchProfile", () => {
   assert.deepStrictEqual(pickProfileFields(null), { pushName: null, avatarUrl: null })
 })
 
+test("pickAvatarFromPicturePayload lê fetchProfilePictureUrl", () => {
+  assert.strictEqual(
+    pickAvatarFromPicturePayload({ profilePictureUrl: "https://pps.whatsapp.net/x.jpg" }),
+    "https://pps.whatsapp.net/x.jpg",
+  )
+  assert.strictEqual(pickAvatarFromPicturePayload({ wuid: "5511@s.whatsapp.net" }), null)
+})
+
 test("contactNeedsProfile detecta contato sem nome ou sem foto", () => {
   assert.strictEqual(contactNeedsProfile({ pushName: null, name: null, avatarUrl: null }), true)
   assert.strictEqual(contactNeedsProfile({ pushName: "Maria", avatarUrl: null }), true)
-  assert.strictEqual(contactNeedsProfile({ pushName: "Maria", avatarUrl: "https://pps.whatsapp.net/m.jpg" }), false)
+  assert.strictEqual(contactNeedsProfile({ pushName: "Maria", avatarUrl: "https://pps.whatsapp.net/m.jpg", name: "Maria" }), false)
   assert.strictEqual(contactNeedsProfile(null), false)
+})
+
+test("contactNeedsAvatar prioriza busca de foto", () => {
+  assert.strictEqual(contactNeedsAvatar({ avatarUrl: null }), true)
+  assert.strictEqual(contactNeedsAvatar({ avatarUrl: "https://pps.whatsapp.net/m.jpg" }), false)
 })
 
 test("lookupDirectoryInfo encontra perfil pelo telefone quando JID difere", () => {
@@ -248,6 +261,7 @@ test("formatContactRow usa pushName do WhatsApp quando disponível", () => {
     id: "c2",
     remoteJid: "5511999999999@s.whatsapp.net",
     phone: "5511999999999",
+    name: null,
     pushName: "Leonardo",
     avatarUrl: "https://pps.whatsapp.net/l.jpg",
     isLid: false,
@@ -255,7 +269,24 @@ test("formatContactRow usa pushName do WhatsApp quando disponível", () => {
     tags: [],
   })
   assert.strictEqual(row.name, "Leonardo")
+  assert.strictEqual(row.savedName, null)
   assert.strictEqual(row.avatarUrl, "https://pps.whatsapp.net/l.jpg")
+})
+
+test("formatContactRow prioriza nome salvo manualmente", () => {
+  const row = formatContactRow({
+    id: "c3",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    phone: "5511999999999",
+    name: "Cliente VIP",
+    pushName: "Leonardo",
+    avatarUrl: null,
+    isLid: false,
+    notes: "",
+    tags: [],
+  })
+  assert.strictEqual(row.name, "Cliente VIP")
+  assert.strictEqual(row.savedName, "Cliente VIP")
 })
 
 // ---------------- crmAiAgent
