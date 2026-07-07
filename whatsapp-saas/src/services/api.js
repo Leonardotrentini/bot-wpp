@@ -572,6 +572,13 @@ export async function getCrmConversationMessages(id, params = {}) {
   return mockResponse({ messages: [], hasMore: false })
 }
 
+export async function getCrmMessageMedia(messageId) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(`/crm/messages/${encodeURIComponent(messageId)}/media`, { timeout: 120000 })
+  }
+  return mockResponse({ kind: 'audio', mimetype: 'audio/ogg', base64: '' })
+}
+
 export async function sendCrmMessage(id, payload) {
   if (resolveUseRealApi()) {
     return apiClient.post(`/crm/conversations/${encodeURIComponent(id)}/send`, payload, { timeout: 120000 })
@@ -667,12 +674,12 @@ export async function getCrmQuickReplies() {
 }
 
 export async function createCrmQuickReply(payload) {
-  if (resolveUseRealApi()) return apiClient.post('/crm/quick-replies', payload)
+  if (resolveUseRealApi()) return apiClient.post('/crm/quick-replies', payload, { timeout: 120000 })
   return mockResponse({ quickReply: { id: `qr-${Date.now()}`, ...payload } })
 }
 
 export async function updateCrmQuickReply(id, payload) {
-  if (resolveUseRealApi()) return apiClient.put(`/crm/quick-replies/${encodeURIComponent(id)}`, payload)
+  if (resolveUseRealApi()) return apiClient.put(`/crm/quick-replies/${encodeURIComponent(id)}`, payload, { timeout: 120000 })
   return mockResponse({ quickReply: { id, ...payload } })
 }
 

@@ -112,6 +112,24 @@ test("isWithinQuietHours respeita intervalo que atravessa a meia-noite", () => {
   assert.strictEqual(isWithinQuietHours(null, night), false)
 })
 
+test("normalizeMessageMediaKind detecta áudio e vídeo", () => {
+  const { normalizeMessageMediaKind } = require("../src/lib/crmCore")
+  assert.strictEqual(normalizeMessageMediaKind("audioMessage"), "audio")
+  assert.strictEqual(normalizeMessageMediaKind("pttMessage"), "audio")
+  assert.strictEqual(normalizeMessageMediaKind("videoMessage"), "video")
+  assert.strictEqual(normalizeMessageMediaKind("conversation"), null)
+})
+
+test("extractMediaBase64Payload lê base64 da resposta Evolution", () => {
+  const { extractMediaBase64Payload } = require("../src/lib/evolution")
+  const out = extractMediaBase64Payload({
+    base64: "abc123",
+    mimetype: "audio/ogg; codecs=opus",
+  })
+  assert.strictEqual(out.base64, "abc123")
+  assert.strictEqual(out.mimetype, "audio/ogg")
+})
+
 test("deliveryDelayMs sempre com delay mínimo", () => {
   for (let i = 0; i < 20; i += 1) {
     const d = deliveryDelayMs()

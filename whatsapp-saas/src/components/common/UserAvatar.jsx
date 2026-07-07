@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 function initialsFromName(name) {
   const parts = String(name || '')
     .trim()
@@ -17,12 +19,18 @@ const sizeClasses = {
 
 export function UserAvatar({ name, src, size = 'md', className = '' }) {
   const box = sizeClasses[size] || sizeClasses.md
+  const [imgFailed, setImgFailed] = useState(false)
 
-  if (src) {
+  useEffect(() => {
+    setImgFailed(false)
+  }, [src])
+
+  if (src && !imgFailed) {
     return (
       <img
         src={src}
         alt=""
+        onError={() => setImgFailed(true)}
         className={`${box} shrink-0 border border-brand-700 object-cover bg-brand-800 ${className}`}
       />
     )

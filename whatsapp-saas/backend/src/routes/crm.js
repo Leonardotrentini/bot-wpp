@@ -7,7 +7,18 @@ const express = require("express")
 const { z } = require("zod")
 const { prisma } = require("../lib/prisma")
 const { authMiddleware } = require("../lib/auth")
-const { sendText, sendMedia, findChats, findContacts, fetchChatMessages, fetchProfile, fetchProfilePictureUrl, saveContact } = require("../lib/evolution")
+const {
+  sendText,
+  sendMedia,
+  findChats,
+  findContacts,
+  fetchChatMessages,
+  fetchProfile,
+  fetchProfilePictureUrl,
+  saveContact,
+  getBase64FromMediaMessage,
+  extractMediaBase64Payload,
+} = require("../lib/evolution")
 const { enqueueUserSend } = require("../lib/sendQueue")
 const { validateMediaContentSize } = require("../lib/mediaLimits")
 const {
@@ -17,9 +28,11 @@ const {
   previewFromBody,
   emitCrmEvent,
   CONVERSATION_INCLUDE,
+  normalizeMessageMediaKind,
 } = require("../lib/crmCore")
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles } = require("../lib/crmProfile")
+const { ensureMessageRaw } = require("../lib/crmMedia")
 const { onStageChange } = require("../lib/crmFlows")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
 
@@ -77,6 +90,21 @@ function formatFlowRow(flow) {
     quietHours: flow.quietHours || null,
     createdAt: flow.createdAt.toISOString(),
   }
+}
+
+function validateFlowActions(actions) {
+  for (const action of actions) {
+    if (action.type !== "send_message") continue
+    const err = validateMediaContentSize({
+      body: action.body || "",
+      mediaType: action.mediaType || "none",
+      mediaBase64: action.mediaBase64,
+      mediaMime: action.mediaMime,
+      mediaName: action.mediaName,
+    })
+    if (err) return err
+  }
+  return null
 }
 
 function formatAgentRow(agent) {
@@ -181,11 +209,55 @@ function createCrmRouter({ io }) {
     })
   })
 
+  router.get("/messages/:messageId/media", async (req, res) => {
+    const userId = req.user.sub
+    const msg = await prisma.crmMessage.findFirst({
+      where: { id: req.params.messageId, userId },
+    })
+    if (!msg) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+
+    const mediaKind = normalizeMessageMediaKind(msg.type)
+    if (!mediaKind) {
+      return res.status(400).json({ error: "NOT_MEDIA", message: "Esta mensagem não contém mídia." })
+    }
+
+    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+    if (!conn || !conn.connected) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    const rawRecord = await ensureMessageRaw({ prisma, fetchChatMessages }, msg)
+    if (!rawRecord || typeof rawRecord !== "object") {
+      return res.status(409).json({ error: "MEDIA_UNAVAILABLE", message: "Mídia indisponível para esta mensagem." })
+    }
+
+    try {
+      const resp = await getBase64FromMediaMessage(conn.instanceName, rawRecord, {
+        convertToMp4: mediaKind === "video",
+      })
+      const media = extractMediaBase64Payload(resp)
+      if (!media) {
+        return res.status(502).json({ error: "MEDIA_FETCH_FAILED", message: "Não foi possível baixar a mídia." })
+      }
+      return res.json({
+        kind: mediaKind,
+        mimetype: media.mimetype || msg.mediaMime || null,
+        base64: media.base64,
+      })
+    } catch (err) {
+      console.error("[crm] media download failed:", err?.message || err)
+      return res.status(502).json({
+        error: "MEDIA_FETCH_FAILED",
+        message: err?.message || "Falha ao baixar mídia do WhatsApp.",
+      })
+    }
+  })
+
   router.post("/conversations/:id/send", async (req, res) => {
     const userId = req.user.sub
     const schema = z.object({
       body: z.string().max(4096).optional().default(""),
-      mediaType: z.enum(["none", "image", "video"]).optional().default("none"),
+      mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional().default("none"),
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().max(120).optional().nullable(),
       mediaName: z.string().max(255).optional().nullable(),
@@ -592,18 +664,30 @@ function createCrmRouter({ io }) {
       .max(30)
       .regex(/^[a-z0-9_-]+$/i, "Use apenas letras, números, hífen e underline."),
     title: z.string().max(80).optional().default(""),
-    body: z.string().min(1).max(4096),
-    mediaType: z.enum(["none", "image", "video"]).optional().default("none"),
+    body: z.string().max(4096).optional().default(""),
+    mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional().default("none"),
     mediaBase64: z.string().optional().nullable(),
     mediaMime: z.string().max(120).optional().nullable(),
     mediaName: z.string().max(255).optional().nullable(),
   })
+
+  function validateQuickReplyPayload(data) {
+    return validateMediaContentSize({
+      body: data.body || "",
+      mediaType: data.mediaType || "none",
+      mediaBase64: data.mediaBase64,
+      mediaMime: data.mediaMime,
+      mediaName: data.mediaName,
+    })
+  }
 
   router.post("/quick-replies", async (req, res) => {
     const parsed = quickReplySchema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Atalho inválido. Use letras/números sem espaços." })
     }
+    const qrError = validateQuickReplyPayload(parsed.data)
+    if (qrError) return res.status(400).json({ error: "VALIDATION_ERROR", message: qrError })
     try {
       const qr = await prisma.crmQuickReply.create({
         data: { userId: req.user.sub, ...parsed.data, shortcut: parsed.data.shortcut.toLowerCase() },
@@ -617,6 +701,8 @@ function createCrmRouter({ io }) {
   router.put("/quick-replies/:id", async (req, res) => {
     const parsed = quickReplySchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Atalho inválido." })
+    const qrError = validateQuickReplyPayload(parsed.data)
+    if (qrError) return res.status(400).json({ error: "VALIDATION_ERROR", message: qrError })
     const qr = await prisma.crmQuickReply.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
     if (!qr) return res.status(404).json({ error: "NOT_FOUND", message: "Atalho não encontrado." })
     const updated = await prisma.crmQuickReply.update({
@@ -672,6 +758,10 @@ function createCrmRouter({ io }) {
         z.object({
           type: z.enum(["send_message", "add_tag", "move_stage", "assign_ai", "set_status"]),
           body: z.string().max(4096).optional(),
+          mediaType: z.enum(["none", "image", "video", "audio"]).optional(),
+          mediaBase64: z.string().optional().nullable(),
+          mediaMime: z.string().max(120).optional().nullable(),
+          mediaName: z.string().max(255).optional().nullable(),
           tagId: z.string().optional(),
           stageId: z.string().optional(),
           agentId: z.string().optional(),
@@ -695,6 +785,8 @@ function createCrmRouter({ io }) {
     if (parsed.data.trigger.type === "keyword" && !parsed.data.trigger.keywords?.length) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe pelo menos uma palavra-chave." })
     }
+    const actionError = validateFlowActions(parsed.data.actions)
+    if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
     const flow = await prisma.crmFlow.create({ data: { userId: req.user.sub, ...parsed.data } })
     return res.status(201).json({ flow: formatFlowRow(flow) })
   })
@@ -704,6 +796,8 @@ function createCrmRouter({ io }) {
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Fluxo inválido." })
     const flow = await prisma.crmFlow.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
     if (!flow) return res.status(404).json({ error: "NOT_FOUND", message: "Fluxo não encontrado." })
+    const actionError = validateFlowActions(parsed.data.actions)
+    if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
     const updated = await prisma.crmFlow.update({ where: { id: flow.id }, data: parsed.data })
     return res.json({ flow: formatFlowRow(updated) })
   })

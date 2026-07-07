@@ -17,6 +17,9 @@ import {
   ChevronDown,
   User,
   UserPlus,
+  Mic,
+  Film,
+  FileText,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -30,6 +33,9 @@ import { useAuth } from '../../contexts/AuthContext.jsx'
 import { onSocketEvent } from '../../services/socket.js'
 import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
 import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingModal.jsx'
+import { ChatMessageContent } from '../../components/crm/ChatMessageContent.jsx'
+import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
+import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
 import {
   getCrmConversations,
   getCrmConversationMessages,
@@ -87,10 +93,15 @@ function formatEta(seconds) {
   return `~${min}min restantes`
 }
 
-function mediaTypeFromMime(mime) {
+function mediaTypeFromMime(mime, name = '') {
+  if (!mime && name) {
+    if (/\.pdf$/i.test(name)) return 'document'
+  }
   if (!mime) return 'none'
   if (mime.startsWith('image/')) return 'image'
   if (mime.startsWith('video/')) return 'video'
+  if (mime.startsWith('audio/')) return 'audio'
+  if (mime === 'application/pdf') return 'document'
   return 'none'
 }
 
@@ -121,16 +132,12 @@ function SyncBanner({ job, onStartSync, syncStarting, onRefreshProfiles, profile
             {profileRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <User className="h-3.5 w-3.5" />}
             Nomes e fotos
           </Button>
-          <select
-            value={days}
-            onChange={(e) => setDays(e.target.value)}
-            className="rounded-lg border border-brand-700 bg-brand-900 px-2 py-1 text-xs text-stone-200"
-          >
+          <Select className="w-28" value={days} onChange={(e) => setDays(e.target.value)}>
             <option value="7">7 dias</option>
             <option value="30">30 dias</option>
             <option value="90">90 dias</option>
             <option value="180">180 dias</option>
-          </select>
+          </Select>
           <Button size="sm" variant="secondary" onClick={() => onStartSync(Number(days))} disabled={syncStarting || profileRefreshing}>
             {syncStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Sincronizar
@@ -192,6 +199,7 @@ export function Chat() {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState(null) // { base64, mime, name, type }
+  const [isRecording, setIsRecording] = useState(false)
 
   const [tags, setTags] = useState([])
   const [stages, setStages] = useState([])
@@ -394,9 +402,9 @@ export function Chat() {
   const handleFile = useCallback(
     (file) => {
       if (!file) return
-      const type = mediaTypeFromMime(file.type)
+      const type = mediaTypeFromMime(file.type, file.name)
       if (type === 'none') {
-        toast.error('Envie apenas imagem ou vídeo MP4.')
+        toast.error('Envie imagem, vídeo MP4, áudio ou PDF.')
         return
       }
       const reader = new FileReader()
@@ -548,7 +556,7 @@ export function Chat() {
           toast.error('Falha ao carregar a mídia do atalho.')
         }
       }
-      setDraft((prev) => (prev ? `${prev} ${qr.body}` : qr.body))
+      setDraft((prev) => (qr.body ? (prev ? `${prev} ${qr.body}` : qr.body) : prev))
       inputRef.current?.focus()
     },
     [toast],
@@ -618,29 +626,21 @@ export function Chat() {
             />
           </div>
           <div className="flex gap-2">
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="flex-1 rounded-lg border border-brand-700 bg-brand-900 px-2 py-1.5 text-xs text-stone-200"
-            >
+            <Select className="flex-1 min-w-0" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">Todas</option>
               <option value="open">Abertas</option>
               <option value="pending">Pendentes</option>
               <option value="resolved">Resolvidas</option>
               <option value="archived">Arquivadas</option>
-            </select>
-            <select
-              value={tagFilter}
-              onChange={(e) => setTagFilter(e.target.value)}
-              className="flex-1 rounded-lg border border-brand-700 bg-brand-900 px-2 py-1.5 text-xs text-stone-200"
-            >
+            </Select>
+            <Select className="flex-1 min-w-0" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
               <option value="">Todas as tags</option>
               {tags.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto">
@@ -766,18 +766,7 @@ export function Chat() {
                             : 'rounded-bl-md bg-brand-800 text-stone-200'
                         }`}
                       >
-                        {item.msg.type !== 'text' && !item.msg.body && (
-                          <p className="italic text-stone-400">
-                            {item.msg.type.includes('image')
-                              ? '📷 Imagem'
-                              : item.msg.type.includes('video')
-                                ? '🎬 Vídeo'
-                                : item.msg.type.includes('audio')
-                                  ? '🎤 Áudio'
-                                  : '📎 Mídia'}
-                          </p>
-                        )}
-                        {item.msg.body && <p className="whitespace-pre-wrap break-words">{item.msg.body}</p>}
+                        <ChatMessageContent message={item.msg} />
                         <div className="mt-1 flex items-center justify-end gap-1">
                           {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
                           {item.msg.source === 'flow' && <Zap className="h-3 w-3 text-amber-400" />}
@@ -810,19 +799,43 @@ export function Chat() {
                 </div>
               )}
               {attachment && (
-                <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand-700 bg-brand-800/60 px-3 py-1.5 text-xs text-stone-300">
-                  <Paperclip className="h-3.5 w-3.5" />
-                  <span className="truncate">{attachment.name}</span>
-                  <button type="button" onClick={() => setAttachment(null)} className="ml-auto text-stone-500 hover:text-stone-200">
+                <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand-700 bg-brand-800/60 px-3 py-2 text-xs text-stone-300">
+                  {attachment.type === 'audio' ? (
+                    <Mic className="h-3.5 w-3.5 shrink-0" />
+                  ) : attachment.type === 'video' ? (
+                    <Film className="h-3.5 w-3.5 shrink-0" />
+                  ) : attachment.type === 'document' ? (
+                    <FileText className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate">{attachment.name}</span>
+                    {attachment.type === 'audio' && (
+                      <audio
+                        src={`data:${attachment.mime};base64,${attachment.base64}`}
+                        controls
+                        className="mt-1 h-8 w-full max-w-xs"
+                        preload="metadata"
+                      />
+                    )}
+                  </div>
+                  <button type="button" onClick={() => setAttachment(null)} className="shrink-0 text-stone-500 hover:text-stone-200">
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
               )}
               <div className="flex items-end gap-2">
+                <ChatQuickRepliesMenu
+                  quickReplies={quickReplies}
+                  onQuickRepliesChange={setQuickReplies}
+                  onApply={applyQuickReply}
+                  draft={draft}
+                />
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/*,video/mp4"
+                  accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
                   className="hidden"
                   onChange={(e) => {
                     handleFile(e.target.files?.[0])
@@ -832,11 +845,18 @@ export function Chat() {
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
-                  title="Anexar imagem ou vídeo"
+                  disabled={isRecording || Boolean(attachment)}
+                  className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
+                  title="Anexar imagem, vídeo, áudio ou PDF"
                 >
                   <Paperclip className="h-5 w-5" />
                 </button>
+                <AudioRecorderButton
+                  disabled={sending || Boolean(attachment)}
+                  onRecorded={setAttachment}
+                  onError={(msg) => toast.error(msg)}
+                  onRecordingChange={setIsRecording}
+                />
                 <textarea
                   ref={inputRef}
                   value={draft}
@@ -849,10 +869,11 @@ export function Chat() {
                     if (e.key === 'Escape') setQrOpen(false)
                   }}
                   rows={1}
-                  placeholder="Digite uma mensagem… (use / para atalhos)"
-                  className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+                  disabled={isRecording}
+                  placeholder={isRecording ? 'Gravando áudio…' : 'Digite uma mensagem… (use / para atalhos)'}
+                  className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 disabled:opacity-50"
                 />
-                <Button onClick={handleSend} disabled={sending || (!draft.trim() && !attachment)}>
+                <Button onClick={handleSend} disabled={sending || isRecording || (!draft.trim() && !attachment)}>
                   {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>

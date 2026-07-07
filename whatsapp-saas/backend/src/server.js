@@ -3086,7 +3086,7 @@ async function updateGroupsFromWebhook(instanceName, body) {
 
 /** Deps compartilhadas dos motores do CRM (fluxos, IA, fila de envio). */
 function getCrmDeps() {
-  return { prisma, io, sendText, findChats, fetchChatMessages }
+  return { prisma, io, sendText, sendMedia, findChats, fetchChatMessages }
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */

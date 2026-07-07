@@ -110,8 +110,18 @@ function formatConversationRow(convo) {
   }
 }
 
+function normalizeMessageMediaKind(type) {
+  const t = String(type || "").toLowerCase()
+  if (t.includes("image") || t.includes("sticker")) return "image"
+  if (t.includes("video")) return "video"
+  if (t.includes("audio") || t.includes("ptt")) return "audio"
+  if (t.includes("document")) return "document"
+  return null
+}
+
 function formatMessageRow(msg) {
   if (!msg) return null
+  const mediaKind = normalizeMessageMediaKind(msg.type)
   return {
     id: msg.id,
     conversationId: msg.conversationId,
@@ -119,6 +129,8 @@ function formatMessageRow(msg) {
     fromMe: Boolean(msg.fromMe),
     senderJid: msg.senderJid || null,
     type: msg.type || "text",
+    mediaKind,
+    hasMedia: Boolean(mediaKind),
     body: msg.body || "",
     mediaMime: msg.mediaMime || null,
     status: msg.status,
@@ -195,12 +207,15 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
   return { contact, conversation }
 }
 
+const { unwrapBaileysMessage } = require("./crmMedia")
+
 function extractMediaMime(record) {
-  const m = record?.message || {}
+  const m = unwrapBaileysMessage(record?.message) || record?.message || {}
   return (
     m.imageMessage?.mimetype ||
     m.videoMessage?.mimetype ||
     m.audioMessage?.mimetype ||
+    m.pttMessage?.mimetype ||
     m.documentMessage?.mimetype ||
     m.stickerMessage?.mimetype ||
     null
@@ -251,6 +266,8 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     update: {
       body: mapped.body,
       type: mapped.type,
+      raw: mapped.raw,
+      mediaMime: extractMediaMime(record),
     },
   })
   const created = !existing
@@ -305,6 +322,7 @@ module.exports = {
   formatContactRow,
   formatConversationRow,
   formatMessageRow,
+  normalizeMessageMediaKind,
   ensureContactAndConversation,
   ingestCrmMessage,
   emitCrmEvent,

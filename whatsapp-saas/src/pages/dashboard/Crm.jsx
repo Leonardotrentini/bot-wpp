@@ -24,15 +24,21 @@ import { Tabs } from '../../components/common/Tabs.jsx'
 import { Spinner } from '../../components/common/Spinner.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
+import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.jsx'
+import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
+import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
+import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia } from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
 import {
   getCrmConversations,
   patchCrmConversation,
   getCrmTags,
   createCrmTag,
+  updateCrmTag,
   deleteCrmTag,
   getCrmStages,
   createCrmStage,
+  updateCrmStage,
   deleteCrmStage,
   getCrmQuickReplies,
   createCrmQuickReply,
@@ -213,15 +219,22 @@ const EMPTY_FLOW = {
   name: '',
   enabled: false,
   trigger: { type: 'new_conversation' },
-  actions: [{ type: 'send_message', body: '' }],
+  actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
   cooldownPerContactHours: 24,
 }
 
 function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, saving }) {
+  const toast = useToast()
   const [flow, setFlow] = useState(EMPTY_FLOW)
 
   useEffect(() => {
-    if (isOpen) setFlow(initial ? JSON.parse(JSON.stringify(initial)) : { ...EMPTY_FLOW, actions: [{ type: 'send_message', body: '' }] })
+    if (isOpen) {
+      setFlow(
+        initial
+          ? JSON.parse(JSON.stringify(initial))
+          : { ...EMPTY_FLOW, actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }] },
+      )
+    }
   }, [isOpen, initial])
 
   const setTrigger = (patch) => setFlow((f) => ({ ...f, trigger: { ...f.trigger, ...patch } }))
@@ -233,7 +246,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
     flow.actions.length > 0 &&
     (flow.trigger.type !== 'keyword' || (flow.trigger.keywords || []).length > 0) &&
     flow.actions.every((a) => {
-      if (a.type === 'send_message') return String(a.body || '').trim()
+      if (a.type === 'send_message') return flowMessageHasContent(a)
       if (a.type === 'add_tag') return a.tagId
       if (a.type === 'move_stage') return a.stageId
       if (a.type === 'set_status') return a.value
@@ -324,7 +337,12 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setFlow((f) => ({ ...f, actions: [...f.actions, { type: 'send_message', body: '' }] }))}
+              onClick={() =>
+                setFlow((f) => ({
+                  ...f,
+                  actions: [...f.actions, { type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
+                }))
+              }
               disabled={flow.actions.length >= 5}
             >
               <Plus className="h-3.5 w-3.5" /> Ação
@@ -335,7 +353,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
               <div key={i} className="rounded-xl border border-brand-700/70 bg-brand-900/50 p-3">
                 <div className="flex items-center gap-2">
                   <div className="flex-1">
-                    <Select value={action.type} onChange={(e) => setAction(i, { type: e.target.value, body: '', tagId: '', stageId: '', value: '' })}>
+                    <Select value={action.type} onChange={(e) => setAction(i, { type: e.target.value, body: '', tagId: '', stageId: '', value: '', ...emptyFlowMessageMedia() })}>
                       <option value="send_message">Enviar mensagem</option>
                       <option value="add_tag">Adicionar tag ao contato</option>
                       <option value="move_stage">Mover no Kanban</option>
@@ -355,12 +373,10 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
                 </div>
                 <div className="mt-2">
                   {action.type === 'send_message' && (
-                    <textarea
-                      value={action.body || ''}
-                      onChange={(e) => setAction(i, { body: e.target.value })}
-                      rows={3}
-                      placeholder="Texto da mensagem automática…"
-                      className="w-full resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+                    <FlowMessageMedia
+                      action={action}
+                      onChange={(patch) => setAction(i, patch)}
+                      onError={(msg) => toast.error(msg)}
                     />
                   )}
                   {action.type === 'add_tag' && (
@@ -587,7 +603,15 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
   const [stageColor, setStageColor] = useState('#64748b')
   const [qrModal, setQrModal] = useState(false)
   const [qrEditing, setQrEditing] = useState(null)
-  const [qrForm, setQrForm] = useState({ shortcut: '', title: '', body: '' })
+  const [qrSaving, setQrSaving] = useState(false)
+  const [tagModal, setTagModal] = useState(false)
+  const [tagEditing, setTagEditing] = useState(null)
+  const [tagForm, setTagForm] = useState({ name: '', color: '#22c55e' })
+  const [tagSaving, setTagSaving] = useState(false)
+  const [stageModal, setStageModal] = useState(false)
+  const [stageEditing, setStageEditing] = useState(null)
+  const [stageForm, setStageForm] = useState({ name: '', color: '#64748b' })
+  const [stageSaving, setStageSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null) // { kind, id, label }
 
   const addTag = async () => {
@@ -614,13 +638,59 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
     }
   }
 
-  const saveQr = async () => {
-    const payload = {
-      shortcut: qrForm.shortcut.trim().toLowerCase(),
-      title: qrForm.title.trim(),
-      body: qrForm.body.trim(),
+  const openEditTag = (tag) => {
+    setTagEditing(tag)
+    setTagForm({ name: tag.name, color: tag.color || '#22c55e' })
+    setTagModal(true)
+  }
+
+  const saveTagEdit = async () => {
+    if (!tagEditing || !tagForm.name.trim()) return
+    setTagSaving(true)
+    try {
+      const { data } = await updateCrmTag(tagEditing.id, {
+        name: tagForm.name.trim(),
+        color: tagForm.color,
+      })
+      setTags((prev) =>
+        prev.map((t) => (t.id === tagEditing.id ? data.tag : t)).sort((a, b) => a.name.localeCompare(b.name)),
+      )
+      setTagModal(false)
+      toast.success('Tag atualizada.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar tag.')
+    } finally {
+      setTagSaving(false)
     }
-    if (!payload.shortcut || !payload.body) return
+  }
+
+  const openEditStage = (stage) => {
+    setStageEditing(stage)
+    setStageForm({ name: stage.name, color: stage.color || '#64748b' })
+    setStageModal(true)
+  }
+
+  const saveStageEdit = async () => {
+    if (!stageEditing || !stageForm.name.trim()) return
+    setStageSaving(true)
+    try {
+      const { data } = await updateCrmStage(stageEditing.id, {
+        name: stageForm.name.trim(),
+        color: stageForm.color,
+      })
+      setStages((prev) => prev.map((s) => (s.id === stageEditing.id ? data.stage : s)))
+      setStageModal(false)
+      toast.success('Estágio atualizado.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar estágio.')
+    } finally {
+      setStageSaving(false)
+    }
+  }
+
+  const saveQr = async (form) => {
+    const payload = buildQuickReplyPayload(form)
+    setQrSaving(true)
     try {
       if (qrEditing) {
         const { data } = await updateCrmQuickReply(qrEditing.id, payload)
@@ -633,6 +703,8 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
       toast.success('Atalho salvo.')
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao salvar atalho.')
+    } finally {
+      setQrSaving(false)
     }
   }
 
@@ -694,8 +766,17 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
               {t.name}
               <button
                 type="button"
+                onClick={() => openEditTag(t)}
+                className="opacity-40 transition hover:opacity-100"
+                title="Editar tag"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
                 onClick={() => setConfirmDelete({ kind: 'tag', id: t.id, label: `tag "${t.name}"` })}
                 className="opacity-40 transition hover:opacity-100"
+                title="Excluir tag"
               >
                 <Trash2 className="h-3 w-3" />
               </button>
@@ -735,8 +816,17 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
               {s.isDefault && <Badge variant="muted">padrão</Badge>}
               <button
                 type="button"
+                onClick={() => openEditStage(s)}
+                className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
+                title="Editar estágio"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
                 onClick={() => setConfirmDelete({ kind: 'stage', id: s.id, label: `estágio "${s.name}"` })}
                 className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-red-400"
+                title="Excluir estágio"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
@@ -755,7 +845,6 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
             variant="secondary"
             onClick={() => {
               setQrEditing(null)
-              setQrForm({ shortcut: '', title: '', body: '' })
               setQrModal(true)
             }}
           >
@@ -775,16 +864,18 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-accent-400">/{q.shortcut}</p>
                   {q.title && <p className="text-xs text-stone-400">{q.title}</p>}
-                  <p className="mt-0.5 truncate text-xs text-stone-500">{q.body}</p>
+                  <p className="mt-0.5 truncate text-xs text-stone-500">
+                    {q.body || (q.hasMedia ? `Anexo: ${QUICK_REPLY_MEDIA_LABELS[q.mediaType] || q.mediaType}` : '')}
+                  </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => {
                     setQrEditing(q)
-                    setQrForm({ shortcut: q.shortcut, title: q.title || '', body: q.body })
                     setQrModal(true)
                   }}
                   className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
+                  title="Editar atalho"
                 >
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
@@ -802,15 +893,16 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
       </Card>
 
       <Modal
-        isOpen={qrModal}
-        onClose={() => setQrModal(false)}
-        title={qrEditing ? 'Editar atalho' : 'Novo atalho'}
+        isOpen={tagModal}
+        onClose={() => setTagModal(false)}
+        title="Editar tag"
         footer={
           <>
-            <Button variant="ghost" onClick={() => setQrModal(false)}>
+            <Button variant="ghost" onClick={() => setTagModal(false)} disabled={tagSaving}>
               Cancelar
             </Button>
-            <Button onClick={saveQr} disabled={!qrForm.shortcut.trim() || !qrForm.body.trim()}>
+            <Button onClick={saveTagEdit} disabled={!tagForm.name.trim() || tagSaving}>
+              {tagSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Salvar
             </Button>
           </>
@@ -818,29 +910,66 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
       >
         <div className="space-y-3">
           <Input
-            label="Atalho (sem espaços — será usado como /atalho)"
-            value={qrForm.shortcut}
-            onChange={(e) => setQrForm((f) => ({ ...f, shortcut: e.target.value.replace(/[^a-z0-9_-]/gi, '').toLowerCase() }))}
-            placeholder="ex.: boasvindas"
-          />
-          <Input
-            label="Título (opcional)"
-            value={qrForm.title}
-            onChange={(e) => setQrForm((f) => ({ ...f, title: e.target.value }))}
-            placeholder="Ex.: Mensagem de boas-vindas"
+            label="Nome da tag"
+            value={tagForm.name}
+            onChange={(e) => setTagForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="Ex.: Qualificado"
           />
           <div>
-            <p className="mb-1.5 text-sm font-medium text-stone-300">Mensagem</p>
-            <textarea
-              value={qrForm.body}
-              onChange={(e) => setQrForm((f) => ({ ...f, body: e.target.value }))}
-              rows={5}
-              placeholder="Texto que será inserido no campo de mensagem…"
-              className="w-full resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+            <p className="mb-1.5 text-sm font-medium text-stone-300">Cor</p>
+            <input
+              type="color"
+              value={tagForm.color}
+              onChange={(e) => setTagForm((f) => ({ ...f, color: e.target.value }))}
+              className="h-10 w-full cursor-pointer rounded-lg border border-brand-700 bg-brand-900"
             />
           </div>
         </div>
       </Modal>
+
+      <Modal
+        isOpen={stageModal}
+        onClose={() => setStageModal(false)}
+        title="Editar estágio"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setStageModal(false)} disabled={stageSaving}>
+              Cancelar
+            </Button>
+            <Button onClick={saveStageEdit} disabled={!stageForm.name.trim() || stageSaving}>
+              {stageSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Salvar
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <Input
+            label="Nome do estágio"
+            value={stageForm.name}
+            onChange={(e) => setStageForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="Ex.: Em negociação"
+          />
+          <div>
+            <p className="mb-1.5 text-sm font-medium text-stone-300">Cor</p>
+            <input
+              type="color"
+              value={stageForm.color}
+              onChange={(e) => setStageForm((f) => ({ ...f, color: e.target.value }))}
+              className="h-10 w-full cursor-pointer rounded-lg border border-brand-700 bg-brand-900"
+            />
+          </div>
+        </div>
+      </Modal>
+
+      <QuickReplyFormModal
+        isOpen={qrModal}
+        onClose={() => setQrModal(false)}
+        initial={qrEditing}
+        onSave={saveQr}
+        saving={qrSaving}
+        onError={(msg) => toast.error(msg)}
+      />
 
       <ConfirmModal
         isOpen={Boolean(confirmDelete)}
@@ -946,7 +1075,7 @@ export function Crm() {
           enabled: flow.enabled,
           trigger: flow.trigger,
           conditions: flow.conditions || [],
-          actions: flow.actions,
+          actions: flow.actions.map(stripFlowActionForSave),
           cooldownPerContactHours: flow.cooldownPerContactHours,
         }
         if (flowEditing) {
@@ -1096,7 +1225,14 @@ export function Crm() {
                       <p className="mt-0.5 text-xs text-stone-500">
                         Ações:{' '}
                         <span className="text-stone-300">
-                          {(flow.actions || []).map((a) => ACTION_LABELS[a.type] || a.type).join(' → ')}
+                          {(flow.actions || [])
+                            .map((a) => {
+                              if (a.type === 'send_message' && a.mediaType && a.mediaType !== 'none') {
+                                return `${ACTION_LABELS[a.type]} (${a.mediaType === 'audio' ? 'áudio' : 'vídeo'})`
+                              }
+                              return ACTION_LABELS[a.type] || a.type
+                            })
+                            .join(' → ')}
                         </span>
                       </p>
                     </div>

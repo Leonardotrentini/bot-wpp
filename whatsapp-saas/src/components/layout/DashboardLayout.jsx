@@ -29,6 +29,9 @@ export function DashboardLayout() {
 
   const title = useMemo(() => {
     if (pathname.startsWith('/dashboard/groups/') && pathname !== '/dashboard/groups') return 'Detalhes do grupo'
+    if (pathname.startsWith('/dashboard/automations/library')) return 'Automações · Biblioteca'
+    if (pathname.startsWith('/dashboard/automations/cadences')) return 'Automações · Cadências'
+    if (pathname.startsWith('/dashboard/automations')) return 'Automações'
     return titles[pathname] || 'Painel'
   }, [pathname])
 

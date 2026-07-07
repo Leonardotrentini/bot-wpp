@@ -391,7 +391,7 @@ async function sendText(instanceName, number, text, options = {}) {
   })
 }
 
-/** mediatype: "image" | "video". media: base64 (sem prefixo data:) ou URL. */
+/** mediatype: "image" | "video" | "audio" | "document". media: base64 (sem prefixo data:) ou URL. */
 async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest }) {
   const body = { number, mediatype, media, ...rest }
   if (mimetype) body.mimetype = mimetype
@@ -407,6 +407,35 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
     () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, opts),
     () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, { ...opts, body: { ...body, options: {} } }),
   ])
+}
+
+async function getBase64FromMediaMessage(instanceName, rawRecord, { convertToMp4 = false } = {}) {
+  if (!rawRecord || typeof rawRecord !== "object") {
+    throw new Error("Mensagem sem payload de mídia.")
+  }
+  const { prepareMediaMessageRecord } = require("./crmMedia")
+  const instance = encodeURIComponent(instanceName)
+  const slim = prepareMediaMessageRecord(rawRecord)
+  const body = {
+    message: slim,
+    convertToMp4: Boolean(convertToMp4),
+  }
+  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
+  const opts = { method: "POST", body, timeoutMs }
+  return firstSuccess([
+    () => requestEvolution(`/chat/getBase64FromMediaMessage/${instance}`, opts),
+    () => requestEvolution(`/message/getBase64FromMediaMessage/${instance}`, opts),
+    () =>
+      requestEvolution(`/chat/getBase64FromMediaMessage/${instance}`, {
+        ...opts,
+        body: { message: { key: slim.key, message: slim.message }, convertToMp4: Boolean(convertToMp4) },
+      }),
+  ])
+}
+
+function extractMediaBase64Payload(resp) {
+  const { extractMediaBase64Payload: extract } = require("./crmMedia")
+  return extract(resp)
 }
 
 async function logoutInstance(instanceName) {
@@ -432,6 +461,8 @@ module.exports = {
   fetchChatMessages,
   sendText,
   sendMedia,
+  getBase64FromMediaMessage,
+  extractMediaBase64Payload,
   logoutInstance,
   pickQrSync,
   resolveQrForStorage,

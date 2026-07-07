@@ -118,7 +118,9 @@ async function executeActions(deps, flow, conversation) {
     try {
       if (type === "send_message") {
         const body = String(action.body || "").trim()
-        if (!body) continue
+        const mediaType = action.mediaType && action.mediaType !== "none" ? String(action.mediaType) : "none"
+        const hasMedia = ["image", "video", "audio"].includes(mediaType)
+        if (!body && !hasMedia) continue
         await prisma.crmDelivery.create({
           data: {
             userId: conversation.userId,
@@ -126,11 +128,15 @@ async function executeActions(deps, flow, conversation) {
             remoteJid: conversation.remoteJid,
             kind: "flow",
             sourceId: flow.id,
-            body,
+            body: body || null,
+            mediaType,
+            mediaBase64: hasMedia ? String(action.mediaBase64 || "") : null,
+            mediaMime: hasMedia ? action.mediaMime || null : null,
+            mediaName: hasMedia ? action.mediaName || null : null,
             scheduledAt: new Date(Date.now() + deliveryDelayMs()),
           },
         })
-        detail.push("send_message")
+        detail.push(hasMedia ? `send_message:${mediaType}` : "send_message")
       } else if (type === "add_tag" && action.tagId) {
         await prisma.crmContactTag
           .upsert({

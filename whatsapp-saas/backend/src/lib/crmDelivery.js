@@ -16,7 +16,7 @@ function extractProviderMessageId(resp) {
 }
 
 async function processOneDelivery(deps, delivery) {
-  const { prisma, sendText, io } = deps
+  const { prisma, sendText, sendMedia, io } = deps
 
   const conversation = await prisma.crmConversation.findUnique({
     where: { id: delivery.conversationId },
@@ -42,9 +42,24 @@ async function processOneDelivery(deps, delivery) {
   await prisma.crmDelivery.update({ where: { id: delivery.id }, data: { status: "sending" } })
 
   try {
-    const resp = await sendText(conn.instanceName, delivery.remoteJid, delivery.body || "")
+    const mediaType = delivery.mediaType && delivery.mediaType !== "none" ? delivery.mediaType : "none"
+    const hasMedia = ["image", "video", "audio"].includes(mediaType)
+    let resp
+    if (hasMedia) {
+      const media = String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
+      resp = await sendMedia(conn.instanceName, delivery.remoteJid, {
+        mediatype: mediaType,
+        media,
+        mimetype: delivery.mediaMime || undefined,
+        caption: delivery.body || undefined,
+        fileName: delivery.mediaName || undefined,
+      })
+    } else {
+      resp = await sendText(conn.instanceName, delivery.remoteJid, delivery.body || "")
+    }
     const providerMessageId = extractProviderMessageId(resp)
     const now = new Date()
+    const msgType = hasMedia ? mediaType : "text"
 
     await prisma.crmDelivery.update({
       where: { id: delivery.id },
@@ -57,8 +72,9 @@ async function processOneDelivery(deps, delivery) {
         conversationId: conversation.id,
         messageId: providerMessageId || `crm-${delivery.id}`,
         fromMe: true,
-        type: "text",
+        type: msgType,
         body: delivery.body || "",
+        mediaMime: hasMedia ? delivery.mediaMime || null : null,
         status: "sent",
         source: delivery.kind, // flow | ai
         timestamp: now,
@@ -69,7 +85,7 @@ async function processOneDelivery(deps, delivery) {
       where: { id: conversation.id },
       data: {
         lastMessageAt: now,
-        lastMessagePreview: previewFromBody(delivery.body, "text"),
+        lastMessagePreview: previewFromBody(delivery.body, msgType),
         lastMessageFromMe: true,
       },
       include: CONVERSATION_INCLUDE,

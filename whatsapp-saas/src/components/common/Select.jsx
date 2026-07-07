@@ -40,7 +40,7 @@ export function Select({
         options={options}
         placeholder={placeholder}
         disabled={disabled}
-        placement={placement}
+        placement={placement ?? 'auto'}
         menuClassName={menuClassName}
         ariaLabel={label || rest['aria-label']}
         triggerClassName={error ? 'border-red-500/60' : ''}
