@@ -2,13 +2,13 @@ import { X } from 'lucide-react'
 import { useEffect } from 'react'
 import { Button } from './Button.jsx'
 
-export function Modal({ isOpen, onClose, title, children, footer, size = 'md' }) {
+export function Modal({ isOpen, onClose, title, children, footer, size = 'md', dismissible = true }) {
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || !dismissible) return
     const onKey = (e) => e.key === 'Escape' && onClose?.()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, onClose])
+  }, [isOpen, onClose, dismissible])
 
   if (!isOpen) return null
 
@@ -16,12 +16,16 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' })
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <button
-        type="button"
-        aria-label="Fechar"
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      {dismissible ? (
+        <button
+          type="button"
+          aria-label="Fechar"
+          className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+          onClick={onClose}
+        />
+      ) : (
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" aria-hidden />
+      )}
       <div
         className={`relative z-10 w-full ${widths[size]} rounded-2xl border border-brand-700 bg-brand-900 shadow-2xl`}
         role="dialog"
@@ -29,13 +33,15 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md' })
       >
         <div className="flex items-center justify-between border-b border-brand-800 px-5 py-4">
           <h2 className="text-lg font-semibold text-stone-100 font-heading">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-2 text-stone-400 hover:bg-white/5 hover:text-stone-100 transition"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          {dismissible && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-2 text-stone-400 hover:bg-white/5 hover:text-stone-100 transition"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex justify-end gap-2 border-t border-brand-800 px-5 py-4">{footer}</div>}

@@ -25,7 +25,10 @@ import { Toggle } from '../../components/common/Toggle.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { Spinner } from '../../components/common/Spinner.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
+import { useAuth } from '../../contexts/AuthContext.jsx'
 import { onSocketEvent } from '../../services/socket.js'
+import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
+import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingModal.jsx'
 import {
   getCrmConversations,
   getCrmConversationMessages,
@@ -169,6 +172,7 @@ function SyncBanner({ job, onStartSync, syncStarting, onRefreshProfiles, profile
 
 export function Chat() {
   const toast = useToast()
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [conversations, setConversations] = useState([])
@@ -197,6 +201,7 @@ export function Chat() {
   const [syncJob, setSyncJob] = useState(null)
   const [syncStarting, setSyncStarting] = useState(false)
   const [profileRefreshing, setProfileRefreshing] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(false)
 
   const [showPanel, setShowPanel] = useState(true)
   const [notesDraft, setNotesDraft] = useState('')
@@ -215,6 +220,11 @@ export function Chat() {
   const active = useMemo(() => conversations.find((c) => c.id === activeId) || null, [conversations, activeId])
 
   // ------------------------------------------------ carregamento
+
+  useEffect(() => {
+    if (!user) return
+    if (!hasSeenChatOnboarding(user)) setShowOnboarding(true)
+  }, [user])
 
   const loadConversations = useCallback(async () => {
     try {
@@ -553,7 +563,13 @@ export function Chat() {
   // ------------------------------------------------ render
 
   return (
-    <div className="flex h-[calc(100vh-7.5rem)] min-h-[480px] overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/40">
+    <>
+      <ChatOnboardingModal
+        isOpen={showOnboarding}
+        user={user}
+        onComplete={() => setShowOnboarding(false)}
+      />
+      <div className="flex h-[calc(100vh-7.5rem)] min-h-[480px] overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/40">
       {/* Lista de conversas */}
       <div className="flex w-full max-w-xs shrink-0 flex-col border-r border-brand-800">
         <SyncBanner
@@ -974,5 +990,6 @@ export function Chat() {
         />
       </Modal>
     </div>
+    </>
   )
 }
