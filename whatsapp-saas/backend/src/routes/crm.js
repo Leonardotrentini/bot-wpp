@@ -14,6 +14,7 @@ const {
   findContacts,
   fetchChatMessages,
   fetchProfile,
+  fetchProfile,
   fetchProfilePictureUrl,
   saveContact,
   getBase64FromMediaMessage,
@@ -34,6 +35,8 @@ const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles } = require("../lib/crmProfile")
 const { ensureMessageRaw } = require("../lib/crmMedia")
 const { onStageChange } = require("../lib/crmFlows")
+const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
+const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
 
 const DEFAULT_STAGES = [
@@ -221,8 +224,8 @@ function createCrmRouter({ io }) {
       return res.status(400).json({ error: "NOT_MEDIA", message: "Esta mensagem não contém mídia." })
     }
 
-    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
-    if (!conn || !conn.connected) {
+    const conn = await ensureWhatsAppConnected(prisma, userId)
+    if (!conn) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
     }
 
@@ -275,8 +278,8 @@ function createCrmRouter({ io }) {
     })
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
 
-    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
-    if (!conn || !conn.connected) {
+    const conn = await ensureWhatsAppConnected(prisma, userId)
+    if (!conn) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
     }
 
@@ -428,6 +431,74 @@ function createCrmRouter({ io }) {
     }
 
     return res.json({ contact: formatContactRow(updated) })
+  })
+
+  router.post("/contacts/:id/refresh-avatar", async (req, res) => {
+    const userId = req.user.sub
+    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+
+    const conn = await ensureWhatsAppConnected(prisma, userId)
+    if (!conn) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    let avatarUrl = null
+    let pushName = null
+    let phone = null
+
+    try {
+      avatarUrl = pickAvatarFromPicturePayload(await fetchProfilePictureUrl(conn.instanceName, contact.remoteJid))
+    } catch {
+      /* tenta fetchProfile */
+    }
+
+    if (!avatarUrl || !pushName) {
+      try {
+        const target = String(contact.remoteJid).includes("@") ? contact.remoteJid : contact.remoteJid.split("@")[0]
+        const fields = pickProfileFields(await fetchProfile(conn.instanceName, target))
+        avatarUrl = avatarUrl || fields.avatarUrl
+        pushName = fields.pushName
+        phone = fields.phone
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (contact.phone && !avatarUrl) {
+      try {
+        avatarUrl = pickAvatarFromPicturePayload(await fetchProfilePictureUrl(conn.instanceName, contact.phone))
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const data = {}
+    if (avatarUrl && avatarUrl !== contact.avatarUrl) data.avatarUrl = avatarUrl
+    if (pushName && pushName !== contact.pushName) data.pushName = pushName
+    if (phone && !contact.phone) data.phone = phone
+
+    let updated = contact
+    if (Object.keys(data).length) {
+      updated = await prisma.crmContact.update({
+        where: { id: contact.id },
+        data,
+        include: { tags: { include: { tag: true } } },
+      })
+    }
+
+    const conversation = await prisma.crmConversation.findFirst({
+      where: { contactId: contact.id, userId },
+      include: CONVERSATION_INCLUDE,
+    })
+    if (conversation && Object.keys(data).length) {
+      emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(conversation) })
+    }
+
+    return res.json({
+      avatarUrl: updated.avatarUrl || null,
+      contact: formatContactRow(updated),
+    })
   })
 
   router.post("/contacts/:id/save", async (req, res) => {
@@ -796,6 +867,9 @@ function createCrmRouter({ io }) {
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Fluxo inválido." })
     const flow = await prisma.crmFlow.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
     if (!flow) return res.status(404).json({ error: "NOT_FOUND", message: "Fluxo não encontrado." })
+    if (parsed.data.trigger.type === "keyword" && !parsed.data.trigger.keywords?.length) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe pelo menos uma palavra-chave." })
+    }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
     const updated = await prisma.crmFlow.update({ where: { id: flow.id }, data: parsed.data })
@@ -954,8 +1028,8 @@ function createCrmRouter({ io }) {
 
   router.post("/profiles/refresh", async (req, res) => {
     const userId = req.user.sub
-    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
-    if (!conn || !conn.connected) {
+    const conn = await ensureWhatsAppConnected(prisma, userId)
+    if (!conn) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
     }
 

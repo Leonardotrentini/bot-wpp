@@ -44,6 +44,7 @@ function mergeInfo(prev = {}, next = {}) {
   return {
     pushName: prev.pushName || next.pushName || null,
     avatarUrl: prev.avatarUrl || next.avatarUrl || null,
+    phone: prev.phone || next.phone || null,
   }
 }
 
@@ -75,7 +76,9 @@ function buildContactDirectory(payload) {
   for (const item of list) {
     const jid = cleanText(item?.remoteJid || item?.id || item?.jid)
     if (!jid || !jid.includes("@")) continue
-    const phoneDigits = resolvePhoneDigits(item) || phoneDigitsFromJid(jid)
+    const altJid = cleanText(item?.remoteJidAlt || item?.jidAlt || item?.alternateJid)
+    const phoneDigits =
+      resolvePhoneDigits(item) || phoneDigitsFromJid(jid) || (altJid ? phoneDigitsFromJid(altJid) : null)
     const pushName = cleanText(
       displayNameFromParticipant(item, phoneDigits) ||
         item?.pushName ||
@@ -83,8 +86,11 @@ function buildContactDirectory(payload) {
         item?.notify,
     )
     const avatarUrl = cleanUrl(item?.profilePicUrl || item?.profilePictureUrl || item?.picture)
-    if (!pushName && !avatarUrl) continue
-    directorySet(directory, jid, { pushName, avatarUrl })
+    const info = { pushName, avatarUrl, phone: phoneDigits || null }
+    if (!pushName && !avatarUrl && !phoneDigits) continue
+    directorySet(directory, jid, info)
+    if (altJid) directorySet(directory, altJid, info)
+    if (phoneDigits) directorySet(directory, `digits:${phoneDigits}`, info)
   }
   return directory
 }
@@ -119,6 +125,7 @@ function pickProfileFields(payload) {
   return {
     pushName: cleanText(displayNameFromParticipant(p, phoneDigits) || p?.name || p?.pushName || p?.verifiedName),
     avatarUrl: pickAvatarFromPicturePayload(p),
+    phone: phoneDigits || null,
   }
 }
 
@@ -136,6 +143,7 @@ async function enrichContactsFromDirectory(prisma, userId, directory) {
     const data = {}
     if (info.pushName && info.pushName !== contact.pushName) data.pushName = info.pushName
     if (info.avatarUrl && info.avatarUrl !== contact.avatarUrl) data.avatarUrl = info.avatarUrl
+    if (info.phone && !contact.phone) data.phone = info.phone
     if (!Object.keys(data).length) continue
     await prisma.crmContact.update({ where: { id: contact.id }, data }).catch(() => {})
     updated += 1
@@ -240,6 +248,7 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
 
       let pushName = null
       let avatarUrl = null
+      let phoneHint = null
 
       // Foto: endpoint dedicado — funciona sem contato salvo na agenda
       if (typeof fetchProfilePictureUrl === "function") {
@@ -250,30 +259,33 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
         }
       }
 
-      if ((!avatarUrl || !pushName) && typeof fetchProfile === "function" && !String(remoteJid).endsWith("@lid")) {
+      if ((!avatarUrl || !pushName) && typeof fetchProfile === "function") {
         try {
-          const fields = pickProfileFields(await fetchProfile(instanceName, remoteJid.split("@")[0]))
+          const profileTarget = String(remoteJid).includes("@") ? remoteJid : remoteJid.split("@")[0]
+          const fields = pickProfileFields(await fetchProfile(instanceName, profileTarget))
           pushName = pushName || fields.pushName
           avatarUrl = avatarUrl || fields.avatarUrl
+          phoneHint = fields.phone || null
         } catch {
           /* ignore */
         }
       }
 
-      if (!pushName && !avatarUrl) return
+      if (!pushName && !avatarUrl && !phoneHint) return
 
-      const contact = await prisma.crmContact.findUnique({
+      const contactBefore = await prisma.crmContact.findUnique({
         where: { userId_remoteJid: { userId, remoteJid } },
-        select: { id: true, pushName: true, avatarUrl: true },
+        select: { id: true, pushName: true, avatarUrl: true, phone: true },
       })
-      if (!contact) return
+      if (!contactBefore) return
 
       const data = {}
-      if (pushName && pushName !== contact.pushName) data.pushName = pushName
-      if (avatarUrl && avatarUrl !== contact.avatarUrl) data.avatarUrl = avatarUrl
+      if (pushName && pushName !== contactBefore.pushName) data.pushName = pushName
+      if (avatarUrl && avatarUrl !== contactBefore.avatarUrl) data.avatarUrl = avatarUrl
+      if (phoneHint && !contactBefore.phone) data.phone = phoneHint
       if (!Object.keys(data).length) return
 
-      await prisma.crmContact.update({ where: { id: contact.id }, data })
+      await prisma.crmContact.update({ where: { id: contactBefore.id }, data })
 
       const conversation = await prisma.crmConversation.findUnique({
         where: { userId_remoteJid: { userId, remoteJid } },

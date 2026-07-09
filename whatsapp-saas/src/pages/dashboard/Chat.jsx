@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Search,
   Send,
@@ -20,6 +20,7 @@ import {
   Mic,
   Film,
   FileText,
+  Unplug,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -55,7 +56,11 @@ import {
   startCrmSync,
   getCrmSyncStatus,
   refreshCrmProfiles,
+  refreshCrmContactAvatar,
+  getWhatsAppStatus,
 } from '../../services/api.js'
+
+import { contactTitle } from '../../lib/contactDisplay.js'
 
 // ---------------------------------------------------------------- helpers
 
@@ -212,6 +217,8 @@ export function Chat() {
   const [syncStarting, setSyncStarting] = useState(false)
   const [profileRefreshing, setProfileRefreshing] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [waConnected, setWaConnected] = useState(true)
+  const profilesAutoRefreshed = useRef(false)
 
   const [showPanel, setShowPanel] = useState(true)
   const [notesDraft, setNotesDraft] = useState('')
@@ -260,16 +267,25 @@ export function Chat() {
   }, [loadConversations, query])
 
   useEffect(() => {
-    Promise.allSettled([getCrmTags(), getCrmStages(), getCrmAgents(), getCrmQuickReplies(), getCrmSyncStatus()]).then(
-      ([t, s, a, q, sync]) => {
+    Promise.allSettled([getCrmTags(), getCrmStages(), getCrmAgents(), getCrmQuickReplies(), getCrmSyncStatus(), getWhatsAppStatus()]).then(
+      ([t, s, a, q, sync, wa]) => {
         if (t.status === 'fulfilled') setTags(t.value.data.tags || [])
         if (s.status === 'fulfilled') setStages(s.value.data.stages || [])
         if (a.status === 'fulfilled') setAgents(a.value.data.agents || [])
         if (q.status === 'fulfilled') setQuickReplies(q.value.data.quickReplies || [])
         if (sync.status === 'fulfilled') setSyncJob(sync.value.data.job || null)
+        if (wa.status === 'fulfilled') setWaConnected(Boolean(wa.value.data?.connected))
       },
     )
   }, [])
+
+  useEffect(() => {
+    if (!waConnected || profilesAutoRefreshed.current) return
+    profilesAutoRefreshed.current = true
+    refreshCrmProfiles()
+      .then(() => loadConversations())
+      .catch(() => {})
+  }, [waConnected, loadConversations])
 
   const openConversation = useCallback(
     async (id) => {
@@ -518,6 +534,23 @@ export function Chat() {
     }
   }, [loadConversations, toast])
 
+  const refreshAvatar = useCallback(
+    async (contactId) => {
+      try {
+        const { data } = await refreshCrmContactAvatar(contactId)
+        if (data.contact) {
+          setConversations((prev) =>
+            prev.map((c) => (c.contact?.id === contactId ? { ...c, contact: data.contact } : c)),
+          )
+        }
+        return data.avatarUrl || data.contact?.avatarUrl || null
+      } catch {
+        return null
+      }
+    },
+    [],
+  )
+
   const handleStartSync = useCallback(
     async (days) => {
       setSyncStarting(true)
@@ -615,6 +648,15 @@ export function Chat() {
           onRefreshProfiles={handleRefreshProfiles}
           profileRefreshing={profileRefreshing}
         />
+        {!waConnected && (
+          <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
+            <span className="min-w-0 flex-1">WhatsApp desconectado — fotos e mídia não carregam até reconectar.</span>
+            <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
+              Conectar
+            </Link>
+          </div>
+        )}
         <div className="space-y-2 border-b border-brand-800 p-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
@@ -666,10 +708,16 @@ export function Chat() {
                   c.id === activeId ? 'bg-accent-500/10' : ''
                 }`}
               >
-                <UserAvatar name={c.contact?.name} src={c.contact?.avatarUrl} size="sm" />
+                <UserAvatar
+                  name={contactTitle(c.contact)}
+                  src={c.contact?.avatarUrl}
+                  size="sm"
+                  contactId={c.contact?.id}
+                  onRefreshAvatar={refreshAvatar}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm font-medium text-stone-100">{c.contact?.name}</p>
+                    <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
                     <span className="shrink-0 text-[10px] text-stone-500">{formatChatTime(c.lastMessageAt)}</span>
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5">
@@ -712,9 +760,15 @@ export function Chat() {
         ) : (
           <>
             <div className="flex items-center gap-3 border-b border-brand-800 px-4 py-3">
-              <UserAvatar name={active.contact?.name} src={active.contact?.avatarUrl} size="sm" />
+              <UserAvatar
+                name={contactTitle(active.contact)}
+                src={active.contact?.avatarUrl}
+                size="sm"
+                contactId={active.contact?.id}
+                onRefreshAvatar={refreshAvatar}
+              />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-stone-100">{active.contact?.name}</p>
+                <p className="truncate text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
                 <p className="text-xs text-stone-500">
                   {active.contact?.phone ? `+${active.contact.phone}` : active.remoteJid.split('@')[0]}
                 </p>
@@ -886,8 +940,14 @@ export function Chat() {
       {active && showPanel && (
         <div className="hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-brand-800 lg:flex">
           <div className="flex flex-col items-center gap-2 border-b border-brand-800 px-4 py-5">
-            <UserAvatar name={active.contact?.name} src={active.contact?.avatarUrl} size="md" />
-            <p className="text-center text-sm font-semibold text-stone-100">{active.contact?.name}</p>
+            <UserAvatar
+              name={contactTitle(active.contact)}
+              src={active.contact?.avatarUrl}
+              size="md"
+              contactId={active.contact?.id}
+              onRefreshAvatar={refreshAvatar}
+            />
+            <p className="text-center text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
             {active.contact?.pushName && active.contact.pushName !== active.contact?.savedName && (
               <p className="text-center text-xs text-stone-500">WhatsApp: {active.contact.pushName}</p>
             )}

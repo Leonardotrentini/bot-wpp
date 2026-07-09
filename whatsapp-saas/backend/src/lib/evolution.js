@@ -243,14 +243,20 @@ async function fetchGroupParticipants(instanceName, groupJid) {
   )
 }
 
-/** Perfil do contato (nome exibido no WhatsApp). */
+/** Perfil do contato (nome exibido no WhatsApp). Aceita dígitos ou JID completo (@lid / @s.whatsapp.net). */
 async function fetchProfile(instanceName, number) {
-  const digits = String(number || "").replace(/\D/g, "")
-  const body = { number: digits }
-  return firstSuccess([
-    () => requestEvolution(`/chat/fetchProfile/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
-    () => requestEvolution(`/chat/fetchProfile/${encodeURIComponent(instanceName)}`, { method: "POST", body: { number: `${digits}@s.whatsapp.net` } }),
-  ])
+  const raw = String(number || "").trim()
+  const digits = raw.replace(/\D/g, "")
+  const bodyVariants = []
+  if (raw.includes("@")) bodyVariants.push({ number: raw })
+  if (digits) {
+    bodyVariants.push({ number: digits })
+    bodyVariants.push({ number: `${digits}@s.whatsapp.net` })
+  }
+  const attempts = bodyVariants.map(
+    (body) => () => requestEvolution(`/chat/fetchProfile/${encodeURIComponent(instanceName)}`, { method: "POST", body }),
+  )
+  return firstSuccess(attempts)
 }
 
 /** Foto de perfil — funciona mesmo sem o contato salvo na agenda. */

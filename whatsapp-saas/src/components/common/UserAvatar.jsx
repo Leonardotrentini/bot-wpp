@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 function initialsFromName(name) {
   const parts = String(name || '')
@@ -17,20 +17,45 @@ const sizeClasses = {
   xl: 'h-28 w-28 text-3xl rounded-full',
 }
 
-export function UserAvatar({ name, src, size = 'md', className = '' }) {
+export function UserAvatar({ name, src, size = 'md', className = '', contactId, onRefreshAvatar }) {
   const box = sizeClasses[size] || sizeClasses.md
   const [imgFailed, setImgFailed] = useState(false)
+  const [srcOverride, setSrcOverride] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const effectiveSrc = srcOverride || src
 
   useEffect(() => {
     setImgFailed(false)
-  }, [src])
+    setSrcOverride(null)
+    setRefreshing(false)
+  }, [src, contactId])
 
-  if (src && !imgFailed) {
+  const handleError = useCallback(async () => {
+    if (contactId && onRefreshAvatar && !refreshing) {
+      setRefreshing(true)
+      try {
+        const fresh = await onRefreshAvatar(contactId)
+        if (fresh) {
+          setSrcOverride(fresh)
+          setImgFailed(false)
+          return
+        }
+      } catch {
+        /* fallback para iniciais */
+      } finally {
+        setRefreshing(false)
+      }
+    }
+    setImgFailed(true)
+  }, [contactId, onRefreshAvatar, refreshing])
+
+  if (effectiveSrc && !imgFailed) {
     return (
       <img
-        src={src}
+        src={effectiveSrc}
         alt=""
-        onError={() => setImgFailed(true)}
+        onError={handleError}
         className={`${box} shrink-0 border border-brand-700 object-cover bg-brand-800 ${className}`}
       />
     )

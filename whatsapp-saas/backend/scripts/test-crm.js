@@ -184,10 +184,11 @@ test("buildContactDirectory normaliza formatos e ignora entradas vazias", () => 
     { remoteJid: "5511888888888@s.whatsapp.net" }, // sem nome nem foto → fora
     { remoteJid: null, pushName: "Fantasma" },
   ])
-  assert.strictEqual(dir.size, 3)
+  assert.strictEqual(dir.size, 5)
   assert.deepStrictEqual(dir.get("5511999999999@s.whatsapp.net"), {
     pushName: "Maria",
     avatarUrl: "https://pps.whatsapp.net/m.jpg",
+    phone: "5511999999999",
   })
   assert.strictEqual(dir.get("123456@lid").pushName, "Contato LID")
 })
@@ -201,7 +202,8 @@ test("buildContactDirectory rejeita url de foto inválida", () => {
   const dir = buildContactDirectory([
     { remoteJid: "5511999999999@s.whatsapp.net", profilePicUrl: "changed" },
   ])
-  assert.strictEqual(dir.size, 0)
+  assert.strictEqual(dir.size, 2)
+  assert.strictEqual(dir.get("5511999999999@s.whatsapp.net").phone, "5511999999999")
 })
 
 test("mergeChatsIntoDirectory complementa sem sobrescrever o findContacts", () => {
@@ -222,12 +224,14 @@ test("pickProfileFields lê variações do fetchProfile", () => {
   assert.deepStrictEqual(pickProfileFields({ name: "Ana", picture: "https://pps.whatsapp.net/a.jpg" }), {
     pushName: "Ana",
     avatarUrl: "https://pps.whatsapp.net/a.jpg",
+    phone: null,
   })
   assert.deepStrictEqual(pickProfileFields({ data: { pushName: "Bia", profilePictureUrl: "https://pps.whatsapp.net/b.jpg" } }), {
     pushName: "Bia",
     avatarUrl: "https://pps.whatsapp.net/b.jpg",
+    phone: null,
   })
-  assert.deepStrictEqual(pickProfileFields(null), { pushName: null, avatarUrl: null })
+  assert.deepStrictEqual(pickProfileFields(null), { pushName: null, avatarUrl: null, phone: null })
 })
 
 test("pickAvatarFromPicturePayload lê fetchProfilePictureUrl", () => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   Bot,
   CheckCheck,
@@ -11,6 +11,7 @@ import {
   Send,
   Tag as TagIcon,
   Trash2,
+  Unplug,
   Zap,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
@@ -27,11 +28,15 @@ import { useToast } from '../../contexts/ToastContext.jsx'
 import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.jsx'
 import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
+import { contactTitle } from '../../lib/contactDisplay.js'
 import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia } from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
 import {
   getCrmConversations,
   patchCrmConversation,
+  patchCrmContact,
+  addCrmContactTag,
+  removeCrmContactTag,
   getCrmTags,
   createCrmTag,
   updateCrmTag,
@@ -54,6 +59,8 @@ import {
   updateCrmAgent,
   deleteCrmAgent,
   testCrmAgent,
+  getWhatsAppStatus,
+  refreshCrmContactAvatar,
 } from '../../services/api.js'
 
 const TABS = [
@@ -76,7 +83,280 @@ function timeAgo(iso) {
 
 // ============================================================ KANBAN
 
-function KanbanBoard({ stages, conversations, onMove, onOpenChat }) {
+function KanbanActionBtn({ title, onClick, children, active }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`rounded-lg p-1.5 transition ${
+        active
+          ? 'bg-accent-500/20 text-accent-300'
+          : 'text-stone-500 hover:bg-brand-800 hover:text-stone-200'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function KanbanCard({ conversation: c, dragId, onDragStart, onDragEnd, onOpenChat, onEdit, onTags, onRefreshAvatar }) {
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={`rounded-xl border border-brand-700/70 bg-brand-900/90 shadow-sm transition hover:border-accent-500/30 ${
+        dragId === c.id ? 'opacity-40' : ''
+      }`}
+    >
+      <div className="cursor-grab p-3 active:cursor-grabbing">
+        <div className="flex items-start gap-2.5">
+          <UserAvatar
+            name={contactTitle(c.contact)}
+            src={c.contact?.avatarUrl}
+            size="sm"
+            contactId={c.contact?.id}
+            onRefreshAvatar={onRefreshAvatar}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
+            <p className="truncate text-[11px] text-stone-500">
+              {c.contact?.phone && !contactTitle(c.contact).includes('(')
+                ? `+${c.contact.phone}`
+                : c.contact?.phone
+                  ? ''
+                  : c.remoteJid?.split('@')[0]}
+            </p>
+          </div>
+          {c.aiEnabled && <Bot className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" title="IA ativa" />}
+        </div>
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-stone-400">
+          {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0 text-stone-500" />}
+          <p className="line-clamp-2 min-w-0 flex-1 leading-snug">{c.lastMessagePreview || '—'}</p>
+        </div>
+        {(c.contact?.tags || []).length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(c.contact?.tags || []).slice(0, 3).map((t) => (
+              <span
+                key={t.id}
+                className="rounded-full px-1.5 py-px text-[9px] font-semibold"
+                style={{ backgroundColor: `${t.color}26`, color: t.color }}
+              >
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center justify-between border-t border-brand-700/50 px-2 py-1.5">
+        <div className="flex items-center gap-0.5">
+          <KanbanActionBtn title="Abrir conversa" onClick={() => onOpenChat(c)}>
+            <MessageSquare className="h-3.5 w-3.5" />
+          </KanbanActionBtn>
+          <KanbanActionBtn title="Etiquetas" onClick={() => onTags(c)}>
+            <TagIcon className="h-3.5 w-3.5" />
+          </KanbanActionBtn>
+          <KanbanActionBtn title="Editar contato" onClick={() => onEdit(c)}>
+            <Pencil className="h-3.5 w-3.5" />
+          </KanbanActionBtn>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {c.unreadCount > 0 && (
+            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
+              {c.unreadCount}
+            </span>
+          )}
+          <span className="text-[10px] text-stone-500">{timeAgo(c.lastMessageAt)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function KanbanColumn({ stage, stageId, cards, dragId, overStage, columnProps, renderCard }) {
+  return (
+    <div className="flex h-full w-[min(100%,300px)] shrink-0 flex-col" {...columnProps(stageId)}>
+      <div className="mb-2 flex shrink-0 items-center gap-2 px-1">
+        <span
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ backgroundColor: stage?.color || '#64748b' }}
+        />
+        <p className="truncate text-sm font-semibold text-stone-200">{stage?.name || 'Sem estágio'}</p>
+        <span className="ml-auto rounded-full bg-brand-800 px-2 py-0.5 text-[11px] font-medium text-stone-400">
+          {cards.length}
+        </span>
+      </div>
+      <div
+        className={`min-h-0 flex-1 space-y-2 overflow-y-auto rounded-xl p-1.5 transition ${
+          overStage === stageId ? 'bg-accent-500/10 outline-dashed outline-1 outline-accent-500/40' : 'bg-brand-950/40'
+        }`}
+      >
+        {cards.map(renderCard)}
+        {cards.length === 0 && (
+          <p className="px-2 py-8 text-center text-xs text-stone-600">Arraste conversas para cá</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function KanbanQuickEditModal({ conversation, stages, open, onClose, onSaved }) {
+  const toast = useToast()
+  const [name, setName] = useState('')
+  const [notes, setNotes] = useState('')
+  const [status, setStatus] = useState('open')
+  const [stageId, setStageId] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!conversation) return
+    setName(conversation.contact?.name || '')
+    setNotes(conversation.contact?.notes || '')
+    setStatus(conversation.status || 'open')
+    setStageId(conversation.kanbanStageId || '')
+  }, [conversation])
+
+  const save = async () => {
+    if (!conversation) return
+    setSaving(true)
+    try {
+      const contactRes = await patchCrmContact(conversation.contact.id, {
+        name: name.trim() || null,
+        notes: notes.trim() || null,
+      })
+      const convoRes = await patchCrmConversation(conversation.id, {
+        status,
+        kanbanStageId: stageId || null,
+      })
+      onSaved({
+        ...convoRes.data.conversation,
+        contact: contactRes.data.contact || {
+          ...conversation.contact,
+          name: name.trim() || conversation.contact?.name,
+          notes: notes.trim() || '',
+        },
+      })
+      onClose()
+      toast.success('Contato atualizado.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao salvar.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open || !conversation) return null
+
+  return (
+    <Modal isOpen={open} onClose={onClose} title="Editar contato">
+      <div className="space-y-3">
+        <Input label="Nome" value={name} onChange={(e) => setName(e.target.value)} />
+        <div>
+          <label className="mb-1 block text-xs text-stone-400">Notas</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={3}
+            className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+          />
+        </div>
+        <Select label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="open">Aberta</option>
+          <option value="pending">Pendente</option>
+          <option value="resolved">Resolvida</option>
+          <option value="archived">Arquivada</option>
+        </Select>
+        <Select label="Estágio" value={stageId} onChange={(e) => setStageId(e.target.value)}>
+          <option value="">Sem estágio</option>
+          {stages.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </Select>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar'}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState(null)
+
+  const contactTags = conversation?.contact?.tags || []
+  const hasTag = (tagId) => contactTags.some((t) => t.id === tagId)
+
+  const toggle = async (tag) => {
+    if (!conversation?.contact?.id) return
+    setBusy(tag.id)
+    try {
+      if (hasTag(tag.id)) {
+        await removeCrmContactTag(conversation.contact.id, tag.id)
+        onSaved({
+          ...conversation,
+          contact: {
+            ...conversation.contact,
+            tags: contactTags.filter((t) => t.id !== tag.id),
+          },
+        })
+      } else {
+        await addCrmContactTag(conversation.contact.id, tag.id)
+        onSaved({
+          ...conversation,
+          contact: {
+            ...conversation.contact,
+            tags: [...contactTags, tag].sort((a, b) => a.name.localeCompare(b.name)),
+          },
+        })
+      }
+    } catch {
+      toast.error('Falha ao atualizar tag.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (!open || !conversation) return null
+
+  return (
+    <Modal isOpen={open} onClose={onClose} title={`Etiquetas — ${conversation.contact?.name}`}>
+      <div className="space-y-2">
+        {tags.length === 0 ? (
+          <p className="text-sm text-stone-500">Nenhuma tag criada. Vá em Configurações para criar.</p>
+        ) : (
+          tags.map((tag) => (
+            <button
+              key={tag.id}
+              type="button"
+              disabled={busy === tag.id}
+              onClick={() => toggle(tag)}
+              className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition ${
+                hasTag(tag.id)
+                  ? 'border-accent-500/40 bg-accent-500/10 text-stone-100'
+                  : 'border-brand-700 bg-brand-900/60 text-stone-300 hover:border-brand-600'
+              }`}
+            >
+              <span className="h-3 w-3 rounded-full" style={{ backgroundColor: tag.color }} />
+              <span className="flex-1">{tag.name}</span>
+              {busy === tag.id ? <Loader2 className="h-4 w-4 animate-spin" /> : hasTag(tag.id) ? '✓' : null}
+            </button>
+          ))
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags, onRefreshAvatar }) {
   const [dragId, setDragId] = useState(null)
   const [overStage, setOverStage] = useState(null)
 
@@ -92,9 +372,10 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat }) {
   }, [stages, conversations])
 
   const renderCard = (c) => (
-    <div
+    <KanbanCard
       key={c.id}
-      draggable
+      conversation={c}
+      dragId={dragId}
       onDragStart={(e) => {
         setDragId(c.id)
         e.dataTransfer.effectAllowed = 'move'
@@ -103,47 +384,11 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat }) {
         setDragId(null)
         setOverStage(null)
       }}
-      onClick={() => onOpenChat(c)}
-      className={`cursor-grab rounded-xl border border-brand-700/70 bg-brand-900/80 p-3 shadow transition hover:border-accent-500/40 active:cursor-grabbing ${
-        dragId === c.id ? 'opacity-40' : ''
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <UserAvatar name={c.contact?.name} src={c.contact?.avatarUrl} size="sm" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-stone-100">{c.contact?.name}</p>
-          <p className="truncate text-[11px] text-stone-500">
-            {c.contact?.phone ? `+${c.contact.phone}` : c.remoteJid?.split('@')[0]}
-          </p>
-        </div>
-        {c.aiEnabled && <Bot className="h-4 w-4 shrink-0 text-sky-400" />}
-      </div>
-      <div className="mt-2 flex items-center gap-1.5 text-xs text-stone-400">
-        {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0" />}
-        <p className="truncate">{c.lastMessagePreview || '—'}</p>
-      </div>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-wrap gap-1">
-          {(c.contact?.tags || []).slice(0, 2).map((t) => (
-            <span
-              key={t.id}
-              className="rounded-full px-1.5 py-px text-[9px] font-semibold"
-              style={{ backgroundColor: `${t.color}26`, color: t.color }}
-            >
-              {t.name}
-            </span>
-          ))}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {c.unreadCount > 0 && (
-            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
-              {c.unreadCount}
-            </span>
-          )}
-          <span className="text-[10px] text-stone-500">{timeAgo(c.lastMessageAt)}</span>
-        </div>
-      </div>
-    </div>
+      onOpenChat={onOpenChat}
+      onEdit={onEdit}
+      onTags={onTags}
+      onRefreshAvatar={onRefreshAvatar}
+    />
   )
 
   const columnProps = (stageId) => ({
@@ -161,39 +406,30 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat }) {
   })
 
   return (
-    <div className="flex gap-4 overflow-x-auto pb-4">
+    <div className="flex h-[calc(100vh-11rem)] min-h-[420px] gap-3 overflow-x-auto pb-2">
       {byStage.unstaged.length > 0 && (
-        <div className="w-72 shrink-0">
-          <div className="mb-2 flex items-center gap-2 px-1">
-            <span className="h-2.5 w-2.5 rounded-full bg-stone-600" />
-            <p className="text-sm font-semibold text-stone-300">Sem estágio</p>
-            <span className="text-xs text-stone-500">{byStage.unstaged.length}</span>
-          </div>
-          <div className="space-y-2">{byStage.unstaged.map(renderCard)}</div>
-        </div>
+        <KanbanColumn
+          stage={{ name: 'Sem estágio', color: '#64748b' }}
+          stageId="__none__"
+          cards={byStage.unstaged}
+          dragId={dragId}
+          overStage={overStage}
+          columnProps={columnProps}
+          renderCard={renderCard}
+        />
       )}
-      {stages.map((stage) => {
-        const cards = byStage.map.get(stage.id) || []
-        return (
-          <div key={stage.id} className="w-72 shrink-0" {...columnProps(stage.id)}>
-            <div className="mb-2 flex items-center gap-2 px-1">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: stage.color }} />
-              <p className="text-sm font-semibold text-stone-200">{stage.name}</p>
-              <span className="text-xs text-stone-500">{cards.length}</span>
-            </div>
-            <div
-              className={`min-h-32 space-y-2 rounded-xl p-1 transition ${
-                overStage === stage.id ? 'bg-accent-500/10 outline-dashed outline-1 outline-accent-500/40' : ''
-              }`}
-            >
-              {cards.map(renderCard)}
-              {cards.length === 0 && (
-                <p className="px-2 py-6 text-center text-xs text-stone-600">Arraste conversas para cá</p>
-              )}
-            </div>
-          </div>
-        )
-      })}
+      {stages.map((stage) => (
+        <KanbanColumn
+          key={stage.id}
+          stage={stage}
+          stageId={stage.id}
+          cards={byStage.map.get(stage.id) || []}
+          dragId={dragId}
+          overStage={overStage}
+          columnProps={columnProps}
+          renderCard={renderCard}
+        />
+      ))}
     </div>
   )
 }
@@ -1005,6 +1241,9 @@ export function Crm() {
   const [agentEditing, setAgentEditing] = useState(null)
   const [agentSaving, setAgentSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [kanbanEdit, setKanbanEdit] = useState(null)
+  const [kanbanTags, setKanbanTags] = useState(null)
+  const [waConnected, setWaConnected] = useState(true)
 
   const loadAll = useCallback(async () => {
     try {
@@ -1025,6 +1264,8 @@ export function Crm() {
         setAgents(ag.value.data.agents || [])
         setAiConfigured(Boolean(ag.value.data.aiConfigured))
       }
+      const wa = await getWhatsAppStatus().catch(() => null)
+      if (wa?.data) setWaConnected(Boolean(wa.data.connected))
     } finally {
       setLoading(false)
     }
@@ -1054,10 +1295,13 @@ export function Crm() {
 
   const handleMove = useCallback(
     async (conversationId, stageId) => {
+      const normalizedStageId = stageId === '__none__' ? null : stageId
       const prev = conversations
-      setConversations((cs) => cs.map((c) => (c.id === conversationId ? { ...c, kanbanStageId: stageId } : c)))
+      setConversations((cs) =>
+        cs.map((c) => (c.id === conversationId ? { ...c, kanbanStageId: normalizedStageId } : c)),
+      )
       try {
-        await patchCrmConversation(conversationId, { kanbanStageId: stageId })
+        await patchCrmConversation(conversationId, { kanbanStageId: normalizedStageId })
       } catch {
         setConversations(prev)
         toast.error('Falha ao mover o card.')
@@ -1065,6 +1309,25 @@ export function Crm() {
     },
     [conversations, toast],
   )
+
+  const updateConversation = useCallback((updated) => {
+    if (!updated) return
+    setConversations((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+  }, [])
+
+  const refreshAvatar = useCallback(async (contactId) => {
+    try {
+      const { data } = await refreshCrmContactAvatar(contactId)
+      if (data.contact) {
+        setConversations((prev) =>
+          prev.map((c) => (c.contact?.id === contactId ? { ...c, contact: data.contact } : c)),
+        )
+      }
+      return data.avatarUrl || data.contact?.avatarUrl || null
+    } catch {
+      return null
+    }
+  }, [])
 
   const saveFlow = useCallback(
     async (flow) => {
@@ -1163,6 +1426,15 @@ export function Crm() {
 
       {tab === 'kanban' && (
         <>
+          {!waConnected && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-100">
+              <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
+              <span className="flex-1">WhatsApp desconectado — reconecte para sincronizar fotos, mídia e envios.</span>
+              <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
+                Conectar WhatsApp
+              </Link>
+            </div>
+          )}
           {conversations.length === 0 && (
             <Card className="flex flex-col items-center gap-3 py-5 text-center sm:flex-row sm:justify-between sm:px-6 sm:text-left">
               <div className="flex items-center gap-3">
@@ -1184,6 +1456,23 @@ export function Crm() {
             conversations={conversations}
             onMove={handleMove}
             onOpenChat={(c) => navigate(`/dashboard/chat?c=${c.id}`)}
+            onEdit={setKanbanEdit}
+            onTags={setKanbanTags}
+            onRefreshAvatar={refreshAvatar}
+          />
+          <KanbanQuickEditModal
+            conversation={kanbanEdit}
+            stages={stages}
+            open={Boolean(kanbanEdit)}
+            onClose={() => setKanbanEdit(null)}
+            onSaved={updateConversation}
+          />
+          <KanbanTagModal
+            conversation={kanbanTags}
+            tags={tags}
+            open={Boolean(kanbanTags)}
+            onClose={() => setKanbanTags(null)}
+            onSaved={updateConversation}
           />
         </>
       )}

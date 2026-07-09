@@ -49,7 +49,7 @@ function previewFromBody(body, type) {
 function resolveContactDisplayName(contact) {
   if (!contact) return "Contato"
   const manual = String(contact.name || "").trim()
-  if (manual) return manual
+  if (manual && manual.toLowerCase() !== "contato") return manual
 
   const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
   const fromWa = displayNameFromParticipant(
@@ -58,9 +58,23 @@ function resolveContactDisplayName(contact) {
   )
   if (fromWa) return fromWa
 
-  if (contact.isLid) return "Contato"
   if (phoneDigits) return formatPhoneBr(phoneDigits)
+
+  if (contact.isLid) {
+    const lidPart = String(contact.remoteJid || "").split("@")[0]
+    if (lidPart.length >= 4) return `Contato #${lidPart.slice(-6)}`
+  }
   return "Contato"
+}
+
+function extractAltPhoneFromRecord(record, remoteJid) {
+  const key = record?.key || {}
+  const candidates = [key.remoteJidAlt, key.participantAlt, record?.remoteJidAlt, key.senderPn, key.participant]
+  for (const alt of candidates) {
+    const phone = phoneFromJid(alt)
+    if (phone) return phone
+  }
+  return phoneFromJid(remoteJid)
 }
 
 function formatContactRow(contact, { tags } = {}) {
@@ -153,9 +167,9 @@ function cleanIncomingPushName(value, remoteJid) {
 }
 
 /** Garante contato + conversa para um JID individual. */
-async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl } = {}) {
+async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint } = {}) {
   const jid = String(remoteJid).trim()
-  const phone = phoneFromJid(jid)
+  const phone = phoneHint || phoneFromJid(jid)
 
   let contact = await prisma.crmContact.findUnique({
     where: { userId_remoteJid: { userId, remoteJid: jid } },
@@ -175,6 +189,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
     const data = {}
     if (pushName && contact.pushName !== pushName) data.pushName = pushName
     if (avatarUrl && contact.avatarUrl !== avatarUrl) data.avatarUrl = avatarUrl
+    if (!contact.phone && phone) data.phone = phone
     if (Object.keys(data).length) {
       contact = await prisma.crmContact.update({
         where: { id: contact.id },
@@ -240,7 +255,10 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       ? cleanIncomingPushName(record?.pushName, remoteJid)
       : null
 
-  const { conversation } = await ensureContactAndConversation(prisma, userId, remoteJid, { pushName })
+  const { conversation } = await ensureContactAndConversation(prisma, userId, remoteJid, {
+    pushName,
+    phone: extractAltPhoneFromRecord(record, remoteJid),
+  })
   const isNewConversation = Boolean(conversation.__isNew)
 
   const existing = await prisma.crmMessage.findUnique({

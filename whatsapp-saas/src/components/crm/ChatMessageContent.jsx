@@ -78,9 +78,12 @@ function useCrmMessageMedia(message) {
       .catch((err) => {
         if (cancelled) return
         const status = err?.response?.status
+        const code = err?.response?.data?.error
         let msg = err?.response?.data?.message || 'Falha ao carregar mídia'
         if (status === 404) {
           msg = 'Servidor sem suporte a mídia — é necessário atualizar o backend.'
+        } else if (code === 'WHATSAPP_DISCONNECTED') {
+          msg = 'WhatsApp desconectado — reconecte em Conectar WhatsApp para baixar mídia.'
         }
         setState({ loading: false, error: msg, src: null, mimetype: null })
       })

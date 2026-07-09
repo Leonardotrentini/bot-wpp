@@ -699,12 +699,12 @@ export async function getCrmFlows() {
 }
 
 export async function createCrmFlow(payload) {
-  if (resolveUseRealApi()) return apiClient.post('/crm/flows', payload)
+  if (resolveUseRealApi()) return apiClient.post('/crm/flows', payload, { timeout: 120000 })
   return mockResponse({ flow: { id: `flow-${Date.now()}`, ...payload } })
 }
 
 export async function updateCrmFlow(id, payload) {
-  if (resolveUseRealApi()) return apiClient.put(`/crm/flows/${encodeURIComponent(id)}`, payload)
+  if (resolveUseRealApi()) return apiClient.put(`/crm/flows/${encodeURIComponent(id)}`, payload, { timeout: 120000 })
   return mockResponse({ flow: { id, ...payload } })
 }
 
@@ -758,6 +758,13 @@ export async function startCrmSync(payload = {}) {
 export async function getCrmSyncStatus() {
   if (resolveUseRealApi()) return apiClient.get('/crm/sync/status')
   return mockResponse({ job: null })
+}
+
+export async function refreshCrmContactAvatar(contactId) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/refresh-avatar`)
+  }
+  return mockResponse({ avatarUrl: null, contact: null })
 }
 
 export async function refreshCrmProfiles() {

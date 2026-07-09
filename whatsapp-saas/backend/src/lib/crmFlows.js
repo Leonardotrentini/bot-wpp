@@ -13,6 +13,7 @@
  */
 
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
+const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
 
@@ -109,9 +110,10 @@ function deliveryDelayMs() {
 }
 
 async function executeActions(deps, flow, conversation) {
-  const { prisma } = deps
+  const { prisma, io, sendText } = deps
   const actions = Array.isArray(flow.actions) ? flow.actions : []
   const detail = []
+  let stageChangedTo = null
 
   for (const action of actions) {
     const type = String(action?.type || "")
@@ -147,10 +149,12 @@ async function executeActions(deps, flow, conversation) {
           .catch(() => {})
         detail.push("add_tag")
       } else if (type === "move_stage" && action.stageId) {
+        const stageId = String(action.stageId)
         await prisma.crmConversation.update({
           where: { id: conversation.id },
-          data: { kanbanStageId: String(action.stageId) },
+          data: { kanbanStageId: stageId },
         })
+        stageChangedTo = stageId
         detail.push("move_stage")
       } else if (type === "assign_ai") {
         await prisma.crmConversation.update({
@@ -169,6 +173,22 @@ async function executeActions(deps, flow, conversation) {
       console.error(`[crm-flow] ação ${type} falhou (flow ${flow.id}):`, err?.message || err)
     }
   }
+
+  if (stageChangedTo && io) {
+    const updated = await prisma.crmConversation.findUnique({
+      where: { id: conversation.id },
+      include: CONVERSATION_INCLUDE,
+    })
+    if (updated) {
+      emitCrmEvent(io, conversation.userId, "crm:conversation", {
+        conversation: formatConversationRow(updated),
+      })
+      onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: stageChangedTo }).catch((err) =>
+        console.error("[crm-flow] stage_change:", err?.message || err),
+      )
+    }
+  }
+
   return detail
 }
 
