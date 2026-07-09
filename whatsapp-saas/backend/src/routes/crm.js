@@ -14,7 +14,6 @@ const {
   findContacts,
   fetchChatMessages,
   fetchProfile,
-  fetchProfile,
   fetchProfilePictureUrl,
   saveContact,
   getBase64FromMediaMessage,
