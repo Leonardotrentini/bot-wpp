@@ -184,8 +184,11 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       if (data.contact) onContactUpdate?.(data.contact)
       const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Orçamento')
       if (!metaWarned) {
+        const modeLabel = data.tracking?.trackingMode === 'ctwa' ? ' (anúncio WhatsApp)' : ''
         toastRef.current.success(
-          data.tracking?.sent ? 'Orçamento salvo e enviado à Meta.' : 'Orçamento salvo.',
+          data.tracking?.sent
+            ? `Orçamento salvo e enviado à Meta${modeLabel}.`
+            : 'Orçamento salvo.',
         )
       }
       setQuoteOpen(false)
@@ -213,8 +216,11 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       if (data.conversation) onConversationUpdate?.(data.conversation)
       const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
       if (!metaWarned) {
+        const modeLabel = data.tracking?.trackingMode === 'ctwa' ? ' (anúncio WhatsApp)' : ''
         toastRef.current.success(
-          data.tracking?.sent ? 'Compra confirmada e enviada à Meta.' : 'Compra confirmada.',
+          data.tracking?.sent
+            ? `Compra confirmada e enviada à Meta${modeLabel}.`
+            : 'Compra confirmada.',
         )
       }
       setPurchaseOpen(false)

@@ -159,15 +159,14 @@ export function Integrations() {
             onChange={(e) => setForm((f) => ({ ...f, pixelId: e.target.value }))}
           />
           <Input
-            label="ID da Página do Facebook (WhatsApp)"
+            label="ID da Página do Facebook"
             placeholder="Ex.: 102035112882607"
             value={form.facebookPageId}
             onChange={(e) => setForm((f) => ({ ...f, facebookPageId: e.target.value }))}
           />
           <p className="-mt-2 text-xs text-stone-500">
-            Obrigatório para eventos WhatsApp. Em{' '}
-            <strong className="text-stone-400">Configurações do negócio → Páginas</strong>, copie o ID numérico da
-            página vinculada ao seu WhatsApp Business.
+            Opcional — necessário apenas para leads que vieram de anúncio <strong className="text-stone-400">Click-to-WhatsApp</strong>.
+            Campanhas <strong className="text-stone-400">LP → WhatsApp</strong> usam modo CRM automático (não precisa de page_id).
           </p>
           <Input
             label="Token da API de Conversões"
@@ -192,7 +191,7 @@ export function Integrations() {
             <Toggle
               checked={form.sendQuotes}
               onChange={(v) => setForm((f) => ({ ...f, sendQuotes: v }))}
-              label='Enviar evento "LeadSubmitted" ao salvar orçamento'
+              label='Enviar evento "Lead" ao salvar orçamento (CRM / CTWA automático)'
             />
             <Toggle
               checked={form.sendPurchases}
@@ -222,7 +221,7 @@ export function Integrations() {
             <p className="font-medium text-stone-400">Eventos enviados automaticamente</p>
             <ul className="mt-2 list-inside list-disc space-y-1">
               <li>
-                <strong className="text-stone-400">LeadSubmitted</strong> — quando você salva um orçamento no card do cliente (valor em R$, canal WhatsApp)
+                <strong className="text-stone-400">Lead</strong> — orçamento salvo no chat (LP → WhatsApp ou orgânico; CTWA usa LeadSubmitted automaticamente)
               </li>
               <li>
                 <strong className="text-stone-400">Purchase</strong> — quando confirma uma compra (valor + ticket opcional)
@@ -235,7 +234,7 @@ export function Integrations() {
           </div>
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <Button onClick={handleSave} disabled={saving || !form.pixelId.trim() || !form.facebookPageId.trim()}>
+            <Button onClick={handleSave} disabled={saving || !form.pixelId.trim()}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar integração'}
             </Button>
             <Button variant="secondary" onClick={handleTest} disabled={testing || !meta?.hasAccessToken}>

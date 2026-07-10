@@ -16,6 +16,7 @@
     "test:mentions": "node scripts/test-message-mentions.js",
     "test:groups": "node scripts/test-group-discovery.js",
     "test:crm": "node scripts/test-crm.js",
+    "test:meta": "node scripts/test-meta-events.js",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "prisma": {
