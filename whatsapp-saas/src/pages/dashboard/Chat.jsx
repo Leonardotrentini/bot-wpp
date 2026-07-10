@@ -232,7 +232,6 @@ export function Chat() {
   const [showPanel, setShowPanel] = useState(true)
   const [notesDraft, setNotesDraft] = useState('')
   const [nameDraft, setNameDraft] = useState('')
-  const [saveOnWhatsapp, setSaveOnWhatsapp] = useState(true)
   const [savingContact, setSavingContact] = useState(false)
   const [newTagModal, setNewTagModal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
@@ -683,7 +682,7 @@ export function Chat() {
     if (!active?.contact?.id || !name) return
     setSavingContact(true)
     try {
-      const { data } = await saveCrmContact(active.contact.id, { name, saveOnWhatsapp })
+      const { data } = await saveCrmContact(active.contact.id, { name })
       if (data.contact) {
         setConversations((prev) =>
           prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...data.contact } } : c)),
@@ -691,14 +690,13 @@ export function Chat() {
         setNameDraft(data.contact.savedName || name)
       }
       if (data.whatsappSaved) toastRef.current.success(data.message || 'Contato salvo.')
-      else if (data.message?.includes('apenas no Vesto')) toastRef.current.info(data.message)
-      else toastRef.current.success(data.message || 'Nome salvo no Vesto.')
+      else toastRef.current.success(data.message || 'Nome salvo.')
     } catch (err) {
       toastRef.current.error(err?.response?.data?.message || 'Falha ao salvar contato.')
     } finally {
       setSavingContact(false)
     }
-  }, [active, nameDraft, saveOnWhatsapp, activeId])
+  }, [active, nameDraft, activeId])
 
   const toggleContactTag = useCallback(
     async (tag) => {
@@ -1195,17 +1193,6 @@ export function Chat() {
                 placeholder="Nome para identificar este contato"
                 className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-xs text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
               />
-              {active.contact?.phone && (
-                <label className="mt-2 flex cursor-pointer items-start gap-2 text-[11px] leading-snug text-stone-400">
-                  <input
-                    type="checkbox"
-                    checked={saveOnWhatsapp}
-                    onChange={(e) => setSaveOnWhatsapp(e.target.checked)}
-                    className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-brand-600 bg-brand-900 text-accent-500"
-                  />
-                  Salvar também na agenda do WhatsApp conectado
-                </label>
-              )}
               <Button
                 size="sm"
                 variant="secondary"
