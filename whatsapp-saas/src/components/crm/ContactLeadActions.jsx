@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Receipt, ShoppingBag, Bell, Loader2, X } from 'lucide-react'
+import { History, Receipt, ShoppingBag, Bell, Loader2, X, Trash2 } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { Modal } from '../common/Modal.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import {
   getCrmContactActivity,
+  deleteCrmContactActivity,
   saveCrmContactQuote,
   confirmCrmContactPurchase,
   createCrmContactReminder,
@@ -114,6 +115,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
   const [confirmingPurchase, setConfirmingPurchase] = useState(false)
   const [savingReminder, setSavingReminder] = useState(false)
   const [cancellingReminderId, setCancellingReminderId] = useState(null)
+  const [deletingActivityId, setDeletingActivityId] = useState(null)
 
   const contactId = contact?.id
   const pendingReminders = contact?.reminders || []
@@ -170,6 +172,21 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     const preset = applyReminderOffset(minutes)
     setReminderDate(preset.date)
     setReminderTime(preset.time)
+  }
+
+  const handleDeleteActivity = async (activityId, label) => {
+    if (!contactId || !activityId) return
+    if (!window.confirm(`Remover esta etapa do histórico?\n\n${label}`)) return
+    setDeletingActivityId(activityId)
+    try {
+      await deleteCrmContactActivity(contactId, activityId)
+      setActivities((prev) => prev.filter((a) => a.id !== activityId))
+      toastRef.current.success('Etapa removida do histórico.')
+    } catch (err) {
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao remover etapa.')
+    } finally {
+      setDeletingActivityId(null)
+    }
   }
 
   const handleSaveQuote = async () => {
@@ -380,6 +397,20 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
                       })}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteActivity(item.id, item.label)}
+                    disabled={deletingActivityId === item.id}
+                    className="mt-0.5 shrink-0 rounded-lg p-1.5 text-stone-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+                    title="Remover etapa"
+                    aria-label="Remover etapa"
+                  >
+                    {deletingActivityId === item.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
+                  </button>
                 </li>
               )
             })}

@@ -664,6 +664,15 @@ export async function getCrmContactActivity(contactId) {
   return mockResponse({ activities: [] })
 }
 
+export async function deleteCrmContactActivity(contactId, activityId) {
+  if (resolveUseRealApi()) {
+    return apiClient.delete(
+      `/crm/contacts/${encodeURIComponent(contactId)}/activity/${encodeURIComponent(activityId)}`,
+    )
+  }
+  return mockResponse({ ok: true })
+}
+
 export async function saveCrmContactQuote(contactId, { amount }) {
   if (resolveUseRealApi()) {
     return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/quote`, { amount })

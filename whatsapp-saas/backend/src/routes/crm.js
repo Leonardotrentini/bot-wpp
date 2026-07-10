@@ -42,6 +42,7 @@ const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
 const {
   logContactActivity,
   getContactActivityTimeline,
+  deleteContactActivity,
   saveContactQuote,
   confirmContactPurchase,
 } = require("../lib/crmContactActivity")
@@ -714,6 +715,18 @@ function createCrmRouter({ io }) {
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
     const activities = await getContactActivityTimeline(prisma, userId, contact.id)
     return res.json({ activities })
+  })
+
+  router.delete("/contacts/:id/activity/:activityId", async (req, res) => {
+    const userId = req.user.sub
+    const result = await deleteContactActivity(prisma, userId, req.params.id, req.params.activityId)
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({
+        error: "NOT_FOUND",
+        message: result.message || "Etapa não encontrada.",
+      })
+    }
+    return res.json({ ok: true })
   })
 
   router.post("/contacts/:id/quote", async (req, res) => {

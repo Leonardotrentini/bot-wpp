@@ -187,6 +187,19 @@ async function getContactActivityTimeline(prisma, userId, contactId) {
   return rows.map(formatActivityRow)
 }
 
+async function deleteContactActivity(prisma, userId, contactId, activityId) {
+  const contact = await prisma.crmContact.findFirst({ where: { id: contactId, userId } })
+  if (!contact) return { error: "NOT_FOUND" }
+
+  const activity = await prisma.crmContactActivity.findFirst({
+    where: { id: activityId, contactId, userId },
+  })
+  if (!activity) return { error: "NOT_FOUND", message: "Etapa não encontrada." }
+
+  await prisma.crmContactActivity.delete({ where: { id: activityId } })
+  return { ok: true }
+}
+
 async function reloadContact(prisma, contactId) {
   return prisma.crmContact.findUnique({
     where: { id: contactId },
@@ -319,6 +332,7 @@ module.exports = {
   formatBrl,
   logContactActivity,
   getContactActivityTimeline,
+  deleteContactActivity,
   saveContactQuote,
   confirmContactPurchase,
   activityLabel,
