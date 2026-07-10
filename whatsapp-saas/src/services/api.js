@@ -7,7 +7,6 @@ import {
   mockDashboardMetrics,
   mockMessageHistory,
   mockAnalytics,
-  mockIntegrations,
   mockWhatsAppStatus,
   mockGroupSettings,
 } from '../utils/mockData.js'
@@ -538,7 +537,43 @@ export async function getDashboardSummary() {
 }
 
 export async function getIntegrations() {
-  return mockResponse({ integrations: mockIntegrations })
+  if (resolveUseRealApi()) return apiClient.get('/integrations')
+  return mockResponse({
+    integrations: [
+      {
+        id: 'meta',
+        name: 'Meta (Facebook)',
+        description: 'Envia orçamentos e vendas do CRM para o Pixel.',
+        connected: false,
+        provider: 'meta',
+      },
+    ],
+  })
+}
+
+export async function getMetaIntegration() {
+  if (resolveUseRealApi()) return apiClient.get('/integrations/meta')
+  return mockResponse({ integration: null })
+}
+
+export async function saveMetaIntegration(payload) {
+  if (resolveUseRealApi()) return apiClient.put('/integrations/meta', payload)
+  return mockResponse({
+    integration: {
+      pixelId: payload.pixelId,
+      enabled: payload.enabled !== false,
+      sendQuotes: payload.sendQuotes !== false,
+      sendPurchases: payload.sendPurchases !== false,
+      testEventCode: payload.testEventCode || '',
+      hasAccessToken: true,
+      connected: true,
+    },
+  })
+}
+
+export async function testMetaIntegration() {
+  if (resolveUseRealApi()) return apiClient.post('/integrations/meta/test')
+  return mockResponse({ ok: true, message: 'Evento de teste enviado (simulado).' })
 }
 
 export async function connectWhatsApp() {

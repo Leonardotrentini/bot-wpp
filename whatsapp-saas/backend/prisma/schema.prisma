@@ -32,6 +32,7 @@ model User {
   subscriptions      Subscription[]
   whatsappConnection WhatsAppConnection?
   whatsappGroups     WhatsAppGroup[]
+  metaIntegration    MetaIntegration?
 }
 
 model Plan {
@@ -573,4 +574,21 @@ model GroupX1Delivery {
   @@index([userId, groupId])
   @@index([userId, groupId, participantJid, createdAt])
   @@index([status, scheduledAt])
+}
+
+model MetaIntegration {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pixelId       String
+  accessToken   String
+  enabled       Boolean   @default(true)
+  sendQuotes    Boolean   @default(true)
+  sendPurchases Boolean   @default(true)
+  testEventCode String?
+  lastEventAt   DateTime?
+  lastEventName String?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }

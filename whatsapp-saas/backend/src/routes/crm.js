@@ -734,7 +734,7 @@ function createCrmRouter({ io }) {
     if (result.error === "INVALID_AMOUNT") {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
     }
-    return res.json({ contact: result.contact })
+    return res.json({ contact: result.contact, tracking: result.tracking || null })
   })
 
   router.post("/contacts/:id/purchase/confirm", async (req, res) => {
@@ -761,7 +761,7 @@ function createCrmRouter({ io }) {
     if (result.error === "INVALID_AMOUNT") {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
     }
-    return res.json({ contact: result.contact, conversation: result.conversation })
+    return res.json({ contact: result.contact, conversation: result.conversation, tracking: result.tracking || null })
   })
 
   router.get("/contacts/:id/reminders", async (req, res) => {

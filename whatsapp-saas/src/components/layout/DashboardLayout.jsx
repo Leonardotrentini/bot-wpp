@@ -2,6 +2,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { DashboardSidebar } from './DashboardSidebar.jsx'
 import { DashboardHeader } from './DashboardHeader.jsx'
 import { ReminderAlertsProvider } from '../../contexts/ReminderAlertsContext.jsx'
+import { MetaPixelLoader } from '../integrations/MetaPixelLoader.jsx'
 import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -38,6 +39,7 @@ export function DashboardLayout() {
 
   return (
     <ReminderAlertsProvider>
+      <MetaPixelLoader />
       <div className="min-h-screen bg-brand-950">
         <DashboardSidebar />
         <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>

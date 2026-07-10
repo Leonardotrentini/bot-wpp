@@ -235,7 +235,8 @@ async function saveContactQuote(prisma, io, { userId, contactId, amount }) {
   })
 
   await emitContactConversation(prisma, io, userId, contact.id)
-  return { contact: formatContactRow(updated) }
+  const tracking = await trackCrmQuoteEvent(prisma, { userId, contact: updated, amount: value })
+  return { contact: formatContactRow(updated), tracking }
 }
 
 async function confirmContactPurchase(prisma, io, { userId, contactId, amount, ticket, moveToClosed = true }) {
@@ -297,7 +298,18 @@ async function confirmContactPurchase(prisma, io, { userId, contactId, amount, t
     await emitContactConversation(prisma, io, userId, contact.id)
   }
 
-  return { contact: formatContactRow(updated), conversation: conversation ? formatConversationRow(conversation) : null }
+  const tracking = await trackCrmPurchaseEvent(prisma, {
+    userId,
+    contact,
+    amount: value,
+    ticket: custom.purchase.ticket,
+  })
+
+  return {
+    contact: formatContactRow(updated),
+    conversation: conversation ? formatConversationRow(conversation) : null,
+    tracking,
+  }
 }
 
 module.exports = {

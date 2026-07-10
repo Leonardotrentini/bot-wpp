@@ -11,6 +11,7 @@ import {
   Shield,
   MessageSquare,
   Kanban,
+  Plug,
 } from 'lucide-react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -37,6 +38,7 @@ const navSections = [
     items: [
       { to: '/dashboard/chat', label: 'Conversas', icon: MessageSquare, beta: true },
       { to: '/dashboard/crm', label: 'CRM', icon: Kanban, beta: true },
+      { to: '/dashboard/integrations', label: 'Integrações', icon: Plug, beta: true },
     ],
   },
   {

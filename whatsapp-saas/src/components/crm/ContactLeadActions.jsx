@@ -11,6 +11,7 @@ import {
   cancelCrmContactReminder,
 } from '../../services/api.js'
 import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
+import { trackCrmMetaEvent } from '../../lib/metaPixel.js'
 
 function formatBrl(value) {
   const n = Number(value)
@@ -170,6 +171,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     try {
       const { data } = await saveCrmContactQuote(contactId, { amount })
       if (data.contact) onContactUpdate?.(data.contact)
+      if (data.tracking) trackCrmMetaEvent(data.tracking)
       toastRef.current.success('Orçamento salvo.')
       setQuoteOpen(false)
       if (historyOpen) loadHistory()
@@ -194,6 +196,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       })
       if (data.contact) onContactUpdate?.(data.contact)
       if (data.conversation) onConversationUpdate?.(data.conversation)
+      if (data.tracking) trackCrmMetaEvent(data.tracking)
       toastRef.current.success('Compra confirmada.')
       setPurchaseOpen(false)
       if (historyOpen) loadHistory()

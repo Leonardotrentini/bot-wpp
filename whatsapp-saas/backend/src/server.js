@@ -95,6 +95,7 @@ const {
 } = require("./lib/messageMentions")
 const jwt = require("jsonwebtoken")
 const { createCrmRouter } = require("./routes/crm")
+const { createIntegrationsRouter } = require("./routes/integrations")
 const {
   isIndividualJid,
   ingestCrmMessage,
@@ -170,6 +171,7 @@ app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
 
 app.use("/api/admin", adminRoutes)
 app.use("/api/crm", createCrmRouter({ io }))
+app.use("/api/integrations", createIntegrationsRouter())
 
 app.get("/health", async (_req, res) => {
   try {
