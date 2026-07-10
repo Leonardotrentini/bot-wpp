@@ -12,6 +12,7 @@ const {
   formatPhoneBr,
   looksLikeInternalIdName,
   phoneDigitsFromJid,
+  phoneDigitsFromValue,
 } = require("./participantIdentity")
 
 const INDIVIDUAL_JID_RE = /@(s\.whatsapp\.net|lid)$/i
@@ -46,51 +47,128 @@ function previewFromBody(body, type) {
   return "Mensagem"
 }
 
+function isGenericSavedName(name) {
+  const n = String(name || "").trim()
+  return !n || n.toLowerCase() === "contato" || n.startsWith("Contato #")
+}
+
+function resolvePhoneDigits(contact) {
+  if (!contact) return null
+  return contact.phone || phoneDigitsFromJid(contact.remoteJid) || null
+}
+
+function lidFallbackLabel(_remoteJid) {
+  return null
+}
+
+/** Telefone a partir de um item de chat/contato da Evolution (remoteJidAlt, senderPn, etc.). */
+function phoneFromChatItem(chat) {
+  if (!chat || typeof chat !== "object") return null
+  const altJid =
+    chat.remoteJidAlt ||
+    chat.jidAlt ||
+    chat.alternateJid ||
+    chat.key?.remoteJidAlt ||
+    chat.key?.participantAlt
+  const candidates = [
+    altJid,
+    chat.senderPn,
+    chat.phoneNumber,
+    chat.phone,
+    chat.pn,
+    chat.remoteJid,
+    chat.id,
+    chat.jid,
+    chat.key?.remoteJid,
+  ]
+  for (const c of candidates) {
+    const phone = phoneFromJid(c) || phoneDigitsFromValue(c)
+    if (phone) return phone
+  }
+  return null
+}
+
+function isSelfOrGenericPushName(name) {
+  const n = String(name || "").trim().toLowerCase()
+  if (!n) return true
+  if (n === "você" || n === "voce" || n === "you" || n === "me") return true
+  if (n === "contato") return true
+  return false
+}
+
+function sanitizePushName(value, phoneDigits) {
+  const raw = String(value || "").trim()
+  if (!raw || isSelfOrGenericPushName(raw)) return null
+  if (looksLikeInternalIdName(raw, phoneDigits)) return null
+  return displayNameFromParticipant({ pushName: raw, name: raw }, phoneDigits) || raw
+}
+
+/** true quando não há nome salvo, pushName nem telefone utilizável. */
+function contactNeedsIdentification(contact) {
+  if (!contact) return false
+  if (!isGenericSavedName(contact.name)) return false
+  const phoneDigits = resolvePhoneDigits(contact)
+  if (phoneDigits) return false
+  const push = sanitizePushName(contact.pushName, phoneDigits)
+  if (push) return false
+  return true
+}
+
 function resolveContactDisplayName(contact) {
   if (!contact) return "Contato"
   const manual = String(contact.name || "").trim()
-  if (manual && manual.toLowerCase() !== "contato") return manual
+  if (!isGenericSavedName(manual)) return manual
 
-  const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
-  const fromWa = displayNameFromParticipant(
-    { pushName: contact.pushName, name: contact.pushName, notify: contact.pushName },
-    phoneDigits,
-  )
-  if (fromWa) return fromWa
-
+  const phoneDigits = resolvePhoneDigits(contact)
   if (phoneDigits) return formatPhoneBr(phoneDigits)
 
-  if (contact.isLid) {
-    const lidPart = String(contact.remoteJid || "").split("@")[0]
-    if (lidPart.length >= 4) return `Contato #${lidPart.slice(-6)}`
-  }
+  const fromWa = sanitizePushName(contact.pushName, phoneDigits)
+  if (fromWa) return fromWa
+
   return "Contato"
 }
 
 function extractAltPhoneFromRecord(record, remoteJid) {
   const key = record?.key || {}
-  const candidates = [key.remoteJidAlt, key.participantAlt, record?.remoteJidAlt, key.senderPn, key.participant]
+  const candidates = [
+    key.remoteJidAlt,
+    key.participantAlt,
+    record?.remoteJidAlt,
+    key.senderPn,
+    key.senderLid,
+    key.participant,
+    record?.senderPn,
+    record?.participant,
+    record?.participantAlt,
+  ]
   for (const alt of candidates) {
-    const phone = phoneFromJid(alt)
+    const phone = phoneFromJid(alt) || phoneDigitsFromValue(alt)
     if (phone) return phone
   }
-  return phoneFromJid(remoteJid)
+  return phoneFromJid(remoteJid) || phoneDigitsFromJid(remoteJid)
+}
+
+function extractIdentityHintsFromRecord(record, remoteJid) {
+  const phoneDigits = phoneFromJid(remoteJid) || phoneDigitsFromJid(remoteJid)
+  const pushName = sanitizePushName(record?.pushName, phoneDigits)
+  const phone = extractAltPhoneFromRecord(record, remoteJid)
+  return { pushName, phone }
 }
 
 function formatContactRow(contact, { tags } = {}) {
   if (!contact) return null
   const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
-  const pushName =
-    contact.pushName && !looksLikeInternalIdName(contact.pushName, phoneDigits) ? contact.pushName : null
+  const pushName = sanitizePushName(contact.pushName, phoneDigits)
   return {
     id: contact.id,
     remoteJid: contact.remoteJid,
     name: resolveContactDisplayName(contact),
-    savedName: contact.name || null,
+    savedName: !isGenericSavedName(contact.name) ? contact.name : null,
     pushName,
     phone: phoneDigits || null,
     avatarUrl: contact.avatarUrl || null,
     isLid: Boolean(contact.isLid),
+    needsIdentification: contactNeedsIdentification({ ...contact, phone: phoneDigits }),
     notes: contact.notes || "",
     lastSeenAt: contact.lastSeenAt ? contact.lastSeenAt.toISOString() : null,
     tags: (tags || contact.tags || []).map((ct) => ({
@@ -159,17 +237,13 @@ const CONVERSATION_INCLUDE = {
 
 function cleanIncomingPushName(value, remoteJid) {
   const phoneDigits = phoneFromJid(remoteJid) || phoneDigitsFromJid(remoteJid)
-  const name = displayNameFromParticipant({ pushName: value, name: value }, phoneDigits)
-  if (name) return name
-  const raw = String(value || "").trim()
-  if (!raw || looksLikeInternalIdName(raw, phoneDigits)) return null
-  return raw
+  return sanitizePushName(value, phoneDigits)
 }
 
 /** Garante contato + conversa para um JID individual. */
 async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint } = {}) {
   const jid = String(remoteJid).trim()
-  const phone = phoneHint || phoneFromJid(jid)
+  const phone = phoneHint || phoneFromJid(jid) || phoneDigitsFromJid(jid)
 
   let contact = await prisma.crmContact.findUnique({
     where: { userId_remoteJid: { userId, remoteJid: jid } },
@@ -255,9 +329,11 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       ? cleanIncomingPushName(record?.pushName, remoteJid)
       : null
 
+  const hints = extractIdentityHintsFromRecord(record, remoteJid)
+
   const { conversation } = await ensureContactAndConversation(prisma, userId, remoteJid, {
-    pushName,
-    phone: extractAltPhoneFromRecord(record, remoteJid),
+    pushName: pushName || (!mapped.fromMe ? hints.pushName : null),
+    phone: hints.phone,
   })
   const isNewConversation = Boolean(conversation.__isNew)
 
@@ -323,6 +399,11 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       .catch(() => {})
   }
 
+  updatedConversation = await prisma.crmConversation.findUnique({
+    where: { id: conversation.id },
+    include: CONVERSATION_INCLUDE,
+  })
+
   return { message, conversation: updatedConversation, created, isNewConversation }
 }
 
@@ -337,6 +418,17 @@ module.exports = {
   isLidJid,
   phoneFromJid,
   previewFromBody,
+  isGenericSavedName,
+  resolvePhoneDigits,
+  contactNeedsIdentification,
+  resolveContactDisplayName,
+  isSelfOrGenericPushName,
+  sanitizePushName,
+  cleanIncomingPushName,
+  extractAltPhoneFromRecord,
+  extractIdentityHintsFromRecord,
+  phoneFromChatItem,
+  lidFallbackLabel,
   formatContactRow,
   formatConversationRow,
   formatMessageRow,

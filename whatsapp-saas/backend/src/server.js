@@ -39,6 +39,7 @@ const {
   fetchChatMessages,
   sendText,
   sendMedia,
+  sendWhatsAppAudio,
   logoutInstance,
   resolveQrForStorage,
   pickConnected,
@@ -101,7 +102,7 @@ const {
   formatMessageRow: formatCrmMessageRow,
   formatConversationRow: formatCrmConversationRow,
 } = require("./lib/crmCore")
-const { scheduleProfileFetch, contactNeedsProfile } = require("./lib/crmProfile")
+const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } = require("./lib/crmProfile")
 const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
 const { maybeReplyWithAi } = require("./lib/crmAiAgent")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
@@ -3086,38 +3087,48 @@ async function updateGroupsFromWebhook(instanceName, body) {
 
 /** Deps compartilhadas dos motores do CRM (fluxos, IA, fila de envio). */
 function getCrmDeps() {
-  return { prisma, io, sendText, sendMedia, findChats, fetchChatMessages }
+  return { prisma, io, sendText, sendMedia, sendWhatsAppAudio, findChats, fetchChatMessages }
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */
 async function handleCrmIncomingRecord(userId, record, instanceName = null) {
   const result = await ingestCrmMessage(getCrmDeps(), { userId, record, source: "webhook" })
-  if (!result || !result.created) return
+  if (!result) return
 
-  emitCrmEvent(io, userId, "crm:message", {
-    conversationId: result.conversation.id,
-    message: formatCrmMessageRow(result.message),
-    conversation: formatCrmConversationRow(result.conversation),
-  })
+  const { conversation, message, created } = result
+  const profileDeps = { prisma, io, fetchProfile, fetchProfilePictureUrl }
 
-  // Contato sem foto: busca perfil na Evolution (fila com throttle anti-ban)
-  if (instanceName && contactNeedsProfile(result.conversation.contact)) {
-    scheduleProfileFetch(
-      { prisma, io, fetchProfile, fetchProfilePictureUrl },
-      { userId, instanceName, remoteJid: result.conversation.remoteJid },
-    )
+  if (instanceName && contactNeedsProfile(conversation.contact)) {
+    scheduleProfileFetch(profileDeps, {
+      userId,
+      instanceName,
+      remoteJid: conversation.remoteJid,
+      avatarRefresh: contactNeedsIdentification(conversation.contact) ? false : Boolean(conversation.contact?.avatarUrl),
+    })
   }
 
-  if (!result.message.fromMe) {
+  if (created) {
+    emitCrmEvent(io, userId, "crm:message", {
+      conversationId: conversation.id,
+      message: formatCrmMessageRow(message),
+      conversation: formatCrmConversationRow(conversation),
+    })
+  } else {
+    emitCrmEvent(io, userId, "crm:conversation", { conversation: formatCrmConversationRow(conversation) })
+  }
+
+  if (!created) return
+
+  if (!message.fromMe) {
     onCrmMessage(getCrmDeps(), {
-      conversation: result.conversation,
-      message: result.message,
+      conversation,
+      message,
       isNewConversation: result.isNewConversation,
     }).catch((err) => console.error("[crm-flow] onMessage:", err?.message || err))
 
     maybeReplyWithAi(getCrmDeps(), {
-      conversation: result.conversation,
-      message: result.message,
+      conversation,
+      message,
     }).catch((err) => console.error("[crm-ai] reply:", err?.message || err))
   }
 }

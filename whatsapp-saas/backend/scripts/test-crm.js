@@ -278,7 +278,7 @@ test("formatContactRow formata telefone BR quando não há nome salvo", () => {
   assert.notStrictEqual(row.name, "553299377780")
 })
 
-test("formatContactRow usa pushName do WhatsApp quando disponível", () => {
+test("formatContactRow prioriza telefone sobre pushName quando não há nome salvo", () => {
   const row = formatContactRow({
     id: "c2",
     remoteJid: "5511999999999@s.whatsapp.net",
@@ -290,7 +290,8 @@ test("formatContactRow usa pushName do WhatsApp quando disponível", () => {
     notes: "",
     tags: [],
   })
-  assert.strictEqual(row.name, "Leonardo")
+  assert.strictEqual(row.name, "+55 (11) 99999-9999")
+  assert.strictEqual(row.pushName, "Leonardo")
   assert.strictEqual(row.savedName, null)
   assert.strictEqual(row.avatarUrl, "https://pps.whatsapp.net/l.jpg")
 })
@@ -309,6 +310,103 @@ test("formatContactRow prioriza nome salvo manualmente", () => {
   })
   assert.strictEqual(row.name, "Cliente VIP")
   assert.strictEqual(row.savedName, "Cliente VIP")
+})
+
+test("resolveContactDisplayName: nome salvo → telefone → pushName; ignora Você", () => {
+  const { resolveContactDisplayName } = require("../src/lib/crmCore")
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "321556@lid",
+      isLid: true,
+      pushName: "Maria",
+      name: null,
+      phone: null,
+    }),
+    "Maria",
+  )
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "321556@lid",
+      isLid: true,
+      pushName: null,
+      name: null,
+      phone: null,
+    }),
+    "Contato",
+  )
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "41758599@lid",
+      isLid: true,
+      pushName: null,
+      name: null,
+      phone: "556186337726",
+    }),
+    "+55 (61) 8633-7726",
+  )
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "553299377780@s.whatsapp.net",
+      phone: "553299377780",
+      pushName: null,
+      name: null,
+    }),
+    "+55 (32) 9937-7780",
+  )
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "558598231185@s.whatsapp.net",
+      phone: "558598231185",
+      pushName: "Você",
+      name: null,
+    }),
+    "+55 (85) 9823-1185",
+  )
+})
+
+test("sanitizePushName descarta Você e nomes genéricos", () => {
+  const { sanitizePushName } = require("../src/lib/crmCore")
+  assert.strictEqual(sanitizePushName("Você", "558598231185"), null)
+  assert.strictEqual(sanitizePushName("Voce", null), null)
+  assert.strictEqual(sanitizePushName("Maria", null), "Maria")
+})
+
+test("extractLidPhoneMap resolve telefone via remoteJidAlt", () => {
+  const { extractLidPhoneMap } = require("../src/lib/crmSync")
+  const map = extractLidPhoneMap([
+    {
+      remoteJid: "41758599@lid",
+      remoteJidAlt: "556186337726@s.whatsapp.net",
+    },
+    {
+      remoteJid: "5511999999999@s.whatsapp.net",
+    },
+  ])
+  assert.strictEqual(map.get("41758599@lid"), "556186337726")
+  assert.strictEqual(map.size, 1)
+})
+
+test("phoneFromChatItem lê senderPn e remoteJidAlt", () => {
+  const { phoneFromChatItem } = require("../src/lib/crmCore")
+  assert.strictEqual(
+    phoneFromChatItem({ remoteJid: "41758599@lid", remoteJidAlt: "556186337726@s.whatsapp.net" }),
+    "556186337726",
+  )
+  assert.strictEqual(phoneFromChatItem({ remoteJid: "41758599@lid", senderPn: "5561999887766" }), "5561999887766")
+})
+
+test("readStoredMessageMedia lê mídia enviada pelo CRM em raw._localMedia", () => {
+  const { readStoredMessageMedia, buildOutboundMessageRaw } = require("../src/lib/crmMedia")
+  const raw = buildOutboundMessageRaw({
+    providerMessageId: "ABC123",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    mediaBase64: "ZGF0YQ==",
+    mediaMime: "audio/webm",
+  })
+  const msg = { id: "m1", mediaMime: "audio/webm", raw }
+  const stored = readStoredMessageMedia(msg)
+  assert.strictEqual(stored.base64, "ZGF0YQ==")
+  assert.strictEqual(stored.mimetype, "audio/webm")
 })
 
 // ---------------- crmAiAgent

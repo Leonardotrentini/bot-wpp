@@ -52,6 +52,41 @@ function mediaRecordIsComplete(rawRecord) {
   )
 }
 
+function stripMediaBase64(value) {
+  return String(value || "")
+    .replace(/^data:[^;]+;base64,/, "")
+    .replace(/\s/g, "")
+}
+
+/** Mídia enviada pelo CRM e guardada em raw._localMedia (antes do WhatsApp indexar). */
+function readStoredMessageMedia(msg) {
+  const local = msg?.raw?._localMedia
+  if (!local?.base64) return null
+  return {
+    base64: stripMediaBase64(local.base64),
+    mimetype: local.mimetype || msg?.mediaMime || "application/octet-stream",
+  }
+}
+
+/** Monta raw para mensagens enviadas manualmente / fila CRM. */
+function buildOutboundMessageRaw({ providerMessageId, remoteJid, evolutionResp, mediaBase64, mediaMime } = {}) {
+  if (evolutionResp && mediaRecordIsComplete(evolutionResp)) {
+    return JSON.parse(JSON.stringify(evolutionResp))
+  }
+  const id = providerMessageId || `manual-${Date.now()}`
+  const raw = {
+    key: { id, remoteJid, fromMe: true },
+  }
+  const b64 = stripMediaBase64(mediaBase64)
+  if (b64) {
+    raw._localMedia = {
+      base64: b64,
+      mimetype: mediaMime || null,
+    }
+  }
+  return raw
+}
+
 function extractMediaBase64Payload(resp) {
   const queue = [resp]
   const seen = new Set()
@@ -84,6 +119,9 @@ function extractMediaBase64Payload(resp) {
 }
 
 async function ensureMessageRaw(deps, msg) {
+  const stored = readStoredMessageMedia(msg)
+  if (stored) return null
+
   if (msg.raw && mediaRecordIsComplete(msg.raw)) return prepareMediaMessageRecord(msg.raw)
 
   const conv = await deps.prisma.crmConversation.findUnique({ where: { id: msg.conversationId } })
@@ -117,5 +155,7 @@ module.exports = {
   prepareMediaMessageRecord,
   mediaRecordIsComplete,
   extractMediaBase64Payload,
+  readStoredMessageMedia,
+  buildOutboundMessageRaw,
   ensureMessageRaw,
 }

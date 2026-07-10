@@ -28,7 +28,7 @@ import { useToast } from '../../contexts/ToastContext.jsx'
 import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.jsx'
 import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
-import { contactTitle } from '../../lib/contactDisplay.js'
+import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr } from '../../lib/contactDisplay.js'
 import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia } from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
 import {
@@ -122,11 +122,8 @@ function KanbanCard({ conversation: c, dragId, onDragStart, onDragEnd, onOpenCha
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
             <p className="truncate text-[11px] text-stone-500">
-              {c.contact?.phone && !contactTitle(c.contact).includes('(')
-                ? `+${c.contact.phone}`
-                : c.contact?.phone
-                  ? ''
-                  : c.remoteJid?.split('@')[0]}
+              {contactSubtitle(c.contact) ||
+                (resolveContactPhone(c.contact) ? formatPhoneBr(resolveContactPhone(c.contact)) : c.remoteJid?.split('@')[0])}
             </p>
           </div>
           {c.aiEnabled && <Bot className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" title="IA ativa" />}

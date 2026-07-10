@@ -5,10 +5,8 @@ import {
   Send,
   Paperclip,
   X,
-  RefreshCw,
   Bot,
   CheckCheck,
-  Clock,
   Tag as TagIcon,
   StickyNote,
   Zap,
@@ -34,6 +32,7 @@ import { useAuth } from '../../contexts/AuthContext.jsx'
 import { onSocketEvent } from '../../services/socket.js'
 import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
 import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingModal.jsx'
+import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
 import { ChatMessageContent } from '../../components/crm/ChatMessageContent.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
@@ -60,7 +59,8 @@ import {
   getWhatsAppStatus,
 } from '../../services/api.js'
 
-import { contactTitle } from '../../lib/contactDisplay.js'
+import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
+import { revokeAudioPreview } from '../../lib/audioRecorder.js'
 
 // ---------------------------------------------------------------- helpers
 
@@ -91,13 +91,6 @@ function dayLabel(iso) {
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
 }
 
-function formatEta(seconds) {
-  if (seconds == null) return null
-  if (seconds < 60) return `~${seconds}s restantes`
-  const min = Math.round(seconds / 60)
-  return `~${min}min restantes`
-}
-
 function mediaTypeFromMime(mime, name = '') {
   if (!mime && name) {
     if (/\.pdf$/i.test(name)) return 'document'
@@ -117,75 +110,12 @@ const STATUS_LABELS = {
   archived: 'Arquivada',
 }
 
-// ---------------------------------------------------------------- sync banner
-
-function SyncBanner({ job, onStartSync, syncStarting, onRefreshProfiles, profileRefreshing }) {
-  const [days, setDays] = useState('30')
-  if (!job || ['done', 'error', 'cancelled'].includes(job.status)) {
-    return (
-      <div className="flex flex-wrap items-center gap-2 border-b border-brand-800 bg-brand-900/60 px-3 py-2">
-        <RefreshCw className="h-4 w-4 text-stone-400" />
-        <span className="text-xs text-stone-400">
-          {job?.status === 'done'
-            ? `Última sincronização: ${formatChatTime(job.finishedAt)} · ${job.totalMessages} msgs de ${job.doneChats} conversas`
-            : job?.status === 'error'
-              ? 'Última sincronização falhou.'
-              : 'Importe as conversas antigas do seu WhatsApp.'}
-        </span>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={onRefreshProfiles} disabled={profileRefreshing || syncStarting}>
-            {profileRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <User className="h-3.5 w-3.5" />}
-            Nomes e fotos
-          </Button>
-          <Select className="w-28" value={days} onChange={(e) => setDays(e.target.value)}>
-            <option value="7">7 dias</option>
-            <option value="30">30 dias</option>
-            <option value="90">90 dias</option>
-            <option value="180">180 dias</option>
-          </Select>
-          <Button size="sm" variant="secondary" onClick={() => onStartSync(Number(days))} disabled={syncStarting || profileRefreshing}>
-            {syncStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            Sincronizar
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
-  const pct = job.totalChats > 0 ? Math.round((job.doneChats / job.totalChats) * 100) : 0
-  const rateLimited = job.status === 'rate_limited'
-  return (
-    <div className={`border-b px-3 py-2 ${rateLimited ? 'border-amber-500/30 bg-amber-500/10' : 'border-accent-500/25 bg-accent-500/10'}`}>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        {rateLimited ? (
-          <Clock className="h-4 w-4 text-amber-400" />
-        ) : (
-          <Loader2 className="h-4 w-4 animate-spin text-accent-400" />
-        )}
-        <span className={rateLimited ? 'text-amber-200' : 'text-accent-200'}>
-          {rateLimited
-            ? `WhatsApp limitou consultas. Retomada após ${job.retryAfter ? new Date(job.retryAfter).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : 'alguns minutos'}.`
-            : `Sincronizando ${job.doneChats}/${job.totalChats} conversas · ${job.totalMessages} msgs importadas`}
-        </span>
-        {!rateLimited && job.currentChat && <span className="text-stone-400">· {job.currentChat}</span>}
-        {!rateLimited && formatEta(job.etaSeconds) && <span className="text-stone-400">· {formatEta(job.etaSeconds)}</span>}
-        <span className="ml-auto text-stone-400">
-          início {new Date(job.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-        </span>
-      </div>
-      {!rateLimited && (
-        <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-brand-800">
-          <div className="h-full rounded-full bg-accent-500 transition-all" style={{ width: `${pct}%` }} />
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ---------------------------------------------------------------- página
 
 export function Chat() {
-  const toast = useToast()
+  const toastApi = useToast()
+  const toastRef = useRef(toastApi)
+  toastRef.current = toastApi
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -194,6 +124,7 @@ export function Chat() {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
+  const [unidentifiedOnly, setUnidentifiedOnly] = useState(false)
 
   const [activeId, setActiveId] = useState(searchParams.get('c') || null)
   const [messages, setMessages] = useState([])
@@ -215,10 +146,11 @@ export function Chat() {
 
   const [syncJob, setSyncJob] = useState(null)
   const [syncStarting, setSyncStarting] = useState(false)
-  const [profileRefreshing, setProfileRefreshing] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [waConnected, setWaConnected] = useState(true)
   const profilesAutoRefreshed = useRef(false)
+  const listLoadSeq = useRef(0)
+  const listErrorAt = useRef(0)
 
   const [showPanel, setShowPanel] = useState(true)
   const [notesDraft, setNotesDraft] = useState('')
@@ -239,6 +171,16 @@ export function Chat() {
 
   const active = useMemo(() => conversations.find((c) => c.id === activeId) || null, [conversations, activeId])
 
+  const displayedConversations = useMemo(() => {
+    if (!unidentifiedOnly) return conversations
+    return conversations.filter((c) => contactNeedsIdentification(c.contact))
+  }, [conversations, unidentifiedOnly])
+
+  const unidentifiedCount = useMemo(
+    () => conversations.filter((c) => contactNeedsIdentification(c.contact)).length,
+    [conversations],
+  )
+
   // ------------------------------------------------ carregamento
 
   useEffect(() => {
@@ -247,19 +189,27 @@ export function Chat() {
   }, [user])
 
   const loadConversations = useCallback(async () => {
+    const seq = ++listLoadSeq.current
+    setLoadingList(true)
     try {
       const params = {}
       if (query.trim()) params.q = query.trim()
       if (statusFilter) params.status = statusFilter
       if (tagFilter) params.tagId = tagFilter
       const { data } = await getCrmConversations(params)
+      if (seq !== listLoadSeq.current) return
       setConversations(data.conversations || [])
     } catch {
-      toast.error('Falha ao carregar conversas.')
+      if (seq !== listLoadSeq.current) return
+      const now = Date.now()
+      if (now - listErrorAt.current > 10000) {
+        listErrorAt.current = now
+        toastRef.current.error('Falha ao carregar conversas.')
+      }
     } finally {
-      setLoadingList(false)
+      if (seq === listLoadSeq.current) setLoadingList(false)
     }
-  }, [query, statusFilter, tagFilter, toast])
+  }, [query, statusFilter, tagFilter])
 
   useEffect(() => {
     const t = setTimeout(loadConversations, query ? 350 : 0)
@@ -282,10 +232,27 @@ export function Chat() {
   useEffect(() => {
     if (!waConnected || profilesAutoRefreshed.current) return
     profilesAutoRefreshed.current = true
-    refreshCrmProfiles()
-      .then(() => loadConversations())
-      .catch(() => {})
-  }, [waConnected, loadConversations])
+    const t = setTimeout(() => {
+      refreshCrmProfiles().catch(() => {})
+    }, 4000)
+    return () => clearTimeout(t)
+  }, [waConnected])
+
+  // Poll do status de sync enquanto job ativo (fallback se socket cair)
+  useEffect(() => {
+    const active = syncJob && ['running', 'rate_limited'].includes(syncJob.status)
+    if (!active) return undefined
+    const poll = () => {
+      getCrmSyncStatus()
+        .then(({ data }) => {
+          if (data.job) setSyncJob(data.job)
+        })
+        .catch(() => {})
+    }
+    poll()
+    const id = setInterval(poll, 5000)
+    return () => clearInterval(id)
+  }, [syncJob?.id, syncJob?.status])
 
   const openConversation = useCallback(
     async (id) => {
@@ -305,12 +272,12 @@ export function Chat() {
           })
           .catch(() => {})
       } catch {
-        toast.error('Falha ao carregar mensagens.')
+        toastRef.current.error('Falha ao carregar mensagens.')
       } finally {
         setLoadingMessages(false)
       }
     },
-    [setSearchParams, toast],
+    [setSearchParams],
   )
 
   useEffect(() => {
@@ -328,11 +295,11 @@ export function Chat() {
       setMessages((prev) => [...(data.messages || []), ...prev])
       setHasMore(Boolean(data.hasMore))
     } catch {
-      toast.error('Falha ao carregar histórico.')
+      toastRef.current.error('Falha ao carregar histórico.')
     } finally {
       setLoadingOlder(false)
     }
-  }, [activeId, messages, loadingOlder, toast])
+  }, [activeId, messages, loadingOlder])
 
   // ------------------------------------------------ tempo real
 
@@ -356,12 +323,12 @@ export function Chat() {
     const offSync = onSocketEvent('crm:sync', ({ job }) => {
       setSyncJob(job)
       if (job?.status === 'done') {
-        toast.success('Sincronização concluída.')
+        toastRef.current.success('Sincronização concluída.')
         loadConversations()
       }
     })
     const offHandoff = onSocketEvent('crm:handoff', () => {
-      toast.info('Uma conversa foi transferida da IA para atendimento humano.', 'Transferência')
+      toastRef.current.info('Uma conversa foi transferida da IA para atendimento humano.', 'Transferência')
       loadConversations()
     })
     return () => {
@@ -370,7 +337,7 @@ export function Chat() {
       offSync()
       offHandoff()
     }
-  }, [loadConversations, toast])
+  }, [loadConversations])
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -406,21 +373,22 @@ export function Chat() {
         })
       }
       setDraft('')
+      if (attachment) revokeAudioPreview(attachment)
       setAttachment(null)
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao enviar mensagem.')
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao enviar mensagem.')
     } finally {
       setSending(false)
       inputRef.current?.focus()
     }
-  }, [draft, attachment, activeId, sending, toast])
+  }, [draft, attachment, activeId, sending])
 
   const handleFile = useCallback(
     (file) => {
       if (!file) return
       const type = mediaTypeFromMime(file.type, file.name)
       if (type === 'none') {
-        toast.error('Envie imagem, vídeo MP4, áudio ou PDF.')
+        toastRef.current.error('Envie imagem, vídeo MP4, áudio ou PDF.')
         return
       }
       const reader = new FileReader()
@@ -430,7 +398,7 @@ export function Chat() {
       }
       reader.readAsDataURL(file)
     },
-    [toast],
+    [],
   )
 
   const updateConversation = useCallback(
@@ -442,10 +410,10 @@ export function Chat() {
           setConversations((prev) => prev.map((c) => (c.id === data.conversation.id ? data.conversation : c)))
         }
       } catch (err) {
-        toast.error(err?.response?.data?.message || 'Falha ao atualizar conversa.')
+        toastRef.current.error(err?.response?.data?.message || 'Falha ao atualizar conversa.')
       }
     },
-    [activeId, toast],
+    [activeId],
   )
 
   const saveNotes = useCallback(async () => {
@@ -456,12 +424,12 @@ export function Chat() {
         setConversations((prev) =>
           prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...data.contact } } : c)),
         )
-        toast.success('Notas salvas.')
+        toastRef.current.success('Notas salvas.')
       }
     } catch {
-      toast.error('Falha ao salvar notas.')
+      toastRef.current.error('Falha ao salvar notas.')
     }
-  }, [active, notesDraft, activeId, toast])
+  }, [active, notesDraft, activeId])
 
   const saveContactName = useCallback(async () => {
     const name = nameDraft.trim()
@@ -475,15 +443,15 @@ export function Chat() {
         )
         setNameDraft(data.contact.savedName || name)
       }
-      if (data.whatsappSaved) toast.success(data.message || 'Contato salvo.')
-      else if (data.message?.includes('apenas no Vesto')) toast.info(data.message)
-      else toast.success(data.message || 'Nome salvo no Vesto.')
+      if (data.whatsappSaved) toastRef.current.success(data.message || 'Contato salvo.')
+      else if (data.message?.includes('apenas no Vesto')) toastRef.current.info(data.message)
+      else toastRef.current.success(data.message || 'Nome salvo no Vesto.')
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao salvar contato.')
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao salvar contato.')
     } finally {
       setSavingContact(false)
     }
-  }, [active, nameDraft, saveOnWhatsapp, activeId, toast])
+  }, [active, nameDraft, saveOnWhatsapp, activeId])
 
   const toggleContactTag = useCallback(
     async (tag) => {
@@ -497,10 +465,10 @@ export function Chat() {
           setConversations((prev) => prev.map((c) => (c.id === activeId ? { ...c, contact: data.contact } : c)))
         }
       } catch {
-        toast.error('Falha ao atualizar tags.')
+        toastRef.current.error('Falha ao atualizar tags.')
       }
     },
-    [active, activeId, toast],
+    [active, activeId],
   )
 
   const handleCreateTag = useCallback(async () => {
@@ -511,28 +479,11 @@ export function Chat() {
       setTags((prev) => [...prev, data.tag].sort((a, b) => a.name.localeCompare(b.name)))
       setNewTagModal(false)
       setNewTagName('')
-      toast.success('Tag criada.')
+      toastRef.current.success('Tag criada.')
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao criar tag.')
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao criar tag.')
     }
-  }, [newTagName, toast])
-
-  const handleRefreshProfiles = useCallback(async () => {
-    setProfileRefreshing(true)
-    try {
-      const { data } = await refreshCrmProfiles()
-      await loadConversations()
-      if (data.enriched || data.queued) {
-        toast.success(data.message || 'Nomes e fotos atualizados.')
-      } else {
-        toast.info(data.message || 'Nenhum perfil novo encontrado.')
-      }
-    } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao atualizar nomes e fotos.')
-    } finally {
-      setProfileRefreshing(false)
-    }
-  }, [loadConversations, toast])
+  }, [newTagName])
 
   const refreshAvatar = useCallback(
     async (contactId) => {
@@ -551,22 +502,35 @@ export function Chat() {
     [],
   )
 
-  const handleStartSync = useCallback(
-    async (days) => {
-      setSyncStarting(true)
-      try {
-        const { data } = await startCrmSync({ days })
-        if (data.job) setSyncJob(data.job)
-        if (data.alreadyRunning) toast.info('Sincronização já está em andamento.')
-        else toast.success('Sincronização iniciada.')
-      } catch (err) {
-        toast.error(err?.response?.data?.message || 'Falha ao iniciar sincronização.')
-      } finally {
-        setSyncStarting(false)
+  const handleStartSync = useCallback(async (days) => {
+    setSyncStarting(true)
+    try {
+      const { data } = await startCrmSync({ days })
+      if (data.job) setSyncJob(data.job)
+      if (data.rateLimited) {
+        toastRef.current.info('WhatsApp limitou consultas. Aguarde antes de sincronizar de novo.')
+        return true
       }
-    },
-    [toast],
-  )
+      if (data.alreadyRunning) {
+        toastRef.current.info('Sincronização já está em andamento.')
+        return true
+      }
+      toastRef.current.success('Sincronização iniciada.')
+      return true
+    } catch (err) {
+      const status = err?.response?.status
+      const body = err?.response?.data
+      if (body?.job) setSyncJob(body.job)
+      if (status === 429) {
+        toastRef.current.info(body?.message || 'WhatsApp limitou consultas. Aguarde antes de sincronizar de novo.')
+        return true
+      }
+      toastRef.current.error(body?.message || 'Falha ao iniciar sincronização.')
+      return false
+    } finally {
+      setSyncStarting(false)
+    }
+  }, [])
 
   const applyQuickReply = useCallback(
     async (qr) => {
@@ -586,13 +550,13 @@ export function Chat() {
             })
           }
         } catch {
-          toast.error('Falha ao carregar a mídia do atalho.')
+          toastRef.current.error('Falha ao carregar a mídia do atalho.')
         }
       }
       setDraft((prev) => (qr.body ? (prev ? `${prev} ${qr.body}` : qr.body) : prev))
       inputRef.current?.focus()
     },
-    [toast],
+    [],
   )
 
   const onDraftChange = useCallback((value) => {
@@ -641,13 +605,7 @@ export function Chat() {
       <div className="flex h-[calc(100vh-7.5rem)] min-h-[480px] overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/40">
       {/* Lista de conversas */}
       <div className="flex w-full max-w-xs shrink-0 flex-col border-r border-brand-800">
-        <SyncBanner
-          job={syncJob}
-          onStartSync={handleStartSync}
-          syncStarting={syncStarting}
-          onRefreshProfiles={handleRefreshProfiles}
-          profileRefreshing={profileRefreshing}
-        />
+        <ChatSyncBar job={syncJob} onStartSync={handleStartSync} syncStarting={syncStarting} />
         {!waConnected && (
           <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
             <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
@@ -684,22 +642,37 @@ export function Chat() {
               ))}
             </Select>
           </div>
+          {unidentifiedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setUnidentifiedOnly((v) => !v)}
+              className={`w-full rounded-lg border px-2.5 py-1.5 text-left text-xs transition ${
+                unidentifiedOnly
+                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-100'
+                  : 'border-brand-700 bg-brand-900/40 text-stone-400 hover:border-amber-500/30'
+              }`}
+            >
+              {unidentifiedOnly ? 'Mostrar todas as conversas' : `Sem identificação (${unidentifiedCount})`}
+            </button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {loadingList ? (
             <div className="flex justify-center py-10">
               <Spinner />
             </div>
-          ) : conversations.length === 0 ? (
+          ) : displayedConversations.length === 0 ? (
             <div className="px-4 py-10 text-center">
               <MessageSquare className="mx-auto h-8 w-8 text-stone-600" />
-              <p className="mt-2 text-sm text-stone-400">Nenhuma conversa ainda.</p>
-              <p className="mt-1 text-xs text-stone-500">
-                Sincronize o histórico acima ou aguarde novas mensagens chegarem.
+              <p className="mt-2 text-sm text-stone-400">
+                {unidentifiedOnly ? 'Nenhuma conversa sem identificação.' : 'Nenhuma conversa ainda.'}
               </p>
             </div>
           ) : (
-            conversations.map((c) => (
+            displayedConversations.map((c) => {
+              const subtitle = contactSubtitle(c.contact)
+              const unidentified = contactNeedsIdentification(c.contact)
+              return (
               <button
                 key={c.id}
                 type="button"
@@ -720,9 +693,19 @@ export function Chat() {
                     <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
                     <span className="shrink-0 text-[10px] text-stone-500">{formatChatTime(c.lastMessageAt)}</span>
                   </div>
+                  {subtitle && (
+                    <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>
+                      {subtitle}
+                    </p>
+                  )}
                   <div className="mt-0.5 flex items-center gap-1.5">
                     {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0 text-stone-500" />}
                     <p className="truncate text-xs text-stone-400">{c.lastMessagePreview || '—'}</p>
+                    {unidentified && (
+                      <span className="ml-auto shrink-0 rounded px-1 py-px text-[9px] font-semibold text-amber-200 bg-amber-500/20">
+                        ?
+                      </span>
+                    )}
                     {c.unreadCount > 0 && (
                       <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
                         {c.unreadCount}
@@ -745,7 +728,7 @@ export function Chat() {
                   )}
                 </div>
               </button>
-            ))
+            )})
           )}
         </div>
       </div>
@@ -770,7 +753,12 @@ export function Chat() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
                 <p className="text-xs text-stone-500">
-                  {active.contact?.phone ? `+${active.contact.phone}` : active.remoteJid.split('@')[0]}
+                  {(() => {
+                    const phone = resolveContactPhone(active.contact)
+                    if (phone) return formatPhoneBr(phone)
+                    if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
+                    return active.remoteJid.split('@')[0]
+                  })()}
                 </p>
               </div>
               {active.aiEnabled && (
@@ -867,69 +855,85 @@ export function Chat() {
                     <span className="block truncate">{attachment.name}</span>
                     {attachment.type === 'audio' && (
                       <audio
-                        src={`data:${attachment.mime};base64,${attachment.base64}`}
+                        src={attachment.previewUrl || `data:${attachment.mime};base64,${attachment.base64}`}
                         controls
                         className="mt-1 h-8 w-full max-w-xs"
-                        preload="metadata"
+                        preload="auto"
                       />
                     )}
                   </div>
-                  <button type="button" onClick={() => setAttachment(null)} className="shrink-0 text-stone-500 hover:text-stone-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      revokeAudioPreview(attachment)
+                      setAttachment(null)
+                    }}
+                    className="shrink-0 text-stone-500 hover:text-stone-200"
+                  >
                     <X className="h-3.5 w-3.5" />
                   </button>
                 </div>
               )}
-              <div className="flex items-end gap-2">
-                <ChatQuickRepliesMenu
-                  quickReplies={quickReplies}
-                  onQuickRepliesChange={setQuickReplies}
-                  onApply={applyQuickReply}
-                  draft={draft}
-                />
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    handleFile(e.target.files?.[0])
-                    e.target.value = ''
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={isRecording || Boolean(attachment)}
-                  className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
-                  title="Anexar imagem, vídeo, áudio ou PDF"
-                >
-                  <Paperclip className="h-5 w-5" />
-                </button>
+              <div className="flex min-h-[42px] items-end gap-2">
+                {!isRecording && (
+                  <ChatQuickRepliesMenu
+                    quickReplies={quickReplies}
+                    onQuickRepliesChange={setQuickReplies}
+                    onApply={applyQuickReply}
+                    draft={draft}
+                  />
+                )}
+                {!isRecording && (
+                  <>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleFile(e.target.files?.[0])
+                        e.target.value = ''
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileRef.current?.click()}
+                      disabled={Boolean(attachment)}
+                      className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
+                      title="Anexar imagem, vídeo, áudio ou PDF"
+                    >
+                      <Paperclip className="h-5 w-5" />
+                    </button>
+                  </>
+                )}
                 <AudioRecorderButton
-                  disabled={sending || Boolean(attachment)}
+                  disabled={sending || (!isRecording && Boolean(attachment))}
                   onRecorded={setAttachment}
-                  onError={(msg) => toast.error(msg)}
+                  onError={(msg) => toastRef.current.error(msg)}
                   onRecordingChange={setIsRecording}
                 />
-                <textarea
-                  ref={inputRef}
-                  value={draft}
-                  onChange={(e) => onDraftChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSend()
-                    }
-                    if (e.key === 'Escape') setQrOpen(false)
-                  }}
-                  rows={1}
-                  disabled={isRecording}
-                  placeholder={isRecording ? 'Gravando áudio…' : 'Digite uma mensagem… (use / para atalhos)'}
-                  className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 disabled:opacity-50"
-                />
-                <Button onClick={handleSend} disabled={sending || isRecording || (!draft.trim() && !attachment)}>
-                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </Button>
+                {!isRecording && (
+                  <>
+                    <textarea
+                      ref={inputRef}
+                      value={draft}
+                      onChange={(e) => onDraftChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          handleSend()
+                        }
+                        if (e.key === 'Escape') setQrOpen(false)
+                      }}
+                      rows={1}
+                      placeholder="Digite uma mensagem… (use / para atalhos)"
+                      className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+                    />
+                    <Button onClick={handleSend} disabled={sending || (!draft.trim() && !attachment)}>
+                      {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           </>
@@ -948,13 +952,27 @@ export function Chat() {
               onRefreshAvatar={refreshAvatar}
             />
             <p className="text-center text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
-            {active.contact?.pushName && active.contact.pushName !== active.contact?.savedName && (
+            {active.contact?.pushName && !isSelfOrGenericPushName(active.contact.pushName) && active.contact.pushName !== active.contact?.savedName && (
               <p className="text-center text-xs text-stone-500">WhatsApp: {active.contact.pushName}</p>
             )}
             <p className="text-xs text-stone-500">
-              {active.contact?.phone ? `+${active.contact.phone}` : active.remoteJid.split('@')[0]}
+              {(() => {
+                const phone = resolveContactPhone(active.contact)
+                if (phone) return formatPhoneBr(phone)
+                if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
+                return active.remoteJid.split('@')[0]
+              })()}
             </p>
           </div>
+
+          {contactNeedsIdentification(active.contact) && (
+            <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
+              <p className="font-medium">Contato não identificado</p>
+              <p className="mt-1 text-amber-200/80">
+                Salve um nome abaixo para não perder este contato no CRM. O WhatsApp não expôs telefone ou nome de perfil.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-4 p-4">
             <div>

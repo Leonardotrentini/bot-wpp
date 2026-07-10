@@ -7,7 +7,7 @@
  */
 
 const { normalizeEvolutionMessages, filterMessagesForGroup, toIsoFromEvolutionTimestamp } = require("./evolutionMessages")
-const { isIndividualJid, ingestCrmMessage, emitCrmEvent, formatConversationRow } = require("./crmCore")
+const { isIndividualJid, ingestCrmMessage, emitCrmEvent, formatConversationRow, phoneFromChatItem } = require("./crmCore")
 const { syncContactProfiles, lookupDirectoryInfo } = require("./crmProfile")
 
 const CRM_SYNC_PAGE_SIZE = Number(process.env.CRM_SYNC_PAGE_SIZE || 50)
@@ -29,11 +29,26 @@ function isRateLimitError(err) {
   return msg.includes("rate") && msg.includes("limit")
 }
 
+function normalizeChatList(payload) {
+  if (Array.isArray(payload)) return payload
+  return payload?.records || payload?.chats || payload?.data || payload?.response || []
+}
+
+/** Mapa remoteJid @lid → telefone (remoteJidAlt nas conversas da Evolution). */
+function extractLidPhoneMap(payload) {
+  const map = new Map()
+  for (const chat of normalizeChatList(payload)) {
+    const jid = String(chat?.remoteJid || chat?.id || chat?.jid || chat?.key?.remoteJid || "").trim()
+    if (!/@lid$/i.test(jid)) continue
+    const phone = phoneFromChatItem(chat)
+    if (phone) map.set(jid, phone)
+  }
+  return map
+}
+
 /** Extrai JIDs individuais da resposta do findChats (formatos variados). */
 function extractIndividualChats(payload) {
-  const list = Array.isArray(payload)
-    ? payload
-    : payload?.records || payload?.chats || payload?.data || payload?.response || []
+  const list = normalizeChatList(payload)
   const out = []
   const seen = new Set()
   for (const chat of Array.isArray(list) ? list : []) {
@@ -42,11 +57,14 @@ function extractIndividualChats(payload) {
     const norm = String(jid).trim()
     if (seen.has(norm)) continue
     seen.add(norm)
+    const altJid = chat?.remoteJidAlt || chat?.jidAlt || chat?.key?.remoteJidAlt || null
     const tsIso = toIsoFromEvolutionTimestamp(
       chat?.updatedAt || chat?.lastMsgTimestamp || chat?.lastMessageTimestamp || chat?.conversationTimestamp,
     )
     out.push({
       remoteJid: norm,
+      remoteJidAlt: altJid ? String(altJid).trim() : null,
+      phone: phoneFromChatItem(chat),
       pushName: chat?.pushName || chat?.name || null,
       avatarUrl: chat?.profilePicUrl || chat?.profilePictureUrl || null,
       lastActivityAt: tsIso ? new Date(tsIso) : null,
@@ -215,15 +233,17 @@ async function runSyncJob(deps, { userId, instanceName, job }) {
       )
     }
 
-    const { ensureContactAndConversation, phoneFromJid } = require("./crmCore")
+    const { ensureContactAndConversation, phoneFromJid, sanitizePushName } = require("./crmCore")
     for (const chat of chats) {
+      const phone = chat.phone || phoneFromJid(chat.remoteJid)
       const info = lookupDirectoryInfo(profileResult.directory, {
         remoteJid: chat.remoteJid,
-        phone: phoneFromJid(chat.remoteJid),
+        phone,
       })
       await ensureContactAndConversation(prisma, userId, chat.remoteJid, {
-        pushName: info?.pushName || chat.pushName,
+        pushName: info?.pushName || sanitizePushName(chat.pushName, phone),
         avatarUrl: info?.avatarUrl || chat.avatarUrl,
+        phone,
       }).catch(() => {})
     }
 
@@ -290,5 +310,7 @@ module.exports = {
   getCrmSyncStatus,
   isSyncRunning,
   extractIndividualChats,
+  extractLidPhoneMap,
+  normalizeChatList,
   jobPayload,
 }

@@ -4,6 +4,7 @@
  */
 
 const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, CONVERSATION_INCLUDE } = require("./crmCore")
+const { buildOutboundMessageRaw } = require("./crmMedia")
 
 const CRM_DELIVERY_BATCH = Number(process.env.CRM_DELIVERY_BATCH || 5)
 const CRM_DELIVERY_GAP_MS = Number(process.env.CRM_DELIVERY_GAP_MS || 2000)
@@ -16,7 +17,7 @@ function extractProviderMessageId(resp) {
 }
 
 async function processOneDelivery(deps, delivery) {
-  const { prisma, sendText, sendMedia, io } = deps
+  const { prisma, sendText, sendMedia, sendWhatsAppAudio, io } = deps
 
   const conversation = await prisma.crmConversation.findUnique({
     where: { id: delivery.conversationId },
@@ -47,19 +48,30 @@ async function processOneDelivery(deps, delivery) {
     let resp
     if (hasMedia) {
       const media = String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
-      resp = await sendMedia(conn.instanceName, delivery.remoteJid, {
-        mediatype: mediaType,
-        media,
-        mimetype: delivery.mediaMime || undefined,
-        caption: delivery.body || undefined,
-        fileName: delivery.mediaName || undefined,
-      })
+      if (mediaType === "audio" && typeof sendWhatsAppAudio === "function") {
+        const mimetype = delivery.mediaMime || "audio/ogg; codecs=opus"
+        const audioPayload = media.startsWith("data:") ? media : `data:${mimetype};base64,${media}`
+        resp = await sendWhatsAppAudio(conn.instanceName, delivery.remoteJid, {
+          audio: audioPayload,
+          mimetype,
+          encoding: true,
+        })
+      } else {
+        resp = await sendMedia(conn.instanceName, delivery.remoteJid, {
+          mediatype: mediaType,
+          media,
+          mimetype: delivery.mediaMime || undefined,
+          caption: delivery.body || undefined,
+          fileName: delivery.mediaName || undefined,
+        })
+      }
     } else {
       resp = await sendText(conn.instanceName, delivery.remoteJid, delivery.body || "")
     }
     const providerMessageId = extractProviderMessageId(resp)
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
+    const mediaB64 = hasMedia ? String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "") : null
 
     await prisma.crmDelivery.update({
       where: { id: delivery.id },
@@ -78,6 +90,15 @@ async function processOneDelivery(deps, delivery) {
         status: "sent",
         source: delivery.kind, // flow | ai
         timestamp: now,
+        raw: hasMedia
+          ? buildOutboundMessageRaw({
+              providerMessageId,
+              remoteJid: delivery.remoteJid,
+              evolutionResp: resp,
+              mediaBase64: mediaB64,
+              mediaMime: delivery.mediaMime,
+            })
+          : null,
       },
     })
 

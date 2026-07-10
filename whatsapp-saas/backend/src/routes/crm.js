@@ -10,6 +10,7 @@ const { authMiddleware } = require("../lib/auth")
 const {
   sendText,
   sendMedia,
+  sendWhatsAppAudio,
   findChats,
   findContacts,
   fetchChatMessages,
@@ -32,7 +33,7 @@ const {
 } = require("../lib/crmCore")
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles } = require("../lib/crmProfile")
-const { ensureMessageRaw } = require("../lib/crmMedia")
+const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw } = require("../lib/crmMedia")
 const { onStageChange } = require("../lib/crmFlows")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
@@ -223,6 +224,15 @@ function createCrmRouter({ io }) {
       return res.status(400).json({ error: "NOT_MEDIA", message: "Esta mensagem não contém mídia." })
     }
 
+    const stored = readStoredMessageMedia(msg)
+    if (stored?.base64) {
+      return res.json({
+        kind: mediaKind,
+        mimetype: stored.mimetype || msg.mediaMime || null,
+        base64: stored.base64,
+      })
+    }
+
     const conn = await ensureWhatsAppConnected(prisma, userId)
     if (!conn) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
@@ -284,6 +294,16 @@ function createCrmRouter({ io }) {
 
     try {
       const resp = await enqueueUserSend(userId, async () => {
+        if (content.mediaType === "audio") {
+          const media = String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
+          const mimetype = content.mediaMime || "audio/ogg; codecs=opus"
+          const audioPayload = media.startsWith("data:") ? media : `data:${mimetype};base64,${media}`
+          return sendWhatsAppAudio(conn.instanceName, convo.remoteJid, {
+            audio: audioPayload,
+            mimetype,
+            encoding: true,
+          })
+        }
         if (content.mediaType !== "none") {
           const media = String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
           return sendMedia(conn.instanceName, convo.remoteJid, {
@@ -299,6 +319,17 @@ function createCrmRouter({ io }) {
 
       const providerMessageId = resp?.key?.id || resp?.messageId || resp?.id || null
       const now = new Date()
+      const hasMedia = content.mediaType !== "none"
+      const mediaB64 = hasMedia ? String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "") : null
+      const messageRaw = hasMedia
+        ? buildOutboundMessageRaw({
+            providerMessageId,
+            remoteJid: convo.remoteJid,
+            evolutionResp: resp,
+            mediaBase64: mediaB64,
+            mediaMime: content.mediaMime,
+          })
+        : null
 
       const message = await prisma.crmMessage.create({
         data: {
@@ -312,6 +343,7 @@ function createCrmRouter({ io }) {
           status: "sent",
           source: "manual",
           timestamp: now,
+          raw: messageRaw,
         },
       })
 
@@ -1033,14 +1065,18 @@ function createCrmRouter({ io }) {
     }
 
     const result = await syncContactProfiles(syncDeps, { userId, instanceName: conn.instanceName })
+    const total = (result.queued || 0) + (result.avatarQueued || 0)
     return res.json({
       ok: true,
       enriched: result.enriched,
       queued: result.queued,
+      avatarQueued: result.avatarQueued,
+      lidPhonesResolved: result.lidPhonesResolved,
+      phonesBackfilled: result.phonesBackfilled,
       directorySize: result.directorySize,
       message:
-        result.enriched || result.queued
-          ? `Perfis atualizados: ${result.enriched} imediato(s), ${result.queued} na fila (fotos aparecem aos poucos, inclusive sem contato salvo).`
+        result.enriched || total || result.namesFromMessages || result.phonesBackfilled || result.lidPhonesResolved
+          ? `Perfis atualizados: ${result.lidPhonesResolved || 0} telefone(s) de conversas @lid, ${result.phonesBackfilled || 0} do JID, ${result.namesFromMessages || 0} das mensagens, ${result.enriched} imediato(s), ${total} na fila.`
           : "Nenhum perfil novo encontrado. Alguns contatos podem não expor foto no WhatsApp.",
     })
   })

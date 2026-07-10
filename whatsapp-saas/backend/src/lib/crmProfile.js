@@ -10,7 +10,14 @@
  *    espaçamento global para não martelar a API (anti-ban).
  */
 
-const { phoneFromJid } = require("./crmCore")
+const {
+  phoneFromJid,
+  cleanIncomingPushName,
+  extractIdentityHintsFromRecord,
+  contactNeedsIdentification,
+  phoneFromChatItem,
+  sanitizePushName,
+} = require("./crmCore")
 const {
   displayNameFromParticipant,
   normalizeContactList,
@@ -24,6 +31,7 @@ const {
 } = require("./crmCore")
 
 const PROFILE_RETRY_MS = Number(process.env.CRM_PROFILE_RETRY_MS || 12 * 3600 * 1000)
+const AVATAR_REFRESH_MS = Number(process.env.CRM_AVATAR_REFRESH_MS || 4 * 3600 * 1000)
 const PROFILE_FETCH_GAP_MS = Number(process.env.CRM_PROFILE_FETCH_GAP_MS || 2000)
 const PROFILE_QUEUE_MAX = Number(process.env.CRM_PROFILE_QUEUE_MAX || 60)
 const PROFILE_BATCH_QUEUE_MAX = Number(process.env.CRM_PROFILE_BATCH_QUEUE_MAX || 120)
@@ -79,11 +87,12 @@ function buildContactDirectory(payload) {
     const altJid = cleanText(item?.remoteJidAlt || item?.jidAlt || item?.alternateJid)
     const phoneDigits =
       resolvePhoneDigits(item) || phoneDigitsFromJid(jid) || (altJid ? phoneDigitsFromJid(altJid) : null)
-    const pushName = cleanText(
+    const pushName = sanitizePushName(
       displayNameFromParticipant(item, phoneDigits) ||
         item?.pushName ||
         item?.name ||
         item?.notify,
+      phoneDigits,
     )
     const avatarUrl = cleanUrl(item?.profilePicUrl || item?.profilePictureUrl || item?.picture)
     const info = { pushName, avatarUrl, phone: phoneDigits || null }
@@ -100,14 +109,24 @@ function mergeChatsIntoDirectory(directory, chats = []) {
   for (const chat of chats) {
     const jid = cleanText(chat?.remoteJid)
     if (!jid) continue
-    const prev = lookupDirectoryInfo(directory, { remoteJid: jid, phone: phoneFromJid(jid) })
-    const pushName = cleanText(chat?.pushName)
+    const phone = chat?.phone || phoneFromChatItem(chat) || null
+    const prev = lookupDirectoryInfo(directory, { remoteJid: jid, phone: phone || phoneFromJid(jid) })
+    const pushName = sanitizePushName(chat?.pushName, phone)
     const avatarUrl = cleanUrl(chat?.avatarUrl)
-    if (!pushName && !avatarUrl) continue
+    if (!pushName && !avatarUrl && !phone) continue
     directorySet(directory, jid, {
       pushName: prev?.pushName || pushName || null,
       avatarUrl: prev?.avatarUrl || avatarUrl || null,
+      phone: prev?.phone || phone || null,
     })
+    const altJid = cleanText(chat?.remoteJidAlt)
+    if (altJid) {
+      directorySet(directory, altJid, {
+        pushName: prev?.pushName || pushName || null,
+        avatarUrl: prev?.avatarUrl || avatarUrl || null,
+        phone: prev?.phone || phone || null,
+      })
+    }
   }
   return directory
 }
@@ -123,7 +142,10 @@ function pickProfileFields(payload) {
   const p = payload?.data || payload?.response || payload?.profile || payload || {}
   const phoneDigits = resolvePhoneDigits(p) || phoneDigitsFromJid(p?.id || p?.remoteJid)
   return {
-    pushName: cleanText(displayNameFromParticipant(p, phoneDigits) || p?.name || p?.pushName || p?.verifiedName),
+    pushName: sanitizePushName(
+      displayNameFromParticipant(p, phoneDigits) || p?.name || p?.pushName || p?.verifiedName,
+      phoneDigits,
+    ),
     avatarUrl: pickAvatarFromPicturePayload(p),
     phone: phoneDigits || null,
   }
@@ -176,19 +198,191 @@ async function buildProfileDirectory(deps, instanceName, chats = []) {
   return { directory, chats: chatList }
 }
 
+/** Aplica mapa @lid → telefone nos contatos do CRM (fonte: findChats). */
+async function applyLidPhoneMap(deps, userId, lidPhoneMap) {
+  const { prisma, io } = deps || {}
+  if (!prisma || !lidPhoneMap?.size) return 0
+
+  let updated = 0
+  for (const [remoteJid, phone] of lidPhoneMap.entries()) {
+    if (!phone) continue
+    const contact = await prisma.crmContact.findUnique({
+      where: { userId_remoteJid: { userId, remoteJid } },
+      select: { id: true, phone: true },
+    })
+    if (!contact || contact.phone) continue
+    await prisma.crmContact.update({ where: { id: contact.id }, data: { phone } }).catch(() => {})
+    updated += 1
+
+    if (io) {
+      const conversation = await prisma.crmConversation.findUnique({
+        where: { userId_remoteJid: { userId, remoteJid } },
+        include: CONVERSATION_INCLUDE,
+      })
+      if (conversation) {
+        emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(conversation) })
+      }
+    }
+  }
+  return updated
+}
+
+/** Busca findChats e resolve telefones de contatos @lid via remoteJidAlt. */
+async function resolveLidPhonesFromChats(deps, { userId, instanceName } = {}) {
+  const { findChats } = deps || {}
+  if (!findChats || !instanceName) return { resolved: 0, mapSize: 0 }
+
+  try {
+    const payload = await findChats(instanceName)
+    const { extractLidPhoneMap } = require("./crmSync")
+    const map = extractLidPhoneMap(payload)
+    const resolved = await applyLidPhoneMap(deps, userId, map)
+    return { resolved, mapSize: map.size, payload }
+  } catch (err) {
+    console.warn("[crm-profile] resolveLidPhonesFromChats:", err?.message || err)
+    return { resolved: 0, mapSize: 0, payload: null }
+  }
+}
+
+/** Remove pushName "Você" gravado por engano (mensagens enviadas / findChats). */
+async function clearSelfPushNames(prisma, userId) {
+  if (!prisma) return 0
+  const bad = await prisma.crmContact.findMany({
+    where: { userId, pushName: { not: null } },
+    select: { id: true, pushName: true, phone: true, remoteJid: true },
+  })
+  let cleared = 0
+  for (const c of bad) {
+    const pd = c.phone || phoneFromJid(c.remoteJid) || phoneDigitsFromJid(c.remoteJid)
+    if (!sanitizePushName(c.pushName, pd)) {
+      await prisma.crmContact.update({ where: { id: c.id }, data: { pushName: null } }).catch(() => {})
+      cleared += 1
+    }
+  }
+  return cleared
+}
+
+/** Preenche telefone a partir do JID (@s.whatsapp.net) quando o campo phone está vazio. */
+async function backfillPhonesFromJid(prisma, userId) {
+  if (!prisma) return 0
+  const contacts = await prisma.crmContact.findMany({
+    where: { userId, phone: null },
+    select: { id: true, remoteJid: true },
+    take: 500,
+  })
+  let updated = 0
+  for (const contact of contacts) {
+    const phone = phoneFromJid(contact.remoteJid) || phoneDigitsFromJid(contact.remoteJid)
+    if (!phone) continue
+    await prisma.crmContact.update({ where: { id: contact.id }, data: { phone } }).catch(() => {})
+    updated += 1
+  }
+  return updated
+}
+
+/** Varre mensagens recebidas para extrair pushName e telefone alternativo. */
+async function reidentifyContactsFromMessages(deps, userId) {
+  const { prisma, io } = deps || {}
+  if (!prisma) return 0
+
+  const contacts = await prisma.crmContact.findMany({
+    where: {
+      userId,
+      phone: null,
+    },
+    select: {
+      id: true,
+      remoteJid: true,
+      pushName: true,
+      phone: true,
+      name: true,
+      isLid: true,
+      conversation: { select: { id: true } },
+    },
+    take: 400,
+    orderBy: [{ isLid: "desc" }, { updatedAt: "desc" }],
+  })
+
+  let updated = 0
+  for (const contact of contacts) {
+    if (!contact.conversation?.id) continue
+
+    const messages = await prisma.crmMessage.findMany({
+      where: { conversationId: contact.conversation.id },
+      orderBy: { timestamp: "desc" },
+      select: { raw: true, fromMe: true },
+      take: 60,
+    })
+
+    let pushName = contact.pushName
+    let phone = contact.phone
+
+    for (const msg of messages) {
+      const raw = msg?.raw
+      if (!raw || typeof raw !== "object") continue
+      const fromMe = Boolean(msg.fromMe || raw?.key?.fromMe)
+      const hints = extractIdentityHintsFromRecord(raw, contact.remoteJid)
+      if (!fromMe && !pushName && hints.pushName) pushName = hints.pushName
+      if (!phone && hints.phone) phone = hints.phone
+      if (pushName && phone) break
+    }
+
+    if (!phone) phone = phoneFromJid(contact.remoteJid) || phoneDigitsFromJid(contact.remoteJid)
+
+    const data = {}
+    if (pushName && pushName !== contact.pushName) data.pushName = pushName
+    if (phone && !contact.phone) data.phone = phone
+    if (!Object.keys(data).length) continue
+
+    await prisma.crmContact.update({ where: { id: contact.id }, data }).catch(() => {})
+    updated += 1
+
+    if (io) {
+      const conversation = await prisma.crmConversation.findUnique({
+        where: { userId_remoteJid: { userId, remoteJid: contact.remoteJid } },
+        include: CONVERSATION_INCLUDE,
+      })
+      if (conversation) {
+        emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(conversation) })
+      }
+    }
+  }
+  return updated
+}
+
+/** Extrai pushName de mensagens recentes para contatos sem nome. */
+async function enrichPushNamesFromMessages(deps, userId) {
+  return reidentifyContactsFromMessages(deps, userId)
+}
+
 /**
  * Sincroniza nomes/fotos em lote (findContacts + findChats) e agenda fetchProfile
  * para contatos que ainda ficaram sem nome ou foto.
  */
 async function syncContactProfiles(deps, { userId, instanceName, chats = [] } = {}) {
-  const { prisma } = deps
-  if (!instanceName) return { enriched: 0, queued: 0, directorySize: 0, directory: new Map() }
+  const { prisma, findChats } = deps
+  if (!instanceName) return { enriched: 0, queued: 0, avatarQueued: 0, namesFromMessages: 0, lidPhonesResolved: 0, phonesBackfilled: 0, directorySize: 0, directory: new Map() }
 
-  const { directory } = await buildProfileDirectory(deps, instanceName, chats)
+  const clearedPushNames = await clearSelfPushNames(prisma, userId).catch(() => 0)
+  const { resolved: lidPhonesResolved, payload: chatPayload } = await resolveLidPhonesFromChats(deps, {
+    userId,
+    instanceName,
+  }).catch(() => ({ resolved: 0, payload: null }))
+
+  let chatList = chats
+  if (!chatList.length && chatPayload) {
+    const { extractIndividualChats } = require("./crmSync")
+    chatList = extractIndividualChats(chatPayload)
+  }
+
+  const phonesBackfilled = await backfillPhonesFromJid(prisma, userId).catch(() => 0)
+  const namesFromMessages = await reidentifyContactsFromMessages(deps, userId).catch(() => 0)
+  const { directory } = await buildProfileDirectory(deps, instanceName, chatList)
   const enriched = await enrichContactsFromDirectory(prisma, userId, directory).catch(() => 0)
   const queued = await queueMissingProfileFetches(deps, { userId, instanceName, limit: PROFILE_BATCH_QUEUE_MAX })
+  const avatarQueued = await queueStaleAvatarRefreshes(deps, { userId, instanceName, limit: PROFILE_BATCH_QUEUE_MAX })
 
-  return { enriched, queued, directorySize: directory.size, directory }
+  return { enriched, queued, avatarQueued, namesFromMessages, lidPhonesResolved, phonesBackfilled, clearedPushNames, directorySize: directory.size, directory }
 }
 
 function queueMissingProfileFetches(deps, { userId, instanceName, limit = PROFILE_BATCH_QUEUE_MAX }) {
@@ -204,6 +398,9 @@ function queueMissingProfileFetches(deps, { userId, instanceName, limit = PROFIL
       const pending = contacts
         .filter((c) => contactNeedsProfile(c))
         .sort((a, b) => {
+          const aId = contactNeedsIdentification(a) ? 0 : 1
+          const bId = contactNeedsIdentification(b) ? 0 : 1
+          if (aId !== bId) return aId - bId
           const aScore = !a.avatarUrl ? 0 : 1
           const bScore = !b.avatarUrl ? 0 : 1
           if (aScore !== bScore) return aScore - bScore
@@ -220,26 +417,54 @@ function queueMissingProfileFetches(deps, { userId, instanceName, limit = PROFIL
     .catch(() => 0)
 }
 
+/** Re-enfileira refresh de foto para contatos que já têm URL (pode ter expirado). */
+function queueStaleAvatarRefreshes(deps, { userId, instanceName, limit = PROFILE_BATCH_QUEUE_MAX }) {
+  const { prisma } = deps
+  if (!prisma || !instanceName) return Promise.resolve(0)
+
+  return prisma.crmContact
+    .findMany({
+      where: { userId, avatarUrl: { not: null } },
+      select: { remoteJid: true, avatarUrl: true },
+    })
+    .then((contacts) => {
+      let queued = 0
+      for (const contact of contacts) {
+        if (queued >= limit) break
+        if (scheduleProfileFetch(deps, { userId, instanceName, remoteJid: contact.remoteJid, avatarRefresh: true })) {
+          queued += 1
+        }
+      }
+      return queued
+    })
+    .catch(() => 0)
+}
+
 // ------------------------- fetch individual (webhook) -------------------------
 
 const lastAttemptByKey = new Map()
+const avatarAttemptByKey = new Map()
 let fetchChain = Promise.resolve()
 let queuedCount = 0
 
 /**
  * Agenda uma busca de perfil para um contato sem nome/foto (fila com espaçamento).
+ * avatarRefresh: re-busca foto mesmo quando já existe URL (URLs do WhatsApp expiram).
  * deps: { prisma, io, fetchProfile }. Retorna true se entrou na fila.
  */
-function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
+function scheduleProfileFetch(deps, { userId, instanceName, remoteJid, avatarRefresh = false }) {
   const { prisma, io, fetchProfile, fetchProfilePictureUrl } = deps
   if (!instanceName || !remoteJid) return false
 
+  const attemptMap = avatarRefresh ? avatarAttemptByKey : lastAttemptByKey
+  const retryMs = avatarRefresh ? AVATAR_REFRESH_MS : PROFILE_RETRY_MS
   const key = `${userId}:${remoteJid}`
-  const last = lastAttemptByKey.get(key) || 0
-  if (Date.now() - last < PROFILE_RETRY_MS) return false
+
+  const last = attemptMap.get(key) || 0
+  if (Date.now() - last < retryMs) return false
   if (queuedCount >= PROFILE_QUEUE_MAX) return false
 
-  lastAttemptByKey.set(key, Date.now())
+  attemptMap.set(key, Date.now())
   queuedCount += 1
 
   fetchChain = fetchChain
@@ -259,12 +484,23 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
         }
       }
 
-      if ((!avatarUrl || !pushName) && typeof fetchProfile === "function") {
+      const needsName = !avatarRefresh
+      if ((needsName && (!avatarUrl || !pushName)) && typeof fetchProfile === "function") {
         try {
           const profileTarget = String(remoteJid).includes("@") ? remoteJid : remoteJid.split("@")[0]
           const fields = pickProfileFields(await fetchProfile(instanceName, profileTarget))
           pushName = pushName || fields.pushName
           avatarUrl = avatarUrl || fields.avatarUrl
+          phoneHint = fields.phone || null
+        } catch {
+          /* ignore */
+        }
+      } else if (avatarRefresh && !avatarUrl && typeof fetchProfile === "function") {
+        try {
+          const profileTarget = String(remoteJid).includes("@") ? remoteJid : remoteJid.split("@")[0]
+          const fields = pickProfileFields(await fetchProfile(instanceName, profileTarget))
+          avatarUrl = fields.avatarUrl
+          pushName = fields.pushName || null
           phoneHint = fields.phone || null
         } catch {
           /* ignore */
@@ -308,7 +544,8 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid }) {
 /** true quando falta foto ou nome do WhatsApp (candidato a enriquecimento). */
 function contactNeedsProfile(contact) {
   if (!contact) return false
-  return contactNeedsAvatar(contact) || !(contact.pushName || contact.name)
+  if (contactNeedsIdentification(contact)) return true
+  return contactNeedsAvatar(contact)
 }
 
 /** true quando ainda não tem foto de perfil. */
@@ -325,8 +562,14 @@ module.exports = {
   lookupDirectoryInfo,
   buildProfileDirectory,
   enrichContactsFromDirectory,
+  enrichPushNamesFromMessages,
+  reidentifyContactsFromMessages,
+  backfillPhonesFromJid,
+  resolveLidPhonesFromChats,
+  applyLidPhoneMap,
   syncContactProfiles,
   queueMissingProfileFetches,
+  queueStaleAvatarRefreshes,
   scheduleProfileFetch,
   contactNeedsProfile,
   contactNeedsAvatar,

@@ -415,6 +415,30 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
   ])
 }
 
+/** Mensagem de voz (PTT) — endpoint dedicado da Evolution; aceita webm/mp3/ogg com encoding. */
+async function sendWhatsAppAudio(instanceName, number, { audio, encoding = true, mimetype } = {}) {
+  const body = { number, audio, encoding: Boolean(encoding) }
+  if (mimetype) body.mimetype = mimetype
+  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
+  const opts = { method: "POST", body, timeoutMs }
+  const instance = encodeURIComponent(instanceName)
+  return firstSuccess([
+    () => requestEvolution(`/message/sendWhatsAppAudio/${instance}`, opts),
+    () => requestEvolution(`/message/sendWhatsAppAudio/${instance}`, { ...opts, body: { ...body, options: {} } }),
+    () =>
+      requestEvolution(`/message/sendMedia/${instance}`, {
+        ...opts,
+        body: {
+          number,
+          mediatype: "audio",
+          media: typeof audio === "string" ? audio.replace(/^data:[^;]+;base64,/, "") : audio,
+          mimetype: mimetype || "audio/ogg; codecs=opus",
+          ptt: true,
+        },
+      }),
+  ])
+}
+
 async function getBase64FromMediaMessage(instanceName, rawRecord, { convertToMp4 = false } = {}) {
   if (!rawRecord || typeof rawRecord !== "object") {
     throw new Error("Mensagem sem payload de mídia.")
@@ -467,6 +491,7 @@ module.exports = {
   fetchChatMessages,
   sendText,
   sendMedia,
+  sendWhatsAppAudio,
   getBase64FromMediaMessage,
   extractMediaBase64Payload,
   logoutInstance,

@@ -72,41 +72,40 @@ export function ChatOnboardingModal({ isOpen, user, onComplete }) {
           </p>
         </Section>
 
-        <Section icon={RefreshCw} title="Sincronizar histórico">
+        <Section icon={RefreshCw} title="Sincronizar conversas">
           <p>
-            O botão <strong className="text-stone-300">Sincronizar</strong> importa mensagens antigas (7 a 180 dias). O
-            processo é <strong className="text-stone-300">lento de propósito</strong>: o Vesto pausa entre conversas e
-            entre páginas para não sobrecarregar a API do WhatsApp.
+            O botão <strong className="text-stone-300">Sincronizar</strong> importa mensagens antigas (7 a 180 dias), atualiza
+            fotos de perfil, telefones e nomes do WhatsApp — tudo em um único processo,{' '}
+            <strong className="text-stone-300">lento de propósito</strong> para não sobrecarregar a API.
           </p>
           <ul className="list-disc space-y-1 pl-5">
-            <li>Faça a sincronização com calma — pode levar minutos ou horas, conforme o volume.</li>
+            <li>Escolha o período no pop-up antes de iniciar.</li>
+            <li>Pode levar de minutos a horas, conforme o volume.</li>
             <li>Se aparecer aviso de limite, aguarde: o job retoma sozinho depois.</li>
             <li>Não clique em sincronizar repetidas vezes seguidas.</li>
           </ul>
         </Section>
 
-        <Section icon={User} title="Nomes e fotos de perfil">
+        <Section icon={User} title="Nomes e números">
           <p>
-            Use <strong className="text-stone-300">Nomes e fotos</strong> para buscar a foto de perfil do WhatsApp —{' '}
-            <strong className="text-stone-300">mesmo sem ter o contato salvo na agenda</strong>. O nome da agenda só
-            aparece se você já salvou o número no celular; caso contrário, use &quot;Salvar contato&quot; no painel à
-            direita.
+            Contatos não salvos no CRM aparecem com o <strong className="text-stone-300">telefone</strong> quando a API
+            enviar. Salve um nome no painel à direita para identificar leads importantes.
           </p>
           <ul className="list-disc space-y-1 pl-5">
-            <li>Nome só aparece se o contato estiver na agenda do número conectado ou se o WhatsApp expuser o pushName.</li>
-            <li>Contatos com número oculto (<code className="text-stone-300">@lid</code>) podem aparecer só como &quot;Contato&quot;.</li>
+            <li>Nome da agenda só aparece se o número estiver salvo no celular conectado.</li>
+            <li>Contatos com número oculto (<code className="text-stone-300">@lid</code>) podem ficar sem telefone.</li>
           </ul>
         </Section>
 
-        <Section icon={Clock} title="Por que nomes e fotos demoram?">
+        <Section icon={Clock} title="Por que demora?">
           <p>
             Cada perfil é consultado na Evolution API com <strong className="text-stone-300">intervalo de ~2,5 segundos</strong>{' '}
-            entre contatos. É uma proteção anti-ban: atualizar centenas de perfis de uma vez poderia desconectar ou
-            limitar sua conta.
+            entre contatos. É proteção anti-ban: atualizar centenas de perfis de uma vez poderia desconectar ou limitar
+            sua conta.
           </p>
           <p>
-            Depois de clicar em &quot;Nomes e fotos&quot;, a lista vai preenchendo aos poucos. Mantenha a aba aberta ou
-            recarregue depois de alguns minutos se ainda faltar algum contato.
+            Depois de iniciar a sincronização, a lista vai preenchendo aos poucos. Mantenha a aba aberta ou recarregue
+            depois de alguns minutos se ainda faltar algum contato.
           </p>
         </Section>
 

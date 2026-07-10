@@ -202,6 +202,7 @@ module.exports = {
   lookupContact,
   resolvePhoneDigits,
   phoneDigitsFromJid,
+  phoneDigitsFromValue,
   displayNameFromParticipant,
   digitsOnly,
   isLikelyPhoneDigits,
