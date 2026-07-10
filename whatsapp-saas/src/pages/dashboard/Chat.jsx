@@ -19,6 +19,7 @@ import {
   Film,
   FileText,
   Unplug,
+  Users,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -58,9 +59,21 @@ import {
   refreshCrmProfiles,
   refreshCrmContactAvatar,
   getWhatsAppStatus,
+  getGroups,
+  getGroupMessages,
+  sendMessage,
 } from '../../services/api.js'
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
+import {
+  groupChatId,
+  groupToListItem,
+  isGroupChatId,
+  isMonitoredGroup,
+  mapGroupMessageToChat,
+  parseGroupChatId,
+  sortChatListItems,
+} from '../../lib/chatGroups.js'
 import { revokeAudioPreview, warmUpAudioRecording } from '../../lib/audioRecorder.js'
 import {
   appendCachedMessage,
@@ -127,8 +140,11 @@ const ConversationListItem = memo(function ConversationListItem({
   onPrefetch,
   onRefreshAvatar,
 }) {
-  const subtitle = contactSubtitle(c.contact)
-  const unidentified = contactNeedsIdentification(c.contact)
+  const isGroup = c.kind === 'group'
+  const subtitle = isGroup
+    ? `${c.contact?.memberCount || 0} membros`
+    : contactSubtitle(c.contact)
+  const unidentified = !isGroup && contactNeedsIdentification(c.contact)
   return (
     <button
       type="button"
@@ -143,8 +159,8 @@ const ConversationListItem = memo(function ConversationListItem({
         name={contactTitle(c.contact)}
         src={c.contact?.avatarUrl}
         size="sm"
-        contactId={c.contact?.id}
-        onRefreshAvatar={onRefreshAvatar}
+        contactId={isGroup ? undefined : c.contact?.id}
+        onRefreshAvatar={isGroup ? undefined : onRefreshAvatar}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
@@ -168,8 +184,13 @@ const ConversationListItem = memo(function ConversationListItem({
             </span>
           )}
           {c.aiEnabled && <Bot className="h-3.5 w-3.5 shrink-0 text-sky-400" />}
+          {isGroup && (
+            <span className="ml-auto shrink-0 rounded px-1 py-px text-[9px] font-semibold text-sky-200 bg-sky-500/20">
+              Grupo
+            </span>
+          )}
         </div>
-        {(c.contact?.tags || []).length > 0 && (
+        {!isGroup && (c.contact?.tags || []).length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {c.contact.tags.slice(0, 3).map((t) => (
               <span
@@ -197,14 +218,19 @@ export function Chat() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [conversations, setConversations] = useState([])
+  const [monitoredGroups, setMonitoredGroups] = useState([])
   const [loadingList, setLoadingList] = useState(true)
   const [refreshingList, setRefreshingList] = useState(false)
   const [query, setQuery] = useState('')
   const [tagFilter, setTagFilter] = useState('')
   const [stageFilter, setStageFilter] = useState('')
+  const [groupsOnly, setGroupsOnly] = useState(false)
   const [unidentifiedOnly, setUnidentifiedOnly] = useState(false)
 
-  const [activeId, setActiveId] = useState(searchParams.get('c') || null)
+  const [activeId, setActiveId] = useState(() => {
+    const raw = searchParams.get('c')
+    return raw ? decodeURIComponent(raw) : null
+  })
   const [messages, setMessages] = useState([])
   const [hasMore, setHasMore] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -265,6 +291,7 @@ export function Chat() {
   }, [query, tagFilter, stageFilter])
 
   const markReadDebounced = useCallback((conversationId) => {
+    if (isGroupChatId(conversationId)) return
     const conv = conversationsRef.current.find((c) => c.id === conversationId)
     if (!conv?.unreadCount) return
     const now = Date.now()
@@ -280,12 +307,41 @@ export function Chat() {
       .catch(() => {})
   }, [])
 
-  const active = useMemo(() => conversations.find((c) => c.id === activeId) || null, [conversations, activeId])
+  const chatList = useMemo(() => {
+    const groupItems = monitoredGroups.map(groupToListItem)
+    return sortChatListItems([...conversations, ...groupItems])
+  }, [conversations, monitoredGroups])
+
+  const active = useMemo(() => chatList.find((c) => c.id === activeId) || null, [chatList, activeId])
+  const activeIsGroup = active?.kind === 'group'
+
+  const monitoredGroupCount = monitoredGroups.length
 
   const displayedConversations = useMemo(() => {
-    if (!unidentifiedOnly) return conversations
-    return conversations.filter((c) => contactNeedsIdentification(c.contact))
-  }, [conversations, unidentifiedOnly])
+    let rows = chatList
+
+    if (groupsOnly) {
+      rows = rows.filter((c) => c.kind === 'group')
+    } else if (unidentifiedOnly) {
+      rows = rows.filter((c) => c.kind !== 'group' && contactNeedsIdentification(c.contact))
+    }
+
+    if (tagFilter || stageFilter) {
+      rows = rows.filter((c) => c.kind !== 'group')
+    }
+
+    const term = query.trim().toLowerCase()
+    if (term) {
+      rows = rows.filter((c) => {
+        if (c.kind !== 'group') return true
+        const name = (c.contact?.name || '').toLowerCase()
+        const preview = (c.lastMessagePreview || '').toLowerCase()
+        return name.includes(term) || preview.includes(term)
+      })
+    }
+
+    return rows
+  }, [chatList, groupsOnly, unidentifiedOnly, tagFilter, stageFilter, query])
 
   const unidentifiedCount = useMemo(
     () => conversations.filter((c) => contactNeedsIdentification(c.contact)).length,
@@ -305,11 +361,17 @@ export function Chat() {
     if (!hasData) setLoadingList(true)
     else setRefreshingList(true)
     try {
-      const { data } = await getCrmConversations(listParams)
+      const [convRes, groupsRes] = await Promise.allSettled([getCrmConversations(listParams), getGroups()])
       if (seq !== listLoadSeq.current) return
-      const rows = data.conversations || []
-      setConversations(rows)
-      mirrorConversationsListCache(rows, listParams)
+      if (convRes.status === 'fulfilled') {
+        const rows = convRes.value.data.conversations || []
+        setConversations(rows)
+        mirrorConversationsListCache(rows, listParams)
+      }
+      if (groupsRes.status === 'fulfilled') {
+        setMonitoredGroups((groupsRes.value.data.groups || []).filter(isMonitoredGroup))
+      }
+      if (convRes.status === 'rejected') throw convRes.reason
     } catch {
       if (seq !== listLoadSeq.current) return
       const now = Date.now()
@@ -414,8 +476,21 @@ export function Chat() {
     return { messages: data.messages || [], hasMore: Boolean(data.hasMore) }
   }, [])
 
+  const fetchGroupMessagesPage = useCallback(async (groupJid) => {
+    const { data } = await getGroupMessages(groupJid, 100)
+    const rows = (data.messages || []).map(mapGroupMessageToChat).reverse()
+    return { messages: rows, hasMore: false, groupName: data.groupName }
+  }, [])
+
+  const refreshGroupInList = useCallback((groupJid, patch) => {
+    setMonitoredGroups((prev) =>
+      prev.map((g) => (g.id === groupJid ? { ...g, ...patch } : g)),
+    )
+  }, [])
+
   const prefetchConversation = useCallback(
     (conversationId) => {
+      if (isGroupChatId(conversationId)) return
       prefetchConversationMessages(conversationId, (id, params) => fetchMessagesPage(id, params))
     },
     [fetchMessagesPage],
@@ -424,7 +499,31 @@ export function Chat() {
   const openConversation = useCallback(
     async (id) => {
       setActiveId(id)
-      setSearchParams(id ? { c: id } : {}, { replace: true })
+      setSearchParams(id ? { c: encodeURIComponent(id) } : {}, { replace: true })
+
+      if (isGroupChatId(id)) {
+        const groupJid = parseGroupChatId(id)
+        setMessages([])
+        setHasMore(false)
+        setLoadingMessages(true)
+        setRefreshingMessages(false)
+        try {
+          const fresh = await fetchGroupMessagesPage(groupJid)
+          if (activeIdRef.current !== id) return
+          setMessages(fresh.messages)
+          setHasMore(false)
+        } catch {
+          if (activeIdRef.current === id) {
+            toastRef.current.error('Falha ao carregar mensagens do grupo.')
+          }
+        } finally {
+          if (activeIdRef.current === id) {
+            setLoadingMessages(false)
+            setRefreshingMessages(false)
+          }
+        }
+        return
+      }
 
       const cached = getCachedConversationMessages(id)
       if (cached?.messages?.length) {
@@ -466,17 +565,47 @@ export function Chat() {
         }
       }
     },
-    [setSearchParams, fetchMessagesPage, markReadDebounced],
+    [setSearchParams, fetchMessagesPage, fetchGroupMessagesPage, markReadDebounced],
   )
 
   useEffect(() => {
-    const fromUrl = searchParams.get('c')
+    const raw = searchParams.get('c')
+    const fromUrl = raw ? decodeURIComponent(raw) : null
     if (fromUrl && fromUrl !== activeIdRef.current) openConversation(fromUrl)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (!activeId || !isGroupChatId(activeId)) return undefined
+    const groupJid = parseGroupChatId(activeId)
+    const poll = () => {
+      fetchGroupMessagesPage(groupJid)
+        .then((fresh) => {
+          if (activeIdRef.current !== activeId) return
+          setMessages(fresh.messages)
+        })
+        .catch(() => {})
+      getGroups()
+        .then(({ data }) => {
+          const group = (data.groups || []).find((g) => g.id === groupJid)
+          if (group && isMonitoredGroup(group)) {
+            refreshGroupInList(groupJid, {
+              lastMessage: group.lastMessage,
+              lastMessageAt: group.lastMessageAt,
+              name: group.name,
+              image: group.image,
+              memberCount: group.memberCount,
+            })
+          }
+        })
+        .catch(() => {})
+    }
+    const intervalId = setInterval(poll, 10000)
+    return () => clearInterval(intervalId)
+  }, [activeId, fetchGroupMessagesPage, refreshGroupInList])
+
   const loadOlder = useCallback(async () => {
-    if (!activeId || !messages.length || loadingOlder) return
+    if (!activeId || activeIsGroup || !messages.length || loadingOlder) return
     loadingOlderRef.current = true
     scrollToEndRef.current = false
     setLoadingOlder(true)
@@ -497,7 +626,7 @@ export function Chat() {
       loadingOlderRef.current = false
       setLoadingOlder(false)
     }
-  }, [activeId, messages, loadingOlder, fetchMessagesPage])
+  }, [activeId, activeIsGroup, messages, loadingOlder, fetchMessagesPage])
 
   // ------------------------------------------------ tempo real
 
@@ -565,6 +694,68 @@ export function Chat() {
     const body = draft.trim()
     if ((!body && !attachment) || !activeId || sending) return
 
+    if (isGroupChatId(activeId)) {
+      const groupJid = parseGroupChatId(activeId)
+      if (attachment && !['image', 'video'].includes(attachment.type)) {
+        toastRef.current.error('Em grupos envie texto, imagem ou vídeo MP4.')
+        return
+      }
+
+      const tempId = `temp-${Date.now()}`
+      const optimistic = {
+        id: tempId,
+        fromMe: true,
+        type: attachment?.type || 'text',
+        body: body || attachment?.name || '',
+        timestamp: new Date().toISOString(),
+        source: 'group',
+      }
+
+      scrollToEndRef.current = true
+      setMessages((prev) => [...prev, optimistic])
+
+      const savedDraft = draft
+      const savedAttachment = attachment
+      setDraft('')
+      if (attachment) revokeAudioPreview(attachment)
+      setAttachment(null)
+      setSending(true)
+
+      try {
+        await sendMessage({
+          groupIds: [groupJid],
+          body,
+          mediaType: attachment?.type || 'none',
+          mediaBase64: savedAttachment?.base64,
+          mediaMime: savedAttachment?.mime,
+          mediaName: savedAttachment?.name,
+        })
+        toastRef.current.success('Mensagem enviada ao grupo.')
+        refreshGroupInList(groupJid, {
+          lastMessage: body || savedAttachment?.name || 'Mídia',
+          lastMessageAt: new Date().toISOString(),
+        })
+        window.setTimeout(async () => {
+          try {
+            const fresh = await fetchGroupMessagesPage(groupJid)
+            if (activeIdRef.current !== groupChatId(groupJid)) return
+            setMessages(fresh.messages)
+          } catch {
+            setMessages((prev) => prev.filter((m) => m.id !== tempId))
+          }
+        }, 2500)
+      } catch (err) {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId))
+        setDraft(savedDraft)
+        if (savedAttachment) setAttachment(savedAttachment)
+        toastRef.current.error(err?.response?.data?.message || 'Falha ao enviar mensagem ao grupo.')
+      } finally {
+        setSending(false)
+        inputRef.current?.focus()
+      }
+      return
+    }
+
     const tempId = `temp-${Date.now()}`
     const optimistic = {
       id: tempId,
@@ -628,7 +819,7 @@ export function Chat() {
       setSending(false)
       inputRef.current?.focus()
     }
-  }, [draft, attachment, activeId, sending])
+  }, [draft, attachment, activeId, sending, fetchGroupMessagesPage, refreshGroupInList])
 
   const handleFile = useCallback(
     (file) => {
@@ -871,7 +1062,7 @@ export function Chat() {
               className="w-full rounded-xl border border-brand-700 bg-brand-900/60 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Select className="min-w-0 flex-1" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
               <option value="">Todas as tags</option>
               {tags.map((t) => (
@@ -889,11 +1080,37 @@ export function Chat() {
                 </option>
               ))}
             </Select>
-          </div>
-          {unidentifiedCount > 0 && (
             <button
               type="button"
-              onClick={() => setUnidentifiedOnly((v) => !v)}
+              onClick={() => {
+                setGroupsOnly((v) => {
+                  const next = !v
+                  if (next) setUnidentifiedOnly(false)
+                  return next
+                })
+              }}
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-medium transition ${
+                groupsOnly
+                  ? 'border-sky-500/40 bg-sky-500/15 text-sky-100'
+                  : 'border-brand-700 bg-brand-900/40 text-stone-400 hover:border-sky-500/30 hover:text-stone-200'
+              }`}
+              title="Mostrar só grupos ativos"
+            >
+              <Users className="h-3.5 w-3.5" />
+              Grupos
+              {monitoredGroupCount > 0 ? ` (${monitoredGroupCount})` : ''}
+            </button>
+          </div>
+          {unidentifiedCount > 0 && !groupsOnly && (
+            <button
+              type="button"
+              onClick={() => {
+                setUnidentifiedOnly((v) => {
+                  const next = !v
+                  if (next) setGroupsOnly(false)
+                  return next
+                })
+              }}
               className={`w-full rounded-lg border px-2.5 py-1.5 text-left text-xs transition ${
                 unidentifiedOnly
                   ? 'border-amber-500/40 bg-amber-500/15 text-amber-100'
@@ -910,7 +1127,7 @@ export function Chat() {
               <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-500" />
             </div>
           )}
-          {loadingList && conversations.length === 0 ? (
+          {loadingList && chatList.length === 0 ? (
             <div className="flex justify-center py-10">
               <Spinner />
             </div>
@@ -918,7 +1135,11 @@ export function Chat() {
             <div className="px-4 py-10 text-center">
               <MessageSquare className="mx-auto h-8 w-8 text-stone-600" />
               <p className="mt-2 text-sm text-stone-400">
-                {unidentifiedOnly ? 'Nenhuma conversa sem identificação.' : 'Nenhuma conversa ainda.'}
+                {groupsOnly
+                  ? 'Nenhum grupo ativo. Ative grupos na aba Grupos.'
+                  : unidentifiedOnly
+                    ? 'Nenhuma conversa sem identificação.'
+                    : 'Nenhuma conversa ainda.'}
               </p>
             </div>
           ) : (
@@ -950,21 +1171,36 @@ export function Chat() {
                 name={contactTitle(active.contact)}
                 src={active.contact?.avatarUrl}
                 size="sm"
-                contactId={active.contact?.id}
-                onRefreshAvatar={refreshAvatar}
+                contactId={activeIsGroup ? undefined : active.contact?.id}
+                onRefreshAvatar={activeIsGroup ? undefined : refreshAvatar}
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
-                <p className="text-xs text-stone-500">
-                  {(() => {
-                    const phone = resolveContactPhone(active.contact)
-                    if (phone) return formatPhoneBr(phone)
-                    if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
-                    return active.remoteJid.split('@')[0]
-                  })()}
-                </p>
+                {activeIsGroup ? (
+                  <p className="flex items-center gap-1 text-xs text-stone-500">
+                    <Users className="h-3 w-3 shrink-0" />
+                    {active.contact?.memberCount || 0} membros
+                  </p>
+                ) : (
+                  <p className="text-xs text-stone-500">
+                    {(() => {
+                      const phone = resolveContactPhone(active.contact)
+                      if (phone) return formatPhoneBr(phone)
+                      if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
+                      return active.remoteJid.split('@')[0]
+                    })()}
+                  </p>
+                )}
               </div>
-              {active.aiEnabled && (
+              {activeIsGroup && (
+                <Link
+                  to={`/dashboard/groups/${encodeURIComponent(active.groupJid)}`}
+                  className="shrink-0 rounded-lg border border-brand-700 px-2.5 py-1 text-xs text-stone-300 transition hover:bg-white/5"
+                >
+                  Detalhes
+                </Link>
+              )}
+              {!activeIsGroup && active.aiEnabled && (
                 <Badge variant="default" className="border-sky-500/30 bg-sky-500/10 text-sky-300">
                   <Bot className="mr-1 h-3 w-3" /> IA ativa
                 </Badge>
@@ -1016,6 +1252,9 @@ export function Chat() {
                             : 'rounded-bl-md bg-brand-800 text-stone-200'
                         }`}
                       >
+                        {!item.msg.fromMe && activeIsGroup && item.msg.senderName && (
+                          <p className="mb-0.5 text-[10px] font-semibold text-accent-400/90">{item.msg.senderName}</p>
+                        )}
                         <ChatMessageContent message={item.msg} />
                         <div className="mt-1 flex items-center justify-end gap-1">
                           {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
@@ -1096,7 +1335,7 @@ export function Chat() {
                     <input
                       ref={fileRef}
                       type="file"
-                      accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
+                      accept={activeIsGroup ? 'image/*,video/mp4,.mp4' : 'image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf'}
                       className="hidden"
                       onChange={(e) => {
                         handleFile(e.target.files?.[0])
@@ -1108,18 +1347,20 @@ export function Chat() {
                       onClick={() => fileRef.current?.click()}
                       disabled={Boolean(attachment)}
                       className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
-                      title="Anexar imagem, vídeo, áudio ou PDF"
+                      title={activeIsGroup ? 'Anexar imagem ou vídeo MP4' : 'Anexar imagem, vídeo, áudio ou PDF'}
                     >
                       <Paperclip className="h-5 w-5" />
                     </button>
                   </>
                 )}
-                <AudioRecorderButton
-                  disabled={sending || (!isRecording && Boolean(attachment))}
-                  onRecorded={setAttachment}
-                  onError={(msg) => toastRef.current.error(msg)}
-                  onRecordingChange={setIsRecording}
-                />
+                {!activeIsGroup && (
+                  <AudioRecorderButton
+                    disabled={sending || (!isRecording && Boolean(attachment))}
+                    onRecorded={setAttachment}
+                    onError={(msg) => toastRef.current.error(msg)}
+                    onRecordingChange={setIsRecording}
+                  />
+                )}
                 {!isRecording && (
                   <>
                     <textarea
@@ -1156,23 +1397,47 @@ export function Chat() {
               name={contactTitle(active.contact)}
               src={active.contact?.avatarUrl}
               size="md"
-              contactId={active.contact?.id}
-              onRefreshAvatar={refreshAvatar}
+              contactId={activeIsGroup ? undefined : active.contact?.id}
+              onRefreshAvatar={activeIsGroup ? undefined : refreshAvatar}
             />
             <p className="text-center text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
-            {active.contact?.pushName && !isSelfOrGenericPushName(active.contact.pushName) && active.contact.pushName !== active.contact?.savedName && (
-              <p className="text-center text-xs text-stone-500">WhatsApp: {active.contact.pushName}</p>
+            {activeIsGroup ? (
+              <p className="flex items-center gap-1 text-xs text-stone-500">
+                <Users className="h-3 w-3" />
+                {active.contact?.memberCount || 0} membros · Grupo ativo
+              </p>
+            ) : (
+              <>
+                {active.contact?.pushName && !isSelfOrGenericPushName(active.contact.pushName) && active.contact.pushName !== active.contact?.savedName && (
+                  <p className="text-center text-xs text-stone-500">WhatsApp: {active.contact.pushName}</p>
+                )}
+                <p className="text-xs text-stone-500">
+                  {(() => {
+                    const phone = resolveContactPhone(active.contact)
+                    if (phone) return formatPhoneBr(phone)
+                    if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
+                    return active.remoteJid.split('@')[0]
+                  })()}
+                </p>
+              </>
             )}
-            <p className="text-xs text-stone-500">
-              {(() => {
-                const phone = resolveContactPhone(active.contact)
-                if (phone) return formatPhoneBr(phone)
-                if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
-                return active.remoteJid.split('@')[0]
-              })()}
-            </p>
           </div>
 
+          {activeIsGroup ? (
+            <div className="space-y-4 p-4">
+              <p className="text-xs leading-relaxed text-stone-400">
+                Este é um grupo monitorado. Mensagens aparecem aqui em tempo quase real; use a aba Grupos para
+                automações e configurações.
+              </p>
+              <Link to={`/dashboard/groups/${encodeURIComponent(active.groupJid)}`}>
+                <Button variant="secondary" className="w-full">
+                  <Users className="h-4 w-4" />
+                  Abrir detalhes do grupo
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <>
           {contactNeedsIdentification(active.contact) && (
             <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-100">
               <p className="font-medium">Contato não identificado</p>
@@ -1332,6 +1597,8 @@ export function Chat() {
               </p>
             )}
           </div>
+            </>
+          )}
         </div>
       )}
 
