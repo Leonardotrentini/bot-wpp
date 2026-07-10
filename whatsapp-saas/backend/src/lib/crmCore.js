@@ -335,6 +335,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
 }
 
 const { unwrapBaileysMessage, mergeInboundMessageRaw } = require("./crmMedia")
+const { extractCtwaClidFromRecord, storeContactCtwaClid } = require("./metaMessaging")
 
 function extractMediaMime(record) {
   const m = unwrapBaileysMessage(record?.message) || record?.message || {}
@@ -382,6 +383,13 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     phone: hints.phone,
   })
   const isNewConversation = Boolean(conversation.__isNew)
+
+  if (!mapped.fromMe) {
+    const ctwaClid = extractCtwaClidFromRecord(record)
+    if (ctwaClid) {
+      await storeContactCtwaClid(prisma, conversation.contact, ctwaClid).catch(() => {})
+    }
+  }
 
   const existing = await prisma.crmMessage.findUnique({
     where: { conversationId_messageId: { conversationId: conversation.id, messageId: mapped.messageId } },

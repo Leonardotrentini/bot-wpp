@@ -26,6 +26,7 @@ export function Integrations() {
   const [testing, setTesting] = useState(false)
   const [form, setForm] = useState({
     pixelId: '',
+    facebookPageId: '',
     accessToken: '',
     enabled: true,
     sendQuotes: true,
@@ -43,6 +44,7 @@ export function Integrations() {
       if (integration) {
         setForm({
           pixelId: integration.pixelId || '',
+          facebookPageId: integration.facebookPageId || '',
           accessToken: '',
           enabled: integration.enabled !== false,
           sendQuotes: integration.sendQuotes !== false,
@@ -69,6 +71,7 @@ export function Integrations() {
     try {
       const payload = {
         pixelId: form.pixelId.trim(),
+        facebookPageId: form.facebookPageId.trim() || null,
         enabled: form.enabled,
         sendQuotes: form.sendQuotes,
         sendPurchases: form.sendPurchases,
@@ -156,6 +159,17 @@ export function Integrations() {
             onChange={(e) => setForm((f) => ({ ...f, pixelId: e.target.value }))}
           />
           <Input
+            label="ID da Página do Facebook (WhatsApp)"
+            placeholder="Ex.: 102035112882607"
+            value={form.facebookPageId}
+            onChange={(e) => setForm((f) => ({ ...f, facebookPageId: e.target.value }))}
+          />
+          <p className="-mt-2 text-xs text-stone-500">
+            Obrigatório para eventos WhatsApp. Em{' '}
+            <strong className="text-stone-400">Configurações do negócio → Páginas</strong>, copie o ID numérico da
+            página vinculada ao seu WhatsApp Business.
+          </p>
+          <Input
             label="Token da API de Conversões"
             type="password"
             placeholder={meta?.hasAccessToken ? `Salvo (${meta.accessTokenHint}) — deixe vazio para manter` : 'Cole o token gerado no Events Manager'}
@@ -221,7 +235,7 @@ export function Integrations() {
           </div>
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <Button onClick={handleSave} disabled={saving || !form.pixelId.trim()}>
+            <Button onClick={handleSave} disabled={saving || !form.pixelId.trim() || !form.facebookPageId.trim()}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar integração'}
             </Button>
             <Button variant="secondary" onClick={handleTest} disabled={testing || !meta?.hasAccessToken}>

@@ -41,6 +41,7 @@ function createIntegrationsRouter() {
     const schema = z.object({
       pixelId: z.string().min(5).max(32),
       accessToken: z.string().max(512).optional().nullable(),
+      facebookPageId: z.string().max(32).optional().nullable(),
       enabled: z.boolean().optional(),
       sendQuotes: z.boolean().optional(),
       sendPurchases: z.boolean().optional(),

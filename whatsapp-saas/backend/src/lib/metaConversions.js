@@ -3,6 +3,10 @@
  */
 
 const crypto = require("crypto")
+const {
+  parseFacebookPageId,
+  resolveCtwaClid,
+} = require("./metaMessaging")
 
 const GRAPH_API_VERSION = "v22.0"
 const DEFAULT_EVENT_SOURCE_URL = "https://vesto.group/dashboard/chat"
@@ -73,6 +77,35 @@ function ensureUserData(contact, options = {}) {
   return userData
 }
 
+function ensureBusinessMessagingUserData(contact, { userId, facebookPageId }) {
+  const pageId = parseFacebookPageId(facebookPageId)
+  if (!pageId) {
+    const err = new Error("Configure o ID da Página do Facebook em Integrações → Meta.")
+    err.code = "MISSING_PAGE_ID"
+    throw err
+  }
+
+  const userData = ensureUserData(contact, { userId })
+  userData.page_id = pageId
+
+  const ctwaClid = resolveCtwaClid(contact)
+  if (ctwaClid) userData.ctwa_clid = ctwaClid
+
+  return userData
+}
+
+function missingPageIdTrackingResult(eventName, eventId, amount) {
+  const message = "Configure o ID da Página do Facebook em Integrações → Meta."
+  return {
+    sent: false,
+    eventId,
+    eventName,
+    value: amount,
+    error: message,
+    reason: "missing_page_id",
+  }
+}
+
 function formatMetaError(json) {
   const err = json?.error
   if (!err) return "Erro desconhecido na API da Meta"
@@ -89,13 +122,14 @@ function formatIntegrationRow(row) {
   const token = String(row.accessToken || "")
   return {
     pixelId: row.pixelId,
+    facebookPageId: row.facebookPageId || "",
     enabled: row.enabled,
     sendQuotes: row.sendQuotes,
     sendPurchases: row.sendPurchases,
     testEventCode: row.testEventCode || "",
     hasAccessToken: token.length > 0,
     accessTokenHint: token.length >= 4 ? `••••${token.slice(-4)}` : null,
-    connected: Boolean(row.pixelId && token && row.enabled),
+    connected: Boolean(row.pixelId && token && row.facebookPageId && row.enabled),
     lastEventAt: row.lastEventAt ? row.lastEventAt.toISOString() : null,
     lastEventName: row.lastEventName || null,
     lastError: row.lastError || null,
@@ -126,12 +160,24 @@ async function upsertMetaIntegration(prisma, userId, data) {
     return { error: "VALIDATION", message: "Informe o token de acesso da API de Conversões." }
   }
 
+  const facebookPageIdRaw =
+    data.facebookPageId != null ? String(data.facebookPageId).trim() : existing?.facebookPageId || ""
+  const facebookPageId = facebookPageIdRaw.replace(/\D/g, "") || null
+
+  if (data.enabled !== false && (data.sendQuotes !== false || data.sendPurchases !== false) && !facebookPageId) {
+    return {
+      error: "VALIDATION",
+      message: "Informe o ID da Página do Facebook vinculada ao WhatsApp.",
+    }
+  }
+
   const row = await prisma.metaIntegration.upsert({
     where: { userId },
     create: {
       userId,
       pixelId,
       accessToken,
+      facebookPageId,
       enabled: data.enabled !== false,
       sendQuotes: data.sendQuotes !== false,
       sendPurchases: data.sendPurchases !== false,
@@ -140,6 +186,7 @@ async function upsertMetaIntegration(prisma, userId, data) {
     update: {
       pixelId,
       accessToken,
+      facebookPageId: data.facebookPageId != null ? facebookPageId : undefined,
       enabled: data.enabled !== false,
       sendQuotes: data.sendQuotes !== false,
       sendPurchases: data.sendPurchases !== false,
@@ -196,13 +243,16 @@ function businessMessagingFields() {
   }
 }
 
-function buildQuoteEvent({ contact, amount, eventId, userId }) {
+function buildQuoteEvent({ contact, amount, eventId, userId, integration }) {
   return {
     event_name: META_QUOTE_EVENT_NAME,
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
     ...businessMessagingFields(),
-    user_data: ensureUserData(contact, { userId }),
+    user_data: ensureBusinessMessagingUserData(contact, {
+      userId,
+      facebookPageId: integration.facebookPageId,
+    }),
     custom_data: {
       currency: "BRL",
       value: amount,
@@ -212,7 +262,7 @@ function buildQuoteEvent({ contact, amount, eventId, userId }) {
   }
 }
 
-function buildPurchaseEvent({ contact, amount, ticket, eventId, userId }) {
+function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration }) {
   const custom = {
     currency: "BRL",
     value: amount,
@@ -225,7 +275,10 @@ function buildPurchaseEvent({ contact, amount, ticket, eventId, userId }) {
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
     ...businessMessagingFields(),
-    user_data: ensureUserData(contact, { userId }),
+    user_data: ensureBusinessMessagingUserData(contact, {
+      userId,
+      facebookPageId: integration.facebookPageId,
+    }),
     custom_data: custom,
   }
 }
@@ -238,10 +291,19 @@ async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
   if (!integration.pixelId || !integration.accessToken) {
     return { sent: false, skipped: true, reason: "not_configured" }
   }
+  if (!integration.facebookPageId) {
+    const eventId = `vesto-quote-${contact.id}-${Date.now()}`
+    const result = missingPageIdTrackingResult(META_QUOTE_EVENT_NAME, eventId, amount)
+    await recordIntegrationResult(prisma, userId, { eventName: META_QUOTE_EVENT_NAME, error: result.error })
+    return result
+  }
 
   const eventId = `vesto-quote-${contact.id}-${Date.now()}`
   try {
-    const result = await sendMetaEvent(integration, buildQuoteEvent({ contact, amount, eventId, userId }))
+    const result = await sendMetaEvent(
+      integration,
+      buildQuoteEvent({ contact, amount, eventId, userId, integration }),
+    )
     await recordIntegrationResult(prisma, userId, {
       eventName: META_QUOTE_EVENT_NAME,
       eventsReceived: result.events_received,
@@ -267,12 +329,18 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
   if (!integration.pixelId || !integration.accessToken) {
     return { sent: false, skipped: true, reason: "not_configured" }
   }
+  if (!integration.facebookPageId) {
+    const eventId = `vesto-purchase-${contact.id}-${Date.now()}`
+    const result = missingPageIdTrackingResult("Purchase", eventId, amount)
+    await recordIntegrationResult(prisma, userId, { eventName: "Purchase", error: result.error })
+    return result
+  }
 
   const eventId = `vesto-purchase-${contact.id}-${Date.now()}`
   try {
     const result = await sendMetaEvent(
       integration,
-      buildPurchaseEvent({ contact, amount, ticket, eventId, userId }),
+      buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration }),
     )
     await recordIntegrationResult(prisma, userId, {
       eventName: "Purchase",
