@@ -21,7 +21,6 @@ import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { Toggle } from '../../components/common/Toggle.jsx'
-import { Tabs } from '../../components/common/Tabs.jsx'
 import { Spinner } from '../../components/common/Spinner.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
@@ -67,8 +66,54 @@ const TABS = [
   { id: 'kanban', label: 'Kanban' },
   { id: 'flows', label: 'Fluxos' },
   { id: 'agents', label: 'Agentes IA' },
-  { id: 'settings', label: 'Configurações' },
 ]
+
+function CrmSettingsToolBtn({ title, onClick, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="rounded-lg border border-accent-500/35 bg-accent-500/10 p-2 text-accent-400 transition hover:border-accent-500/55 hover:bg-accent-500/20 hover:text-accent-300"
+    >
+      {children}
+    </button>
+  )
+}
+
+function CrmTabHeader({ tab, onChange, onOpenSettings }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 pb-2">
+      <div className="flex flex-wrap gap-2">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onChange(t.id)}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+              tab === t.id
+                ? 'border border-accent-500/30 bg-accent-500/15 text-accent-400'
+                : 'text-stone-400 hover:bg-white/5 hover:text-stone-100'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <CrmSettingsToolBtn title="Tags" onClick={() => onOpenSettings('tags')}>
+          <TagIcon className="h-4 w-4" />
+        </CrmSettingsToolBtn>
+        <CrmSettingsToolBtn title="Estágios do Kanban" onClick={() => onOpenSettings('stages')}>
+          <Kanban className="h-4 w-4" />
+        </CrmSettingsToolBtn>
+        <CrmSettingsToolBtn title="Atalhos de mensagem" onClick={() => onOpenSettings('quickReplies')}>
+          <MessageSquare className="h-4 w-4" />
+        </CrmSettingsToolBtn>
+      </div>
+    </div>
+  )
+}
 
 function timeAgo(iso) {
   if (!iso) return ''
@@ -328,7 +373,7 @@ function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
     <Modal isOpen={open} onClose={onClose} title={`Etiquetas — ${conversation.contact?.name}`}>
       <div className="space-y-2">
         {tags.length === 0 ? (
-          <p className="text-sm text-stone-500">Nenhuma tag criada. Vá em Configurações para criar.</p>
+          <p className="text-sm text-stone-500">Nenhuma tag criada. Use o botão de tags no topo do CRM.</p>
         ) : (
           tags.map((tag) => (
             <button
@@ -828,7 +873,7 @@ function AgentTester({ agent }) {
 
 // ============================================================ CONFIGURAÇÕES
 
-function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickReplies }) {
+function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, setQuickReplies, openPanel, onClosePanel }) {
   const toast = useToast()
   const [tagName, setTagName] = useState('')
   const [tagColor, setTagColor] = useState('#22c55e')
@@ -964,11 +1009,8 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
-        <h3 className="mb-3 flex items-center gap-2 font-heading text-base font-semibold text-stone-100">
-          <TagIcon className="h-4 w-4 text-accent-400" /> Tags
-        </h3>
+    <>
+      <Modal isOpen={openPanel === 'tags'} onClose={onClosePanel} title="Tags" size="lg">
         <div className="flex gap-2">
           <input
             value={tagName}
@@ -1016,12 +1058,9 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
             </span>
           ))}
         </div>
-      </Card>
+      </Modal>
 
-      <Card>
-        <h3 className="mb-3 flex items-center gap-2 font-heading text-base font-semibold text-stone-100">
-          <Kanban className="h-4 w-4 text-accent-400" /> Estágios do Kanban
-        </h3>
+      <Modal isOpen={openPanel === 'stages'} onClose={onClosePanel} title="Estágios do Kanban" size="lg">
         <div className="flex gap-2">
           <input
             value={stageName}
@@ -1066,13 +1105,14 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
             </div>
           ))}
         </div>
-      </Card>
+      </Modal>
 
-      <Card className="lg:col-span-2">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="flex items-center gap-2 font-heading text-base font-semibold text-stone-100">
-            <MessageSquare className="h-4 w-4 text-accent-400" /> Atalhos de mensagem
-          </h3>
+      <Modal isOpen={openPanel === 'quickReplies'} onClose={onClosePanel} title="Atalhos de mensagem" size="xl">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-stone-500">
+            Na aba Conversas, digite <span className="rounded bg-brand-800 px-1.5 py-0.5 font-mono text-accent-400">/atalho</span>{' '}
+            no campo de mensagem.
+          </p>
           <Button
             size="sm"
             variant="secondary"
@@ -1084,10 +1124,6 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
             <Plus className="h-4 w-4" /> Novo atalho
           </Button>
         </div>
-        <p className="mb-3 text-xs text-stone-500">
-          Na aba Conversas, digite <span className="rounded bg-brand-800 px-1.5 py-0.5 font-mono text-accent-400">/atalho</span> no
-          campo de mensagem para inserir o texto salvo.
-        </p>
         {quickReplies.length === 0 ? (
           <p className="text-sm text-stone-500">Nenhum atalho criado ainda.</p>
         ) : (
@@ -1123,7 +1159,7 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
             ))}
           </div>
         )}
-      </Card>
+      </Modal>
 
       <Modal
         isOpen={tagModal}
@@ -1211,7 +1247,7 @@ function SettingsTab({ tags, setTags, stages, setStages, quickReplies, setQuickR
         title="Remover"
         message={`Tem certeza que deseja remover ${confirmDelete?.label || 'este item'}?`}
       />
-    </div>
+    </>
   )
 }
 
@@ -1240,6 +1276,7 @@ export function Crm() {
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [kanbanEdit, setKanbanEdit] = useState(null)
   const [kanbanTags, setKanbanTags] = useState(null)
+  const [settingsPanel, setSettingsPanel] = useState(null)
   const [waConnected, setWaConnected] = useState(true)
 
   const loadAll = useCallback(async () => {
@@ -1419,7 +1456,7 @@ export function Crm() {
 
   return (
     <div className="space-y-4">
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <CrmTabHeader tab={tab} onChange={setTab} onOpenSettings={setSettingsPanel} />
 
       {tab === 'kanban' && (
         <>
@@ -1660,16 +1697,16 @@ export function Crm() {
         </div>
       )}
 
-      {tab === 'settings' && (
-        <SettingsTab
-          tags={tags}
-          setTags={setTags}
-          stages={stages}
-          setStages={setStages}
-          quickReplies={quickReplies}
-          setQuickReplies={setQuickReplies}
-        />
-      )}
+      <CrmSettingsPanels
+        tags={tags}
+        setTags={setTags}
+        stages={stages}
+        setStages={setStages}
+        quickReplies={quickReplies}
+        setQuickReplies={setQuickReplies}
+        openPanel={settingsPanel}
+        onClosePanel={() => setSettingsPanel(null)}
+      />
 
       <FlowModal
         isOpen={flowModal}
