@@ -58,6 +58,21 @@ function stripMediaBase64(value) {
     .replace(/\s/g, "")
 }
 
+/** Mantém mídia enviada pelo CRM quando o webhook do WhatsApp atualiza a mensagem. */
+function mergeInboundMessageRaw(existingRaw, incomingRaw) {
+  const local = existingRaw?._localMedia
+  if (!local?.base64) return incomingRaw ?? existingRaw ?? null
+
+  const base =
+    incomingRaw && typeof incomingRaw === "object"
+      ? { ...incomingRaw }
+      : existingRaw && typeof existingRaw === "object"
+        ? { ...existingRaw }
+        : {}
+
+  return { ...base, _localMedia: local }
+}
+
 /** Mídia enviada pelo CRM e guardada em raw._localMedia (antes do WhatsApp indexar). */
 function readStoredMessageMedia(msg) {
   const local = msg?.raw?._localMedia
@@ -163,5 +178,6 @@ module.exports = {
   extractMediaBase64Payload,
   readStoredMessageMedia,
   buildOutboundMessageRaw,
+  mergeInboundMessageRaw,
   ensureMessageRaw,
 }

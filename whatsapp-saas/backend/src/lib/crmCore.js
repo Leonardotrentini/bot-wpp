@@ -297,7 +297,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
   return { contact, conversation }
 }
 
-const { unwrapBaileysMessage } = require("./crmMedia")
+const { unwrapBaileysMessage, mergeInboundMessageRaw } = require("./crmMedia")
 
 function extractMediaMime(record) {
   const m = unwrapBaileysMessage(record?.message) || record?.message || {}
@@ -350,6 +350,10 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     where: { conversationId_messageId: { conversationId: conversation.id, messageId: mapped.messageId } },
   })
 
+  const rawForWrite = existing
+    ? mergeInboundMessageRaw(existing.raw, mapped.raw)
+    : mapped.raw
+
   const message = await prisma.crmMessage.upsert({
     where: { conversationId_messageId: { conversationId: conversation.id, messageId: mapped.messageId } },
     create: {
@@ -369,8 +373,8 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     update: {
       body: mapped.body,
       type: mapped.type,
-      raw: mapped.raw,
-      mediaMime: extractMediaMime(record),
+      raw: rawForWrite,
+      mediaMime: extractMediaMime(record) || existing?.mediaMime || null,
     },
   })
   const created = !existing

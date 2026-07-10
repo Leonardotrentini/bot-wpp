@@ -33,7 +33,7 @@ import { onSocketEvent } from '../../services/socket.js'
 import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
 import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingModal.jsx'
 import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
-import { ChatMessageContent } from '../../components/crm/ChatMessageContent.jsx'
+import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
 import {
@@ -372,6 +372,9 @@ export function Chat() {
       }
       const { data } = await sendCrmMessage(activeId, payload)
       if (data.message) {
+        if (attachment?.base64) {
+          primeCrmMessageMediaCache(data.message.id, attachment.mime, attachment.base64)
+        }
         setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]))
       }
       if (data.conversation) {

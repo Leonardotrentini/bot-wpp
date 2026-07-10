@@ -427,6 +427,22 @@ test("buildOutboundMessageRaw preserva _localMedia mesmo com resposta Evolution 
   assert.strictEqual(stored.mimetype, "video/mp4")
 })
 
+test("mergeInboundMessageRaw preserva _localMedia quando webhook atualiza mensagem", () => {
+  const { mergeInboundMessageRaw, readStoredMessageMedia } = require("../src/lib/crmMedia")
+  const existing = {
+    key: { id: "MSG1", remoteJid: "5511999999999@s.whatsapp.net", fromMe: true },
+    _localMedia: { base64: "dmlkZW8=", mimetype: "video/mp4", fileName: "clip.mp4" },
+  }
+  const incoming = {
+    key: { id: "MSG1", remoteJid: "5511999999999@s.whatsapp.net", fromMe: true },
+    message: { videoMessage: { mimetype: "video/mp4" } },
+  }
+  const merged = mergeInboundMessageRaw(existing, incoming)
+  assert.ok(merged.message?.videoMessage)
+  const stored = readStoredMessageMedia({ raw: merged, mediaMime: "video/mp4" })
+  assert.strictEqual(stored.base64, "dmlkZW8=")
+})
+
 // ---------------- crmAiAgent
 
 test("containsHandoffKeyword detecta palavra em qualquer posição", () => {

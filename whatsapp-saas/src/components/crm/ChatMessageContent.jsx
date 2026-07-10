@@ -5,6 +5,20 @@ import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../c
 
 const mediaCache = new Map()
 
+function mediaDataUrlFromParts(mimetype, base64) {
+  const clean = String(base64 || '').replace(/^data:[^;]+;base64,/, '')
+  const mime = (mimetype || 'application/octet-stream').split(';')[0].trim()
+  return `data:${mime};base64,${clean}`
+}
+
+/** Pré-carrega mídia recém-enviada para exibir miniatura sem esperar o download. */
+export function primeCrmMessageMediaCache(messageId, mimetype, base64) {
+  if (!messageId || !base64) return
+  const src = mediaDataUrlFromParts(mimetype, base64)
+  const mime = (mimetype || 'application/octet-stream').split(';')[0].trim()
+  mediaCache.set(messageId, { loading: false, error: null, src, mimetype: mime })
+}
+
 function inferMediaKind(message) {
   if (message?.mediaKind) return message.mediaKind
   const t = String(message?.type || '').toLowerCase()
@@ -40,9 +54,7 @@ function documentCaption(message) {
 }
 
 function mediaDataUrl(mimetype, base64) {
-  const clean = String(base64 || '').replace(/^data:[^;]+;base64,/, '')
-  const mime = (mimetype || 'application/octet-stream').split(';')[0].trim()
-  return `data:${mime};base64,${clean}`
+  return mediaDataUrlFromParts(mimetype, base64)
 }
 
 function MediaFallback({ kind, error }) {
@@ -103,7 +115,7 @@ function useCrmMessageMedia(message) {
         if (cancelled) return
         const status = err?.response?.status
         const code = err?.response?.data?.error
-        let msg = err?.response?.data?.message || 'Falha ao carregar mídia'
+        let msg = err?.response?.data?.message || err?.message || 'Falha ao carregar mídia'
         if (status === 404) {
           msg = 'Servidor sem suporte a mídia — é necessário atualizar o backend.'
         } else if (code === 'WHATSAPP_DISCONNECTED') {
