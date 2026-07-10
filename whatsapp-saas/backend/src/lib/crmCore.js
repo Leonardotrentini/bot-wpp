@@ -225,6 +225,7 @@ function formatMessageRow(msg) {
     hasMedia: Boolean(mediaKind),
     body: msg.body || "",
     mediaMime: msg.mediaMime || null,
+    mediaName: extractMediaFileName(msg),
     status: msg.status,
     source: msg.source,
     timestamp: msg.timestamp ? msg.timestamp.toISOString() : null,
@@ -309,6 +310,14 @@ function extractMediaMime(record) {
     m.stickerMessage?.mimetype ||
     null
   )
+}
+
+function extractMediaFileName(msg) {
+  const local = msg?.raw?._localMedia
+  if (local?.fileName) return String(local.fileName)
+  const m = unwrapBaileysMessage(msg?.raw?.message) || msg?.raw?.message || {}
+  const name = m.documentMessage?.fileName || m.documentMessage?.title || null
+  return name ? String(name) : null
 }
 
 /**

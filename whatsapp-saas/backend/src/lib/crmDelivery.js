@@ -97,6 +97,7 @@ async function processOneDelivery(deps, delivery) {
               evolutionResp: resp,
               mediaBase64: mediaB64,
               mediaMime: delivery.mediaMime,
+              mediaName: delivery.mediaName,
             })
           : null,
       },

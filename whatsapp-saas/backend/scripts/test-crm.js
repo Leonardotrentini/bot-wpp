@@ -409,6 +409,24 @@ test("readStoredMessageMedia lê mídia enviada pelo CRM em raw._localMedia", ()
   assert.strictEqual(stored.mimetype, "audio/webm")
 })
 
+test("buildOutboundMessageRaw preserva _localMedia mesmo com resposta Evolution completa", () => {
+  const { readStoredMessageMedia, buildOutboundMessageRaw } = require("../src/lib/crmMedia")
+  const evolutionResp = {
+    key: { id: "MSG1", remoteJid: "5511999999999@s.whatsapp.net", fromMe: true },
+    message: { videoMessage: { mimetype: "video/mp4" } },
+  }
+  const raw = buildOutboundMessageRaw({
+    evolutionResp,
+    mediaBase64: "dmlkZW8=",
+    mediaMime: "video/mp4",
+    mediaName: "clip.mp4",
+  })
+  assert.ok(raw.message?.videoMessage)
+  const stored = readStoredMessageMedia({ raw, mediaMime: "video/mp4" })
+  assert.strictEqual(stored.base64, "dmlkZW8=")
+  assert.strictEqual(stored.mimetype, "video/mp4")
+})
+
 // ---------------- crmAiAgent
 
 test("containsHandoffKeyword detecta palavra em qualquer posição", () => {

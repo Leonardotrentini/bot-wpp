@@ -60,7 +60,7 @@ import {
 } from '../../services/api.js'
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
-import { revokeAudioPreview } from '../../lib/audioRecorder.js'
+import { revokeAudioPreview, warmUpAudioRecording } from '../../lib/audioRecorder.js'
 
 // ---------------------------------------------------------------- helpers
 
@@ -237,6 +237,14 @@ export function Chat() {
     }, 4000)
     return () => clearTimeout(t)
   }, [waConnected])
+
+  useEffect(() => {
+    if (!activeId || !waConnected) return undefined
+    const t = setTimeout(() => {
+      warmUpAudioRecording().catch(() => {})
+    }, 600)
+    return () => clearTimeout(t)
+  }, [activeId, waConnected])
 
   // Poll do status de sync enquanto job ativo (fallback se socket cair)
   useEffect(() => {

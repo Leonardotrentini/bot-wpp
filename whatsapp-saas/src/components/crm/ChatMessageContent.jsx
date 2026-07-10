@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, Mic, Film, ImageIcon, FileText } from 'lucide-react'
 import { getCrmMessageMedia } from '../../services/api.js'
-import { ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
+import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
 
 const mediaCache = new Map()
 
@@ -13,6 +13,30 @@ function inferMediaKind(message) {
   if (t.includes('audio') || t.includes('ptt')) return 'audio'
   if (t.includes('document')) return 'document'
   return null
+}
+
+function documentFileNameFromRaw(message) {
+  if (message?.mediaName) return message.mediaName
+  const raw = message?.raw
+  const local = raw?._localMedia
+  if (local?.fileName) return local.fileName
+  const doc =
+    raw?.message?.documentMessage ||
+    raw?.message?.documentWithCaptionMessage?.message?.documentMessage ||
+    null
+  return doc?.fileName || doc?.title || null
+}
+
+function documentDisplayName(message) {
+  return documentFileNameFromRaw(message) || String(message?.body || '').trim() || 'Documento'
+}
+
+function documentCaption(message) {
+  const fileName = documentFileNameFromRaw(message)
+  const body = String(message?.body || '').trim()
+  if (!body) return ''
+  if (!fileName || body === fileName) return ''
+  return body
 }
 
 function mediaDataUrl(mimetype, base64) {
@@ -97,8 +121,9 @@ function useCrmMessageMedia(message) {
 }
 
 export function ChatMessageContent({ message }) {
-  const { kind, loading, error, src, retry } = useCrmMessageMedia(message)
-  const body = String(message?.body || '').trim()
+  const { kind, loading, error, src, retry, mimetype } = useCrmMessageMedia(message)
+  const fileName = kind === 'document' ? documentDisplayName(message) : null
+  const body = kind === 'document' ? documentCaption(message) : String(message?.body || '').trim()
 
   if (!kind) {
     return body ? <p className="whitespace-pre-wrap break-words">{message.body}</p> : null
@@ -129,6 +154,8 @@ export function ChatMessageContent({ message }) {
         <VideoMediaPreview src={src} className="max-h-56 w-full rounded-lg border border-brand-700/80 object-contain" compact />
       ) : kind === 'image' ? (
         <ImageMediaPreview src={src} alt="" className="max-h-56 w-full rounded-lg border border-brand-700/80 object-contain" />
+      ) : kind === 'document' ? (
+        <DocumentMediaPreview src={src} mediaName={fileName} mimetype={mimetype || message.mediaMime} />
       ) : (
         <MediaFallback kind={kind} />
       )}

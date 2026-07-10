@@ -69,21 +69,27 @@ function readStoredMessageMedia(msg) {
 }
 
 /** Monta raw para mensagens enviadas manualmente / fila CRM. */
-function buildOutboundMessageRaw({ providerMessageId, remoteJid, evolutionResp, mediaBase64, mediaMime } = {}) {
-  if (evolutionResp && mediaRecordIsComplete(evolutionResp)) {
-    return JSON.parse(JSON.stringify(evolutionResp))
-  }
-  const id = providerMessageId || `manual-${Date.now()}`
-  const raw = {
-    key: { id, remoteJid, fromMe: true },
-  }
+function buildOutboundMessageRaw({ providerMessageId, remoteJid, evolutionResp, mediaBase64, mediaMime, mediaName } = {}) {
   const b64 = stripMediaBase64(mediaBase64)
+  let raw
+
+  if (evolutionResp && mediaRecordIsComplete(evolutionResp)) {
+    raw = JSON.parse(JSON.stringify(evolutionResp))
+  } else {
+    const id = providerMessageId || `manual-${Date.now()}`
+    raw = {
+      key: { id, remoteJid, fromMe: true },
+    }
+  }
+
   if (b64) {
     raw._localMedia = {
       base64: b64,
       mimetype: mediaMime || null,
+      fileName: mediaName || null,
     }
   }
+
   return raw
 }
 

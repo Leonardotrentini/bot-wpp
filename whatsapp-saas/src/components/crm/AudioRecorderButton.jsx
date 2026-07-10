@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Mic, X } from 'lucide-react'
-import { blobToAudioAttachment, formatRecordSeconds, pickAudioMimeType } from '../../lib/audioRecorder.js'
+import {
+  blobToAudioAttachment,
+  formatRecordSeconds,
+  openRecordingStream,
+  pickAudioMimeType,
+  warmUpAudioRecording,
+} from '../../lib/audioRecorder.js'
 import { AudioWaveform } from './AudioWaveform.jsx'
 
 function RecordingBar({ children, className = '' }) {
@@ -25,17 +31,35 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
   const mimeRef = useRef(null)
   const secondsRef = useRef(0)
   const cancelledRef = useRef(false)
+  const startingUiTimerRef = useRef(null)
 
   useEffect(() => {
     secondsRef.current = seconds
   }, [seconds])
 
   useEffect(() => {
+    warmUpAudioRecording().catch(() => {})
+  }, [])
+
+  useEffect(() => {
     return () => {
+      if (startingUiTimerRef.current) clearTimeout(startingUiTimerRef.current)
       if (timerRef.current) clearInterval(timerRef.current)
       streamRef.current?.getTracks().forEach((t) => t.stop())
     }
   }, [])
+
+  function clearStartingUiTimer() {
+    if (startingUiTimerRef.current) {
+      clearTimeout(startingUiTimerRef.current)
+      startingUiTimerRef.current = null
+    }
+  }
+
+  function beginStartingUi() {
+    clearStartingUiTimer()
+    startingUiTimerRef.current = setTimeout(() => setStarting(true), 280)
+  }
 
   function setComposerRecording(active) {
     onRecordingChange?.(active)
@@ -72,17 +96,15 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
       return
     }
 
-    setStarting(true)
+    setStarting(false)
     setComposerRecording(true)
+    beginStartingUi()
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
+      await warmUpAudioRecording()
+      const stream = await openRecordingStream()
+      clearStartingUiTimer()
+      setStarting(false)
       streamRef.current = stream
       mimeRef.current = mimeType
 
@@ -126,15 +148,19 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
 
       mediaRecorderRef.current = recorder
       recorder.start(200)
-      setStarting(false)
       setRecording(true)
       setSeconds(0)
       timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000)
     } catch {
+      clearStartingUiTimer()
       cleanupStream()
       exitRecordingMode()
       onError?.('Permita o acesso ao microfone para gravar áudio.')
     }
+  }
+
+  function handleMicPointerEnter() {
+    warmUpAudioRecording().catch(() => {})
   }
 
   function stopRecording() {
@@ -236,6 +262,7 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
       type="button"
       disabled={disabled}
       onClick={startRecording}
+      onPointerEnter={handleMicPointerEnter}
       className="shrink-0 rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
       title="Clique para gravar áudio"
     >

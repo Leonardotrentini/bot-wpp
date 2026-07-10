@@ -1,5 +1,77 @@
 import { AUDIO_MAX_BYTES } from './mediaLimits.js'
 
+const AUDIO_CONSTRAINTS = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+}
+
+let warmPromise = null
+let micReady = false
+
+async function microphonePermissionGranted() {
+  try {
+    if (navigator.permissions?.query) {
+      const status = await navigator.permissions.query({ name: 'microphone' })
+      return status.state === 'granted'
+    }
+  } catch {
+    /* Permissions API indisponível (Safari) */
+  }
+  return false
+}
+
+/** Inicializa microfone/AudioContext em background (após F5) para o 1º clique ser rápido. */
+export function warmUpAudioRecording() {
+  if (micReady) return Promise.resolve()
+  if (warmPromise) return warmPromise
+
+  warmPromise = (async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) return
+      const granted = await microphonePermissionGranted()
+      if (!granted) return
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS })
+      stream.getTracks().forEach((t) => t.stop())
+
+      try {
+        const ctx = new AudioContext()
+        if (ctx.state === 'suspended') await ctx.resume()
+        await ctx.close()
+      } catch {
+        /* ignore */
+      }
+
+      micReady = true
+    } catch {
+      micReady = false
+    } finally {
+      warmPromise = null
+    }
+  })()
+
+  return warmPromise
+}
+
+export function markMicrophoneReady() {
+  micReady = true
+}
+
+export function isMicrophoneWarmed() {
+  return micReady
+}
+
+export async function openRecordingStream() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS })
+  markMicrophoneReady()
+  return stream
+}
+
+export function getAudioConstraints() {
+  return AUDIO_CONSTRAINTS
+}
+
 export function pickAudioMimeType() {
   if (typeof MediaRecorder === 'undefined') return null
   const candidates = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']

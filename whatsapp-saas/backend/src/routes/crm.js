@@ -328,6 +328,7 @@ function createCrmRouter({ io }) {
             evolutionResp: resp,
             mediaBase64: mediaB64,
             mediaMime: content.mediaMime,
+            mediaName: content.mediaName,
           })
         : null
 
