@@ -77,10 +77,12 @@ test("normalizeTrigger valida tipos e exige keywords", () => {
   assert.strictEqual(kw.matchMode, "contains")
 })
 
-test("normalizeTrigger no_reply limita horas entre 1 e 720", () => {
-  assert.strictEqual(normalizeTrigger({ type: "no_reply", hours: 0 }).hours, 24) // 0 é inválido → default
-  assert.strictEqual(normalizeTrigger({ type: "no_reply", hours: 9999 }).hours, 720)
-  assert.strictEqual(normalizeTrigger({ type: "no_reply" }).hours, 24)
+test("normalizeTrigger no_reply aceita horas e minutos", () => {
+  assert.strictEqual(normalizeTrigger({ type: "no_reply", hours: 0 }).minutes, 24 * 60)
+  assert.strictEqual(normalizeTrigger({ type: "no_reply", hours: 9999 }).minutes, 720 * 60)
+  assert.strictEqual(normalizeTrigger({ type: "no_reply" }).minutes, 24 * 60)
+  assert.strictEqual(normalizeTrigger({ type: "no_reply", minutes: 30 }).minutes, 30)
+  assert.strictEqual(normalizeTrigger({ type: "no_reply", delayUnit: "minutes", delayValue: 45 }).minutes, 45)
 })
 
 test("keywordMatches contains e exact", () => {

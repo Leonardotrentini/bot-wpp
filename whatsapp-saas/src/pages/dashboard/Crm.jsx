@@ -31,7 +31,21 @@ import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
 import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr } from '../../lib/contactDisplay.js'
-import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia, FLOW_MEDIA_LABELS, buildFlowApiPayload, normalizeFlowCooldown, DEFAULT_FLOW_COOLDOWN_HOURS } from '../../lib/flowMedia.js'
+import {
+  buildNoReplyTriggerPatch,
+  formatNoReplyDelay,
+  getNoReplyDelayUi,
+  MAX_NO_REPLY_MINUTES,
+} from '../../lib/flowNoReplyDelay.js'
+import {
+  flowMessageHasContent,
+  stripFlowActionForSave,
+  emptyFlowMessageMedia,
+  FLOW_MEDIA_LABELS,
+  buildFlowApiPayload,
+  normalizeFlowCooldown,
+  DEFAULT_FLOW_COOLDOWN_HOURS,
+} from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
 import { getCrmBootstrapCache, setCrmBootstrapCache } from '../../lib/crmBootstrapCache.js'
 import {
@@ -597,7 +611,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           <Select value={flow.trigger.type} onChange={(e) => setFlow((f) => ({ ...f, trigger: { type: e.target.value } }))}>
             <option value="new_conversation">Nova conversa iniciada</option>
             <option value="keyword">Contato envia palavra-chave</option>
-            <option value="no_reply">Contato sem responder há X horas</option>
+            <option value="no_reply">Contato sem responder há um tempo</option>
             <option value="stage_change">Card movido no Kanban</option>
           </Select>
           {flow.trigger.type === 'keyword' && (
@@ -617,18 +631,44 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
               />
             </div>
           )}
-          {flow.trigger.type === 'no_reply' && (
-            <div className="mt-2">
-              <Input
-                label="Horas sem resposta"
-                type="number"
-                min={1}
-                max={720}
-                value={flow.trigger.hours || 24}
-                onChange={(e) => setTrigger({ hours: Math.max(1, Number(e.target.value) || 24) })}
-              />
-            </div>
-          )}
+          {flow.trigger.type === 'no_reply' && (() => {
+            const delay = getNoReplyDelayUi(flow.trigger)
+            const max = delay.unit === 'minutes' ? MAX_NO_REPLY_MINUTES : 720
+            return (
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <div className="min-w-[120px] flex-1">
+                  <Input
+                    label="Tempo sem resposta"
+                    type="number"
+                    min={1}
+                    max={max}
+                    value={delay.value}
+                    onChange={(e) => {
+                      const n = Math.max(1, Number(e.target.value) || 1)
+                      setTrigger(buildNoReplyTriggerPatch(n, delay.unit))
+                    }}
+                  />
+                </div>
+                <div className="w-36">
+                  <p className="mb-1.5 text-sm font-medium text-stone-300">Unidade</p>
+                  <Select
+                    value={delay.unit}
+                    onChange={(e) => {
+                      const unit = e.target.value === 'minutes' ? 'minutes' : 'hours'
+                      const n = Math.max(1, Number(delay.value) || 1)
+                      setTrigger(buildNoReplyTriggerPatch(n, unit))
+                    }}
+                  >
+                    <option value="minutes">Minutos</option>
+                    <option value="hours">Horas</option>
+                  </Select>
+                </div>
+                <p className="w-full text-[11px] text-stone-500">
+                  Ex.: 30 minutos ou 24 horas após a última mensagem sua sem resposta do contato.
+                </p>
+              </div>
+            )
+          })()}
           {flow.trigger.type === 'stage_change' && (
             <div className="mt-2">
               <p className="mb-1.5 text-sm font-medium text-stone-300">Para o estágio</p>
@@ -1700,6 +1740,9 @@ export function Crm() {
                         Quando: <span className="text-stone-300">{TRIGGER_LABELS[flow.trigger?.type] || '—'}</span>
                         {flow.trigger?.type === 'keyword' && flow.trigger.keywords?.length > 0 && (
                           <span className="text-stone-400"> ({flow.trigger.keywords.join(', ')})</span>
+                        )}
+                        {flow.trigger?.type === 'no_reply' && (
+                          <span className="text-stone-400"> ({formatNoReplyDelay(flow.trigger)})</span>
                         )}
                       </p>
                       <p className="mt-0.5 text-xs text-stone-500">

@@ -5,6 +5,7 @@ import {
   attachQuickReplyMediaFromFile,
   emptyQuickReplyMedia,
 } from './quickReplyMedia.js'
+import { buildNoReplyTriggerPatch, getNoReplyDelayUi } from './flowNoReplyDelay.js'
 
 export const FLOW_FILE_ACCEPT = QUICK_REPLY_FILE_ACCEPT
 export const FLOW_MEDIA_LABELS = QUICK_REPLY_MEDIA_LABELS
@@ -58,7 +59,8 @@ function cleanFlowTrigger(trigger) {
     out.matchMode = trigger.matchMode === 'exact' ? 'exact' : 'contains'
   }
   if (type === 'no_reply') {
-    out.hours = Math.min(720, Math.max(1, Number(trigger.hours) || DEFAULT_FLOW_COOLDOWN_HOURS))
+    const ui = getNoReplyDelayUi(trigger)
+    Object.assign(out, buildNoReplyTriggerPatch(ui.value, ui.unit))
   }
   if (type === 'stage_change' && trigger.stageId) {
     out.stageId = String(trigger.stageId)

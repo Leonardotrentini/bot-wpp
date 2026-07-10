@@ -17,6 +17,27 @@ const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require(".
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
 
+function resolveNoReplyMinutes(trigger) {
+  if (!trigger) return 24 * 60
+  const rawMinutes = Number(trigger.minutes)
+  if (Number.isFinite(rawMinutes) && rawMinutes > 0) {
+    return Math.min(720 * 60, Math.max(1, Math.round(rawMinutes)))
+  }
+  if (trigger.delayUnit === "minutes") {
+    const v = Number(trigger.delayValue)
+    if (Number.isFinite(v) && v > 0) return Math.min(720 * 60, Math.max(1, Math.round(v)))
+  }
+  if (trigger.delayUnit === "hours") {
+    const v = Number(trigger.delayValue)
+    if (Number.isFinite(v) && v > 0) return Math.min(720 * 60, Math.max(1, Math.round(v * 60)))
+  }
+  const h = Number(trigger.hours)
+  if (Number.isFinite(h) && h > 0) {
+    return Math.min(720 * 60, Math.max(1, Math.round(h * 60)))
+  }
+  return 24 * 60
+}
+
 function normalizeQuietHours(value) {
   if (!value || typeof value !== "object" || value.enabled !== true) return null
   const re = /^([01]?\d|2[0-3]):[0-5]\d$/
@@ -53,7 +74,13 @@ function normalizeTrigger(trigger) {
     out.matchMode = trigger.matchMode === "exact" ? "exact" : "contains"
   }
   if (type === "no_reply") {
-    out.hours = Math.min(720, Math.max(1, Number(trigger.hours) || 24))
+    const minutes = resolveNoReplyMinutes(trigger)
+    out.minutes = minutes
+    out.hours = Math.ceil(minutes / 60)
+    if (trigger.delayUnit === "hours" || trigger.delayUnit === "minutes") {
+      out.delayUnit = trigger.delayUnit
+      out.delayValue = Number(trigger.delayValue) || (trigger.delayUnit === "minutes" ? minutes : out.hours)
+    }
   }
   if (type === "stage_change") {
     out.stageId = trigger.stageId ? String(trigger.stageId) : null
@@ -299,7 +326,7 @@ async function processNoReplyFlows(deps) {
   for (const flow of flows) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger?.type !== "no_reply") continue
-    const threshold = new Date(Date.now() - trigger.hours * 3600 * 1000)
+    const threshold = new Date(Date.now() - trigger.minutes * 60 * 1000)
     // conversas abertas onde a ÚLTIMA mensagem é do usuário (fromMe) e está sem resposta
     const candidates = await prisma.crmConversation.findMany({
       where: {

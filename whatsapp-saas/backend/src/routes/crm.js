@@ -855,6 +855,9 @@ function createCrmRouter({ io }) {
       keywords: z.array(z.string().min(1).max(60)).max(20).optional(),
       matchMode: z.enum(["contains", "exact"]).optional(),
       hours: z.number().int().min(1).max(720).optional(),
+      minutes: z.number().int().min(1).max(43200).optional(),
+      delayUnit: z.enum(["hours", "minutes"]).optional(),
+      delayValue: z.number().int().min(1).max(43200).optional(),
       stageId: z.string().nullable().optional(),
     }),
     conditions: z
