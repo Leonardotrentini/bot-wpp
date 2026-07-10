@@ -313,10 +313,26 @@ model CrmContact {
   updatedAt    DateTime         @updatedAt
   tags         CrmContactTag[]
   activities   CrmContactActivity[]
+  reminders    CrmContactReminder[]
   conversation CrmConversation?
 
   @@unique([userId, remoteJid])
   @@index([userId])
+}
+
+model CrmContactReminder {
+  id          String     @id @default(cuid())
+  userId      String
+  contactId   String
+  contact     CrmContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  note        String?
+  scheduledAt DateTime
+  status      String     @default("pending") // pending | done | cancelled
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([contactId, scheduledAt])
+  @@index([userId, status, scheduledAt])
 }
 
 model CrmContactActivity {

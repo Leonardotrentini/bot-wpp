@@ -37,6 +37,10 @@ function activityLabel(type, payload = {}) {
       return payload.name ? `Contato salvo como ${payload.name}` : "Nome do contato atualizado"
     case "notes_updated":
       return "Notas internas atualizadas"
+    case "reminder_set":
+      return payload.label ? `Lembrete agendado: ${payload.label}` : "Lembrete agendado"
+    case "reminder_cancelled":
+      return payload.label ? `Lembrete cancelado: ${payload.label}` : "Lembrete cancelado"
     default:
       return type
   }

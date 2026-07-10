@@ -45,6 +45,11 @@ const {
   saveContactQuote,
   confirmContactPurchase,
 } = require("../lib/crmContactActivity")
+const {
+  listContactReminders,
+  createContactReminder,
+  cancelContactReminder,
+} = require("../lib/crmContactReminders")
 
 const DEFAULT_STAGES = [
   { name: "Novo", color: "#38bdf8", isDefault: true },
@@ -754,6 +759,56 @@ function createCrmRouter({ io }) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
     }
     return res.json({ contact: result.contact, conversation: result.conversation })
+  })
+
+  router.get("/contacts/:id/reminders", async (req, res) => {
+    const userId = req.user.sub
+    const result = await listContactReminders(prisma, userId, req.params.id)
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    }
+    return res.json({ reminders: result.reminders })
+  })
+
+  router.post("/contacts/:id/reminders", async (req, res) => {
+    const userId = req.user.sub
+    const schema = z.object({
+      scheduledAt: z.string().min(1),
+      note: z.string().max(500).optional().nullable(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe data e hora válidas." })
+    }
+    const result = await createContactReminder(prisma, io, {
+      userId,
+      contactId: req.params.id,
+      scheduledAt: parsed.data.scheduledAt,
+      note: parsed.data.note,
+    })
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    }
+    if (result.error === "INVALID_DATE") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Data ou hora inválida." })
+    }
+    if (result.error === "PAST_DATE") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: result.message || "O lembrete precisa ser no futuro." })
+    }
+    return res.status(201).json({ reminder: result.reminder, contact: result.contact })
+  })
+
+  router.delete("/contacts/:id/reminders/:reminderId", async (req, res) => {
+    const userId = req.user.sub
+    const result = await cancelContactReminder(prisma, io, {
+      userId,
+      contactId: req.params.id,
+      reminderId: req.params.reminderId,
+    })
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Lembrete não encontrado." })
+    }
+    return res.json({ contact: result.contact })
   })
 
   // ------------------------- Tags -------------------------

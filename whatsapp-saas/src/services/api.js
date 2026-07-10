@@ -657,6 +657,37 @@ export async function confirmCrmContactPurchase(contactId, { amount, ticket, mov
   })
 }
 
+export async function getCrmContactReminders(contactId) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/contacts/${encodeURIComponent(contactId)}/reminders`)
+  return mockResponse({ reminders: [] })
+}
+
+export async function createCrmContactReminder(contactId, { scheduledAt, note }) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/reminders`, { scheduledAt, note })
+  }
+  const reminder = {
+    id: `rem-${Date.now()}`,
+    note: note || '',
+    scheduledAt,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  }
+  return mockResponse({
+    reminder,
+    contact: { id: contactId, reminders: [reminder], nextReminder: reminder },
+  })
+}
+
+export async function cancelCrmContactReminder(contactId, reminderId) {
+  if (resolveUseRealApi()) {
+    return apiClient.delete(
+      `/crm/contacts/${encodeURIComponent(contactId)}/reminders/${encodeURIComponent(reminderId)}`,
+    )
+  }
+  return mockResponse({ contact: { id: contactId, reminders: [], nextReminder: null } })
+}
+
 export async function getCrmTags() {
   if (resolveUseRealApi()) return apiClient.get('/crm/tags')
   return mockResponse({ tags: [] })

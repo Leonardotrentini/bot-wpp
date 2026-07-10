@@ -180,6 +180,24 @@ function formatContactRow(contact, { tags } = {}) {
     createdAt: contact.createdAt ? contact.createdAt.toISOString() : null,
     quote: parseContactCommerceField(contact.customFields, "quote"),
     purchase: parseContactCommerceField(contact.customFields, "purchase"),
+    reminders: (contact.reminders || [])
+      .filter((r) => r.status === "pending")
+      .map((r) => ({
+        id: r.id,
+        note: r.note || "",
+        scheduledAt: r.scheduledAt ? r.scheduledAt.toISOString() : null,
+        status: r.status,
+      })),
+    nextReminder: (() => {
+      const pending = (contact.reminders || []).filter((r) => r.status === "pending")
+      if (!pending.length) return null
+      const next = pending.sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt))[0]
+      return {
+        id: next.id,
+        note: next.note || "",
+        scheduledAt: next.scheduledAt.toISOString(),
+      }
+    })(),
     lastSeenAt: contact.lastSeenAt ? contact.lastSeenAt.toISOString() : null,
     tags: (tags || contact.tags || []).map((ct) => ({
       id: ct.tag?.id ?? ct.id,
@@ -243,7 +261,16 @@ function formatMessageRow(msg) {
 }
 
 const CONVERSATION_INCLUDE = {
-  contact: { include: { tags: { include: { tag: true } } } },
+  contact: {
+    include: {
+      tags: { include: { tag: true } },
+      reminders: {
+        where: { status: "pending" },
+        orderBy: { scheduledAt: "asc" },
+        take: 20,
+      },
+    },
+  },
 }
 
 function cleanIncomingPushName(value, remoteJid) {
