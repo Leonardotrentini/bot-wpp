@@ -3,6 +3,7 @@
  */
 
 const { formatContactRow, formatConversationRow, emitCrmEvent, CONVERSATION_INCLUDE } = require("./crmCore")
+const { trackCrmQuoteEvent, trackCrmPurchaseEvent } = require("./metaConversions")
 
 const QUOTE_TAG_PREFIX = "Orçamento "
 const PURCHASE_TAG_NAME = "Comprou"
