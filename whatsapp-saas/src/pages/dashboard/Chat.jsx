@@ -20,10 +20,12 @@ import {
   FileText,
   Unplug,
   Users,
+  Pencil,
+  Trash2,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
-import { Modal } from '../../components/common/Modal.jsx'
+import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { Toggle } from '../../components/common/Toggle.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
@@ -48,6 +50,8 @@ import {
   saveCrmContact,
   getCrmTags,
   createCrmTag,
+  updateCrmTag,
+  deleteCrmTag,
   addCrmContactTag,
   removeCrmContactTag,
   getCrmStages,
@@ -262,6 +266,12 @@ export function Chat() {
   const [savingContact, setSavingContact] = useState(false)
   const [newTagModal, setNewTagModal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
+  const [newTagColor, setNewTagColor] = useState('#22c55e')
+  const [tagEditModal, setTagEditModal] = useState(false)
+  const [tagEditing, setTagEditing] = useState(null)
+  const [tagForm, setTagForm] = useState({ name: '', color: '#22c55e' })
+  const [tagSaving, setTagSaving] = useState(false)
+  const [tagToDelete, setTagToDelete] = useState(null)
 
   const listEndRef = useRef(null)
   const threadRef = useRef(null)
@@ -890,6 +900,17 @@ export function Chat() {
     }
   }, [active, nameDraft, activeId])
 
+  const applyTagToConversations = useCallback((updater) => {
+    setConversations((prev) =>
+      prev.map((c) => {
+        if (!c.contact?.tags?.length) return c
+        const nextTags = updater(c.contact.tags)
+        if (nextTags === c.contact.tags) return c
+        return { ...c, contact: { ...c.contact, tags: nextTags } }
+      }),
+    )
+  }, [])
+
   const toggleContactTag = useCallback(
     async (tag) => {
       if (!active?.contact) return
@@ -912,15 +933,61 @@ export function Chat() {
     const name = newTagName.trim()
     if (!name) return
     try {
-      const { data } = await createCrmTag({ name })
+      const { data } = await createCrmTag({ name, color: newTagColor })
       setTags((prev) => [...prev, data.tag].sort((a, b) => a.name.localeCompare(b.name)))
       setNewTagModal(false)
       setNewTagName('')
+      setNewTagColor('#22c55e')
       toastRef.current.success('Tag criada.')
     } catch (err) {
       toastRef.current.error(err?.response?.data?.message || 'Falha ao criar tag.')
     }
-  }, [newTagName])
+  }, [newTagName, newTagColor])
+
+  const openEditTag = useCallback((tag) => {
+    setTagEditing(tag)
+    setTagForm({ name: tag.name, color: tag.color || '#22c55e' })
+    setTagEditModal(true)
+  }, [])
+
+  const handleSaveTagEdit = useCallback(async () => {
+    if (!tagEditing || !tagForm.name.trim()) return
+    setTagSaving(true)
+    try {
+      const { data } = await updateCrmTag(tagEditing.id, {
+        name: tagForm.name.trim(),
+        color: tagForm.color,
+      })
+      const updated = data.tag
+      setTags((prev) => prev.map((t) => (t.id === updated.id ? updated : t)).sort((a, b) => a.name.localeCompare(b.name)))
+      applyTagToConversations((contactTags) =>
+        contactTags.some((t) => t.id === updated.id)
+          ? contactTags.map((t) => (t.id === updated.id ? updated : t))
+          : contactTags,
+      )
+      setTagEditModal(false)
+      setTagEditing(null)
+      toastRef.current.success('Tag atualizada.')
+    } catch (err) {
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao atualizar tag.')
+    } finally {
+      setTagSaving(false)
+    }
+  }, [tagEditing, tagForm, applyTagToConversations])
+
+  const handleDeleteTag = useCallback(async () => {
+    if (!tagToDelete) return
+    try {
+      await deleteCrmTag(tagToDelete.id)
+      setTags((prev) => prev.filter((t) => t.id !== tagToDelete.id))
+      applyTagToConversations((contactTags) => contactTags.filter((t) => t.id !== tagToDelete.id))
+      toastRef.current.success('Tag excluída.')
+    } catch (err) {
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao excluir tag.')
+    } finally {
+      setTagToDelete(null)
+    }
+  }, [tagToDelete, applyTagToConversations])
 
   const refreshAvatar = useCallback(
     async (contactId) => {
@@ -1526,12 +1593,10 @@ export function Chat() {
                 {tags.map((t) => {
                   const selected = (active.contact?.tags || []).some((x) => x.id === t.id)
                   return (
-                    <button
+                    <span
                       key={t.id}
-                      type="button"
-                      onClick={() => toggleContactTag(t)}
-                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-                        selected ? '' : 'opacity-45 hover:opacity-80'
+                      className={`group inline-flex max-w-full items-center gap-0.5 rounded-full border text-[11px] font-medium transition ${
+                        selected ? '' : 'opacity-45'
                       }`}
                       style={{
                         borderColor: `${t.color}66`,
@@ -1539,11 +1604,37 @@ export function Chat() {
                         color: t.color,
                       }}
                     >
-                      {t.name}
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleContactTag(t)}
+                        className="truncate px-2 py-1 pl-2.5 hover:opacity-90"
+                        title={selected ? 'Remover do lead' : 'Aplicar ao lead'}
+                      >
+                        {t.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openEditTag(t)}
+                        className="rounded-full p-1 opacity-50 transition hover:bg-white/10 hover:opacity-100"
+                        title="Editar tag"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTagToDelete(t)}
+                        className="rounded-full p-1 pr-1.5 opacity-50 transition hover:bg-white/10 hover:text-red-300 hover:opacity-100"
+                        title="Excluir tag"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </span>
                   )
                 })}
               </div>
+              <p className="mt-1.5 text-[10px] text-stone-600">
+                Clique no nome para aplicar ou remover do lead. Editar ou excluir altera a tag em todo o CRM.
+              </p>
             </div>
 
             <div>
@@ -1617,14 +1708,68 @@ export function Chat() {
           </>
         }
       >
-        <input
-          value={newTagName}
-          onChange={(e) => setNewTagName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleCreateTag()}
-          placeholder="Nome da tag (ex.: Lead quente)"
-          className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
-        />
+        <div className="space-y-3">
+          <input
+            value={newTagName}
+            onChange={(e) => setNewTagName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCreateTag()}
+            placeholder="Nome da tag (ex.: Lead quente)"
+            className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+          />
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-stone-500">Cor</p>
+            <input
+              type="color"
+              value={newTagColor}
+              onChange={(e) => setNewTagColor(e.target.value)}
+              className="h-10 w-full cursor-pointer rounded-lg border border-brand-700 bg-brand-900"
+            />
+          </div>
+        </div>
       </Modal>
+
+      <Modal
+        isOpen={tagEditModal}
+        onClose={() => setTagEditModal(false)}
+        title="Editar tag"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setTagEditModal(false)} disabled={tagSaving}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveTagEdit} disabled={!tagForm.name.trim() || tagSaving}>
+              {tagSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <input
+            value={tagForm.name}
+            onChange={(e) => setTagForm((f) => ({ ...f, name: e.target.value }))}
+            onKeyDown={(e) => e.key === 'Enter' && handleSaveTagEdit()}
+            placeholder="Nome da tag"
+            className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+          />
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-stone-500">Cor</p>
+            <input
+              type="color"
+              value={tagForm.color}
+              onChange={(e) => setTagForm((f) => ({ ...f, color: e.target.value }))}
+              className="h-10 w-full cursor-pointer rounded-lg border border-brand-700 bg-brand-900"
+            />
+          </div>
+        </div>
+      </Modal>
+
+      <ConfirmModal
+        isOpen={Boolean(tagToDelete)}
+        onClose={() => setTagToDelete(null)}
+        onConfirm={handleDeleteTag}
+        title="Excluir tag"
+        message={`Excluir a tag "${tagToDelete?.name || ''}"? Ela será removida de todos os leads.`}
+      />
     </div>
     </>
   )

@@ -5,7 +5,8 @@
 const { formatContactRow, formatConversationRow, emitCrmEvent, CONVERSATION_INCLUDE } = require("./crmCore")
 const { trackCrmQuoteEvent, trackCrmPurchaseEvent } = require("./metaConversions")
 
-const QUOTE_TAG_PREFIX = "Orçamento "
+const QUOTE_TAG_NAME = "Orçamento"
+const LEGACY_QUOTE_TAG_PREFIX = "Orçamento "
 const PURCHASE_TAG_NAME = "Comprou"
 const PURCHASE_STAGE_PATTERN = /fechado|ganho|vendido/i
 
@@ -13,6 +14,11 @@ function formatBrl(amount) {
   const n = Number(amount)
   if (!Number.isFinite(n)) return "R$ 0,00"
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n)
+}
+
+function isQuoteTagName(name) {
+  const n = String(name || "")
+  return n === QUOTE_TAG_NAME || n.startsWith(LEGACY_QUOTE_TAG_PREFIX)
 }
 
 function parseCustomFields(value) {
@@ -139,7 +145,7 @@ async function backfillContactActivity(prisma, userId, contactId) {
   }
 
   for (const link of contact.tags || []) {
-    if (link.tag?.name?.startsWith(QUOTE_TAG_PREFIX) || link.tag?.name === PURCHASE_TAG_NAME) continue
+    if (isQuoteTagName(link.tag?.name) || link.tag?.name === PURCHASE_TAG_NAME) continue
     rows.push({
       userId,
       contactId,
@@ -178,6 +184,7 @@ async function backfillContactActivity(prisma, userId, contactId) {
 }
 
 async function getContactActivityTimeline(prisma, userId, contactId) {
+  await normalizeContactQuoteTags(prisma, userId, contactId)
   await backfillContactActivity(prisma, userId, contactId)
   const rows = await prisma.crmContactActivity.findMany({
     where: { contactId, userId },
@@ -218,6 +225,43 @@ async function emitContactConversation(prisma, io, userId, contactId) {
   return conversation
 }
 
+async function normalizeContactQuoteTags(prisma, userId, contactId) {
+  const contact = await prisma.crmContact.findFirst({
+    where: { id: contactId, userId },
+    include: { tags: { include: { tag: true } } },
+  })
+  if (!contact) return { normalized: false, contact: null }
+
+  const quoteTagLinks = (contact.tags || []).filter((link) => isQuoteTagName(link.tag?.name))
+  const custom = parseCustomFields(contact.customFields)
+  const hasQuote = custom.quote?.amount != null
+
+  const needsCleanup =
+    quoteTagLinks.length > 1 ||
+    quoteTagLinks.some((link) => link.tag?.name !== QUOTE_TAG_NAME) ||
+    (hasQuote && quoteTagLinks.length === 0)
+
+  if (!needsCleanup) return { normalized: false, contact }
+
+  await removeContactTagsByPrefix(prisma, contact.id, QUOTE_TAG_NAME)
+
+  if (hasQuote) {
+    const tag = await ensureTag(prisma, userId, QUOTE_TAG_NAME, "#fbbf24")
+    await addContactTagLink(prisma, contact.id, tag.id)
+    custom.quote.tagName = QUOTE_TAG_NAME
+    custom.quote.tagId = tag.id
+    const updated = await prisma.crmContact.update({
+      where: { id: contact.id },
+      data: { customFields: custom },
+      include: { tags: { include: { tag: true } } },
+    })
+    return { normalized: true, contact: updated }
+  }
+
+  const updated = await reloadContact(prisma, contact.id)
+  return { normalized: true, contact: updated }
+}
+
 async function saveContactQuote(prisma, io, { userId, contactId, amount }) {
   const contact = await prisma.crmContact.findFirst({ where: { id: contactId, userId } })
   if (!contact) return { error: "NOT_FOUND" }
@@ -225,15 +269,14 @@ async function saveContactQuote(prisma, io, { userId, contactId, amount }) {
   const value = Math.round(Number(amount) * 100) / 100
   if (!Number.isFinite(value) || value <= 0) return { error: "INVALID_AMOUNT" }
 
-  await removeContactTagsByPrefix(prisma, contact.id, QUOTE_TAG_PREFIX)
+  await removeContactTagsByPrefix(prisma, contact.id, QUOTE_TAG_NAME)
 
-  const tagName = `${QUOTE_TAG_PREFIX}${formatBrl(value)}`
-  const tag = await ensureTag(prisma, userId, tagName, "#fbbf24")
+  const tag = await ensureTag(prisma, userId, QUOTE_TAG_NAME, "#fbbf24")
   await addContactTagLink(prisma, contact.id, tag.id)
 
   const custom = parseCustomFields(contact.customFields)
   const savedAt = new Date().toISOString()
-  custom.quote = { amount: value, currency: "BRL", savedAt, tagId: tag.id, tagName }
+  custom.quote = { amount: value, currency: "BRL", savedAt, tagId: tag.id, tagName: QUOTE_TAG_NAME }
 
   const updated = await prisma.crmContact.update({
     where: { id: contact.id },
@@ -245,7 +288,7 @@ async function saveContactQuote(prisma, io, { userId, contactId, amount }) {
     userId,
     contactId: contact.id,
     type: "quote_saved",
-    payload: { amount: value, tagName },
+    payload: { amount: value, tagName: QUOTE_TAG_NAME },
   })
 
   await emitContactConversation(prisma, io, userId, contact.id)
@@ -327,12 +370,14 @@ async function confirmContactPurchase(prisma, io, { userId, contactId, amount, t
 }
 
 module.exports = {
-  QUOTE_TAG_PREFIX,
+  QUOTE_TAG_NAME,
+  LEGACY_QUOTE_TAG_PREFIX,
   PURCHASE_TAG_NAME,
   formatBrl,
   logContactActivity,
   getContactActivityTimeline,
   deleteContactActivity,
+  normalizeContactQuoteTags,
   saveContactQuote,
   confirmContactPurchase,
   activityLabel,

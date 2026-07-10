@@ -94,6 +94,11 @@ function activityIcon(type) {
   }
 }
 
+function hasLegacyQuoteTags(tags = []) {
+  const quoteTags = tags.filter((t) => t.name === 'Orçamento' || t.name?.startsWith('Orçamento '))
+  return quoteTags.length > 1 || quoteTags.some((t) => t.name !== 'Orçamento')
+}
+
 export function ContactLeadActions({ contact, onContactUpdate, onConversationUpdate }) {
   const toast = useToast()
   const toastRef = useRef(toast)
@@ -127,6 +132,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     try {
       const { data } = await getCrmContactActivity(contactId)
       setActivities(data.activities || [])
+      if (data.contact) onContactUpdate?.(data.contact)
     } catch (err) {
       const message = err?.response?.data?.message || 'Falha ao carregar histórico.'
       setHistoryError(message)
@@ -135,7 +141,16 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     } finally {
       setLoadingHistory(false)
     }
-  }, [contactId])
+  }, [contactId, onContactUpdate])
+
+  useEffect(() => {
+    if (!contactId || !hasLegacyQuoteTags(contact?.tags)) return
+    getCrmContactActivity(contactId)
+      .then(({ data }) => {
+        if (data.contact) onContactUpdate?.(data.contact)
+      })
+      .catch(() => {})
+  }, [contactId, contact?.tags, onContactUpdate])
 
   useEffect(() => {
     if (!historyOpen || !contactId) return
@@ -434,7 +449,8 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
         }
       >
         <p className="mb-3 text-sm text-stone-400">
-          O valor será salvo no lead e uma tag de orçamento será aplicada automaticamente.
+          O valor fica salvo no card do lead. A etiqueta <strong className="text-stone-300">Orçamento</strong> é aplicada
+          uma vez — ao salvar de novo, só o valor é atualizado.
         </p>
         <label className="mb-1 block text-xs font-medium text-stone-500">Valor (R$)</label>
         <input

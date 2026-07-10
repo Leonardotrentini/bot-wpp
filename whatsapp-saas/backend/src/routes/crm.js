@@ -715,7 +715,17 @@ function createCrmRouter({ io }) {
     const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
     const activities = await getContactActivityTimeline(prisma, userId, contact.id)
-    return res.json({ activities })
+    const refreshed = await prisma.crmContact.findFirst({
+      where: { id: contact.id, userId },
+      include: {
+        tags: { include: { tag: true } },
+        reminders: { where: { status: "pending" }, orderBy: { scheduledAt: "asc" } },
+      },
+    })
+    return res.json({
+      activities,
+      contact: refreshed ? formatContactRow(refreshed) : null,
+    })
   })
 
   router.get("/sales", async (req, res) => {
