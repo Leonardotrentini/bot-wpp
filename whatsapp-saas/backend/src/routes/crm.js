@@ -34,7 +34,8 @@ const {
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw } = require("../lib/crmMedia")
-const { onStageChange } = require("../lib/crmFlows")
+const { onStageChange, testFlowOnConversation } = require("../lib/crmFlows")
+const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
@@ -168,20 +169,29 @@ function createCrmRouter({ io }) {
       ]
     }
 
-    const [total, rows] = await prisma.$transaction([
-      prisma.crmConversation.count({ where }),
-      prisma.crmConversation.findMany({
-        where,
-        include: CONVERSATION_INCLUDE,
-        orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
-        skip: offset,
-        take: limit,
-      }),
-    ])
+    const [total, rows] =
+      req.query.includeTotal === "0"
+        ? [null, await prisma.crmConversation.findMany({
+            where,
+            include: CONVERSATION_INCLUDE,
+            orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
+            skip: offset,
+            take: limit,
+          })]
+        : await prisma.$transaction([
+            prisma.crmConversation.count({ where }),
+            prisma.crmConversation.findMany({
+              where,
+              include: CONVERSATION_INCLUDE,
+              orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
+              skip: offset,
+              take: limit,
+            }),
+          ])
 
     return res.json({
       conversations: rows.map(formatConversationRow),
-      total,
+      total: total ?? rows.length,
       limit,
       offset,
     })
@@ -874,7 +884,7 @@ function createCrmRouter({ io }) {
       )
       .min(1)
       .max(10),
-    cooldownPerContactHours: z.number().int().min(0).max(720).optional().default(24),
+    cooldownPerContactHours: z.number().int().min(1).max(720).optional().default(24),
     quietHours: quietHoursSchema,
   })
 
@@ -943,6 +953,79 @@ function createCrmRouter({ io }) {
         createdAt: r.createdAt.toISOString(),
       })),
     })
+  })
+
+  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio }
+
+  router.post("/flows/:id/test", async (req, res) => {
+    const conversationId = String(req.body?.conversationId || "").trim()
+    if (!conversationId) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Escolha uma conversa para testar." })
+    }
+    const flow = await prisma.crmFlow.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+    if (!flow) return res.status(404).json({ error: "NOT_FOUND", message: "Fluxo não encontrado." })
+    try {
+      const result = await testFlowOnConversation(flowTestDeps, {
+        flow,
+        conversationId,
+        userId: req.user.sub,
+      })
+      await processPendingCrmDeliveries(flowTestDeps)
+      return res.json({
+        ok: true,
+        detail: result.detail,
+        conversationId: result.conversationId,
+        contactName: result.contactName,
+        message:
+          result.detail.length > 0
+            ? `Teste enviado para ${result.contactName || "o contato"}. Confira a conversa no chat.`
+            : "Nenhuma ação executada. Verifique se há mensagem ou mídia configurada.",
+      })
+    } catch (err) {
+      if (err?.code === "NOT_FOUND") return res.status(404).json({ error: err.code, message: err.message })
+      if (err?.code === "WHATSAPP_NOT_CONNECTED") return res.status(409).json({ error: err.code, message: err.message })
+      console.error("[crm] flow test:", err?.message || err)
+      return res.status(500).json({ error: "FLOW_TEST_FAILED", message: "Falha ao testar o fluxo." })
+    }
+  })
+
+  router.post("/flows/test", async (req, res) => {
+    const schema = z.object({
+      conversationId: z.string().min(1),
+      flow: flowSchema,
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Fluxo ou conversa inválidos." })
+    }
+    if (parsed.data.flow.trigger.type === "keyword" && !parsed.data.flow.trigger.keywords?.length) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe pelo menos uma palavra-chave." })
+    }
+    const actionError = validateFlowActions(parsed.data.flow.actions)
+    if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
+    try {
+      const result = await testFlowOnConversation(flowTestDeps, {
+        flow: { ...parsed.data.flow, id: null },
+        conversationId: parsed.data.conversationId,
+        userId: req.user.sub,
+      })
+      await processPendingCrmDeliveries(flowTestDeps)
+      return res.json({
+        ok: true,
+        detail: result.detail,
+        conversationId: result.conversationId,
+        contactName: result.contactName,
+        message:
+          result.detail.length > 0
+            ? `Teste enviado para ${result.contactName || "o contato"}. Confira a conversa no chat.`
+            : "Nenhuma ação executada. Verifique se há mensagem ou mídia configurada.",
+      })
+    } catch (err) {
+      if (err?.code === "NOT_FOUND") return res.status(404).json({ error: err.code, message: err.message })
+      if (err?.code === "WHATSAPP_NOT_CONNECTED") return res.status(409).json({ error: err.code, message: err.message })
+      console.error("[crm] flow test draft:", err?.message || err)
+      return res.status(500).json({ error: "FLOW_TEST_FAILED", message: "Falha ao testar o fluxo." })
+    }
   })
 
   // ------------------------- Agentes IA -------------------------

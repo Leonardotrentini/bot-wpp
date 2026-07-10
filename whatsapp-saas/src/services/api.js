@@ -723,6 +723,24 @@ export async function getCrmFlowRuns(id) {
   return mockResponse({ runs: [] })
 }
 
+export async function testCrmFlow(id, conversationId) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(
+      `/crm/flows/${encodeURIComponent(id)}/test`,
+      { conversationId },
+      { timeout: 120000 },
+    )
+  }
+  return mockResponse({ ok: true, detail: ['send_message'], message: 'Teste enviado (modo demonstração).' })
+}
+
+export async function testCrmFlowDraft(flow, conversationId) {
+  if (resolveUseRealApi()) {
+    return apiClient.post('/crm/flows/test', { flow, conversationId }, { timeout: 120000 })
+  }
+  return mockResponse({ ok: true, detail: ['send_message'], message: 'Teste enviado (modo demonstração).' })
+}
+
 export async function getCrmAgents() {
   if (resolveUseRealApi()) return apiClient.get('/crm/agents')
   return mockResponse({ agents: [], aiConfigured: false })

@@ -89,15 +89,18 @@ async function conditionsPass(prisma, flow, conversation) {
   return true
 }
 
+const CRM_FLOW_DEFAULT_COOLDOWN_HOURS = 24
+
 async function isFlowOnCooldown(prisma, flow, conversationId) {
-  const cooldownHours = Math.max(0, Number(flow.cooldownPerContactHours) || 0)
-  if (cooldownHours > 0) {
-    const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
-    const recent = await prisma.crmFlowRun.count({
-      where: { flowId: flow.id, conversationId, status: "ok", createdAt: { gte: since } },
-    })
-    if (recent > 0) return true
-  }
+  const cooldownHours = Math.min(
+    720,
+    Math.max(1, Number(flow.cooldownPerContactHours ?? CRM_FLOW_DEFAULT_COOLDOWN_HOURS) || CRM_FLOW_DEFAULT_COOLDOWN_HOURS),
+  )
+  const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
+  const recent = await prisma.crmFlowRun.count({
+    where: { flowId: flow.id, conversationId, status: "ok", createdAt: { gte: since } },
+  })
+  if (recent > 0) return true
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000)
   const runsToday = await prisma.crmFlowRun.count({
     where: { flowId: flow.id, status: "ok", createdAt: { gte: dayAgo } },
@@ -109,8 +112,9 @@ function deliveryDelayMs() {
   return CRM_DELIVERY_MIN_DELAY_MS + Math.floor(Math.random() * CRM_DELIVERY_JITTER_MS)
 }
 
-async function executeActions(deps, flow, conversation) {
+async function executeActions(deps, flow, conversation, options = {}) {
   const { prisma, io, sendText } = deps
+  const immediate = options.immediate === true
   const actions = Array.isArray(flow.actions) ? flow.actions : []
   const detail = []
   let stageChangedTo = null
@@ -128,14 +132,14 @@ async function executeActions(deps, flow, conversation) {
             userId: conversation.userId,
             conversationId: conversation.id,
             remoteJid: conversation.remoteJid,
-            kind: "flow",
-            sourceId: flow.id,
+            kind: options.deliveryKind || "flow",
+            sourceId: flow.id || null,
             body: body || null,
             mediaType,
             mediaBase64: hasMedia ? String(action.mediaBase64 || "") : null,
             mediaMime: hasMedia ? action.mediaMime || null : null,
             mediaName: hasMedia ? action.mediaName || null : null,
-            scheduledAt: new Date(Date.now() + deliveryDelayMs()),
+            scheduledAt: immediate ? new Date() : new Date(Date.now() + deliveryDelayMs()),
           },
         })
         detail.push(hasMedia ? `send_message:${mediaType}` : "send_message")
@@ -190,6 +194,47 @@ async function executeActions(deps, flow, conversation) {
   }
 
   return detail
+}
+
+/** Executa um fluxo manualmente em uma conversa (teste) — ignora cooldown e quiet hours. */
+async function testFlowOnConversation(deps, { flow, conversationId, userId }) {
+  const { prisma } = deps
+  const conversation = await prisma.crmConversation.findFirst({
+    where: { id: String(conversationId), userId },
+    include: CONVERSATION_INCLUDE,
+  })
+  if (!conversation) {
+    const err = new Error("Conversa não encontrada.")
+    err.code = "NOT_FOUND"
+    throw err
+  }
+
+  const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+  if (!conn?.connected) {
+    const err = new Error("WhatsApp desconectado. Conecte antes de testar.")
+    err.code = "WHATSAPP_NOT_CONNECTED"
+    throw err
+  }
+
+  const detail = await executeActions(deps, flow, conversation, { immediate: true, deliveryKind: "flow" })
+
+  if (flow.id) {
+    await prisma.crmFlowRun.create({
+      data: {
+        userId,
+        flowId: flow.id,
+        conversationId: conversation.id,
+        status: "ok",
+        detail: `test: ${detail.join(", ") || "sem ações"}`,
+      },
+    })
+  }
+
+  return {
+    detail,
+    conversationId: conversation.id,
+    contactName: conversation.contact?.savedName || conversation.contact?.pushName || conversation.contact?.phone || "",
+  }
 }
 
 async function runFlow(deps, flow, conversation, reason) {
@@ -275,6 +320,7 @@ module.exports = {
   onCrmMessage,
   onStageChange,
   processNoReplyFlows,
+  testFlowOnConversation,
   normalizeTrigger,
   keywordMatches,
   isWithinQuietHours,

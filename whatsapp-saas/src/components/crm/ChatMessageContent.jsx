@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import { Loader2, Mic, Film, ImageIcon, FileText } from 'lucide-react'
 import { getCrmMessageMedia } from '../../services/api.js'
 import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
@@ -160,7 +160,7 @@ function useCrmMessageMedia(message, loadEnabled) {
   return { kind, retry, shouldLoad, ...state }
 }
 
-export function ChatMessageContent({ message }) {
+export const ChatMessageContent = memo(function ChatMessageContent({ message }) {
   const { ref, inView } = useInView()
   const { kind, loading, error, src, retry, mimetype, shouldLoad } = useCrmMessageMedia(message, inView)
   const fileName = kind === 'document' ? documentDisplayName(message) : null
@@ -205,4 +205,4 @@ export function ChatMessageContent({ message }) {
       {body ? <p className="whitespace-pre-wrap break-words text-stone-200">{message.body}</p> : null}
     </div>
   )
-}
+})

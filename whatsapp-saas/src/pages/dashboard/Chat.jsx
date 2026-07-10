@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Search,
@@ -66,8 +66,17 @@ import {
   fetchConversationMessagesCached,
   getCachedConversationMessages,
   prefetchConversationMessages,
+  removeCachedMessage,
+  replaceCachedMessage,
   setCachedConversationMessages,
 } from '../../lib/conversationMessagesCache.js'
+import { getCachedConversationsList, mirrorConversationsListCache, setCachedConversationsList } from '../../lib/conversationsListCache.js'
+import {
+  getCrmBootstrapCache,
+  markProfilesRefreshDone,
+  profilesRefreshDoneThisSession,
+  setCrmBootstrapCache,
+} from '../../lib/crmBootstrapCache.js'
 
 // ---------------------------------------------------------------- helpers
 
@@ -110,6 +119,73 @@ function mediaTypeFromMime(mime, name = '') {
   return 'none'
 }
 
+const ConversationListItem = memo(function ConversationListItem({
+  conversation: c,
+  active,
+  onOpen,
+  onPrefetch,
+  onRefreshAvatar,
+}) {
+  const subtitle = contactSubtitle(c.contact)
+  const unidentified = contactNeedsIdentification(c.contact)
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(c.id)}
+      onMouseEnter={() => onPrefetch(c.id)}
+      onFocus={() => onPrefetch(c.id)}
+      className={`flex w-full items-center gap-3 border-b border-brand-800/60 px-3 py-3 text-left transition hover:bg-white/5 ${
+        c.id === active ? 'bg-accent-500/10' : ''
+      }`}
+    >
+      <UserAvatar
+        name={contactTitle(c.contact)}
+        src={c.contact?.avatarUrl}
+        size="sm"
+        contactId={c.contact?.id}
+        onRefreshAvatar={onRefreshAvatar}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
+          <span className="shrink-0 text-[10px] text-stone-500">{formatChatTime(c.lastMessageAt)}</span>
+        </div>
+        {subtitle && (
+          <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>{subtitle}</p>
+        )}
+        <div className="mt-0.5 flex items-center gap-1.5">
+          {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0 text-stone-500" />}
+          <p className="truncate text-xs text-stone-400">{c.lastMessagePreview || '—'}</p>
+          {unidentified && (
+            <span className="ml-auto shrink-0 rounded px-1 py-px text-[9px] font-semibold text-amber-200 bg-amber-500/20">
+              ?
+            </span>
+          )}
+          {c.unreadCount > 0 && (
+            <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
+              {c.unreadCount}
+            </span>
+          )}
+          {c.aiEnabled && <Bot className="h-3.5 w-3.5 shrink-0 text-sky-400" />}
+        </div>
+        {(c.contact?.tags || []).length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {c.contact.tags.slice(0, 3).map((t) => (
+              <span
+                key={t.id}
+                className="rounded-full px-1.5 py-px text-[9px] font-semibold"
+                style={{ backgroundColor: `${t.color}26`, color: t.color }}
+              >
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </button>
+  )
+})
+
 // ---------------------------------------------------------------- página
 
 export function Chat() {
@@ -121,6 +197,7 @@ export function Chat() {
 
   const [conversations, setConversations] = useState([])
   const [loadingList, setLoadingList] = useState(true)
+  const [refreshingList, setRefreshingList] = useState(false)
   const [query, setQuery] = useState('')
   const [tagFilter, setTagFilter] = useState('')
   const [stageFilter, setStageFilter] = useState('')
@@ -149,7 +226,6 @@ export function Chat() {
   const [syncStarting, setSyncStarting] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [waConnected, setWaConnected] = useState(true)
-  const profilesAutoRefreshed = useRef(false)
   const listLoadSeq = useRef(0)
   const listErrorAt = useRef(0)
 
@@ -166,9 +242,43 @@ export function Chat() {
   const inputRef = useRef(null)
   const fileRef = useRef(null)
   const activeIdRef = useRef(activeId)
+  const conversationsRef = useRef(conversations)
+  const loadConversationsRef = useRef(() => {})
+  const scrollToEndRef = useRef(true)
+  const loadingOlderRef = useRef(false)
+  const lastReadAtRef = useRef(new Map())
   useEffect(() => {
     activeIdRef.current = activeId
+    scrollToEndRef.current = true
   }, [activeId])
+
+  useEffect(() => {
+    conversationsRef.current = conversations
+  }, [conversations])
+
+  const listParams = useMemo(() => {
+    const params = { includeTotal: 0 }
+    if (query.trim()) params.q = query.trim()
+    if (tagFilter) params.tagId = tagFilter
+    if (stageFilter) params.stageId = stageFilter
+    return params
+  }, [query, tagFilter, stageFilter])
+
+  const markReadDebounced = useCallback((conversationId) => {
+    const conv = conversationsRef.current.find((c) => c.id === conversationId)
+    if (!conv?.unreadCount) return
+    const now = Date.now()
+    const last = lastReadAtRef.current.get(conversationId) || 0
+    if (now - last < 2000) return
+    lastReadAtRef.current.set(conversationId, now)
+    markCrmConversationRead(conversationId)
+      .then(({ data: d }) => {
+        if (d.conversation) {
+          setConversations((prev) => prev.map((c) => (c.id === conversationId ? d.conversation : c)))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const active = useMemo(() => conversations.find((c) => c.id === activeId) || null, [conversations, activeId])
 
@@ -191,15 +301,15 @@ export function Chat() {
 
   const loadConversations = useCallback(async () => {
     const seq = ++listLoadSeq.current
-    setLoadingList(true)
+    const hasData = conversationsRef.current.length > 0
+    if (!hasData) setLoadingList(true)
+    else setRefreshingList(true)
     try {
-      const params = {}
-      if (query.trim()) params.q = query.trim()
-      if (tagFilter) params.tagId = tagFilter
-      if (stageFilter) params.stageId = stageFilter
-      const { data } = await getCrmConversations(params)
+      const { data } = await getCrmConversations(listParams)
       if (seq !== listLoadSeq.current) return
-      setConversations(data.conversations || [])
+      const rows = data.conversations || []
+      setConversations(rows)
+      mirrorConversationsListCache(rows, listParams)
     } catch {
       if (seq !== listLoadSeq.current) return
       const now = Date.now()
@@ -208,31 +318,67 @@ export function Chat() {
         toastRef.current.error('Falha ao carregar conversas.')
       }
     } finally {
-      if (seq === listLoadSeq.current) setLoadingList(false)
+      if (seq === listLoadSeq.current) {
+        setLoadingList(false)
+        setRefreshingList(false)
+      }
     }
-  }, [query, tagFilter, stageFilter])
+  }, [listParams])
+
+  loadConversationsRef.current = loadConversations
 
   useEffect(() => {
+    const cached = getCachedConversationsList(listParams)
+    if (cached?.length) {
+      setConversations(cached)
+      setLoadingList(false)
+    }
     const t = setTimeout(loadConversations, query ? 350 : 0)
     return () => clearTimeout(t)
-  }, [loadConversations, query])
+  }, [loadConversations, query, listParams])
 
   useEffect(() => {
+    const boot = getCrmBootstrapCache()
+    if (boot) {
+      if (boot.tags) setTags(boot.tags)
+      if (boot.stages) setStages(boot.stages)
+      if (boot.agents) setAgents(boot.agents)
+      if (boot.quickReplies) setQuickReplies(boot.quickReplies)
+      if (boot.waConnected != null) setWaConnected(boot.waConnected)
+    }
     Promise.allSettled([getCrmTags(), getCrmStages(), getCrmAgents(), getCrmQuickReplies(), getCrmSyncStatus(), getWhatsAppStatus()]).then(
       ([t, s, a, q, sync, wa]) => {
-        if (t.status === 'fulfilled') setTags(t.value.data.tags || [])
-        if (s.status === 'fulfilled') setStages(s.value.data.stages || [])
-        if (a.status === 'fulfilled') setAgents(a.value.data.agents || [])
-        if (q.status === 'fulfilled') setQuickReplies(q.value.data.quickReplies || [])
+        const next = {}
+        if (t.status === 'fulfilled') {
+          setTags(t.value.data.tags || [])
+          next.tags = t.value.data.tags || []
+        }
+        if (s.status === 'fulfilled') {
+          setStages(s.value.data.stages || [])
+          next.stages = s.value.data.stages || []
+        }
+        if (a.status === 'fulfilled') {
+          setAgents(a.value.data.agents || [])
+          next.agents = a.value.data.agents || []
+        }
+        if (q.status === 'fulfilled') {
+          setQuickReplies(q.value.data.quickReplies || [])
+          next.quickReplies = q.value.data.quickReplies || []
+        }
         if (sync.status === 'fulfilled') setSyncJob(sync.value.data.job || null)
-        if (wa.status === 'fulfilled') setWaConnected(Boolean(wa.value.data?.connected))
+        if (wa.status === 'fulfilled') {
+          const connected = Boolean(wa.value.data?.connected)
+          setWaConnected(connected)
+          next.waConnected = connected
+        }
+        setCrmBootstrapCache(next)
       },
     )
   }, [])
 
   useEffect(() => {
-    if (!waConnected || profilesAutoRefreshed.current) return
-    profilesAutoRefreshed.current = true
+    if (!waConnected || profilesRefreshDoneThisSession()) return
+    markProfilesRefreshDone()
     const t = setTimeout(() => {
       refreshCrmProfiles().catch(() => {})
     }, 4000)
@@ -294,19 +440,21 @@ export function Chat() {
       }
 
       try {
-        const fresh = await fetchConversationMessagesCached(id, (convId, params) =>
-          fetchMessagesPage(convId, params),
+        const fresh = await fetchConversationMessagesCached(
+          id,
+          (convId, params) => fetchMessagesPage(convId, params),
+          {
+            onUpdated: (entry) => {
+              if (activeIdRef.current !== id) return
+              setMessages(entry.messages)
+              setHasMore(entry.hasMore)
+            },
+          },
         )
         if (activeIdRef.current !== id) return
         setMessages(fresh.messages)
         setHasMore(fresh.hasMore)
-        markCrmConversationRead(id)
-          .then(({ data: d }) => {
-            if (d.conversation) {
-              setConversations((prev) => prev.map((c) => (c.id === id ? d.conversation : c)))
-            }
-          })
-          .catch(() => {})
+        markReadDebounced(id)
       } catch {
         if (activeIdRef.current === id && !cached?.messages?.length) {
           toastRef.current.error('Falha ao carregar mensagens.')
@@ -318,7 +466,7 @@ export function Chat() {
         }
       }
     },
-    [setSearchParams, fetchMessagesPage],
+    [setSearchParams, fetchMessagesPage, markReadDebounced],
   )
 
   useEffect(() => {
@@ -329,6 +477,8 @@ export function Chat() {
 
   const loadOlder = useCallback(async () => {
     if (!activeId || !messages.length || loadingOlder) return
+    loadingOlderRef.current = true
+    scrollToEndRef.current = false
     setLoadingOlder(true)
     try {
       const before = messages[0]?.timestamp
@@ -344,6 +494,7 @@ export function Chat() {
     } catch {
       toastRef.current.error('Falha ao carregar histórico.')
     } finally {
+      loadingOlderRef.current = false
       setLoadingOlder(false)
     }
   }, [activeId, messages, loadingOlder, fetchMessagesPage])
@@ -359,13 +510,13 @@ export function Chat() {
         })
       }
       if (conversationId === activeIdRef.current && message) {
+        scrollToEndRef.current = true
         setMessages((prev) => {
           if (prev.some((m) => m.id === message.id)) return prev
-          const next = [...prev, message]
           appendCachedMessage(conversationId, message)
-          return next
+          return [...prev, message]
         })
-        markCrmConversationRead(conversationId).catch(() => {})
+        markReadDebounced(conversationId)
       }
     })
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
@@ -376,12 +527,12 @@ export function Chat() {
       setSyncJob(job)
       if (job?.status === 'done') {
         toastRef.current.success('Sincronização concluída.')
-        loadConversations()
+        loadConversationsRef.current()
       }
     })
     const offHandoff = onSocketEvent('crm:handoff', () => {
       toastRef.current.info('Uma conversa foi transferida da IA para atendimento humano.', 'Transferência')
-      loadConversations()
+      loadConversationsRef.current()
     })
     return () => {
       offMessage()
@@ -389,14 +540,17 @@ export function Chat() {
       offSync()
       offHandoff()
     }
-  }, [loadConversations])
+  }, [markReadDebounced])
 
   useEffect(() => {
-    listEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    scrollToEndRef.current = true
+    requestAnimationFrame(() => {
+      listEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    })
   }, [activeId])
 
   useEffect(() => {
-    if (!messages.length) return
+    if (!messages.length || loadingOlderRef.current || !scrollToEndRef.current) return
     listEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages.length])
 
@@ -410,25 +564,53 @@ export function Chat() {
   const handleSend = useCallback(async () => {
     const body = draft.trim()
     if ((!body && !attachment) || !activeId || sending) return
+
+    const tempId = `temp-${Date.now()}`
+    const optimistic = {
+      id: tempId,
+      conversationId: activeId,
+      fromMe: true,
+      type: attachment?.type || 'text',
+      mediaKind: attachment?.type || null,
+      body: body || attachment?.name || '',
+      mediaMime: attachment?.mime || null,
+      status: 'pending',
+      timestamp: new Date().toISOString(),
+    }
+
+    scrollToEndRef.current = true
+    setMessages((prev) => [...prev, optimistic])
+    appendCachedMessage(activeId, optimistic)
+
+    const savedDraft = draft
+    const savedAttachment = attachment
+    setDraft('')
+    if (attachment) revokeAudioPreview(attachment)
+    setAttachment(null)
     setSending(true)
+
     try {
       const payload = { body }
-      if (attachment) {
-        payload.mediaType = attachment.type
-        payload.mediaBase64 = attachment.base64
-        payload.mediaMime = attachment.mime
-        payload.mediaName = attachment.name
+      if (savedAttachment) {
+        payload.mediaType = savedAttachment.type
+        payload.mediaBase64 = savedAttachment.base64
+        payload.mediaMime = savedAttachment.mime
+        payload.mediaName = savedAttachment.name
       }
       const { data } = await sendCrmMessage(activeId, payload)
       if (data.message) {
-        if (attachment?.base64) {
-          primeCrmMessageMediaCache(data.message.id, attachment.mime, attachment.base64)
+        if (savedAttachment?.base64) {
+          primeCrmMessageMediaCache(data.message.id, savedAttachment.mime, savedAttachment.base64)
         }
         setMessages((prev) => {
-          if (prev.some((m) => m.id === data.message.id)) return prev
-          appendCachedMessage(activeId, data.message)
-          return [...prev, data.message]
+          const withoutTemp = prev.filter((m) => m.id !== tempId)
+          if (withoutTemp.some((m) => m.id === data.message.id)) return withoutTemp
+          replaceCachedMessage(activeId, tempId, data.message)
+          return [...withoutTemp, data.message]
         })
+      } else {
+        setMessages((prev) => prev.filter((m) => m.id !== tempId))
+        removeCachedMessage(activeId, tempId)
       }
       if (data.conversation) {
         setConversations((prev) => {
@@ -436,10 +618,11 @@ export function Chat() {
           return [data.conversation, ...rest]
         })
       }
-      setDraft('')
-      if (attachment) revokeAudioPreview(attachment)
-      setAttachment(null)
     } catch (err) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId))
+      removeCachedMessage(activeId, tempId)
+      setDraft(savedDraft)
+      if (savedAttachment) setAttachment(savedAttachment)
       toastRef.current.error(err?.response?.data?.message || 'Falha ao enviar mensagem.')
     } finally {
       setSending(false)
@@ -723,7 +906,12 @@ export function Chat() {
           )}
         </div>
         <div className="flex-1 overflow-y-auto">
-          {loadingList ? (
+          {refreshingList && !loadingList && (
+            <div className="flex justify-center py-1">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-500" />
+            </div>
+          )}
+          {loadingList && conversations.length === 0 ? (
             <div className="flex justify-center py-10">
               <Spinner />
             </div>
@@ -735,68 +923,16 @@ export function Chat() {
               </p>
             </div>
           ) : (
-            displayedConversations.map((c) => {
-              const subtitle = contactSubtitle(c.contact)
-              const unidentified = contactNeedsIdentification(c.contact)
-              return (
-              <button
+            displayedConversations.map((c) => (
+              <ConversationListItem
                 key={c.id}
-                type="button"
-                onClick={() => openConversation(c.id)}
-                onMouseEnter={() => prefetchConversation(c.id)}
-                onFocus={() => prefetchConversation(c.id)}
-                className={`flex w-full items-center gap-3 border-b border-brand-800/60 px-3 py-3 text-left transition hover:bg-white/5 ${
-                  c.id === activeId ? 'bg-accent-500/10' : ''
-                }`}
-              >
-                <UserAvatar
-                  name={contactTitle(c.contact)}
-                  src={c.contact?.avatarUrl}
-                  size="sm"
-                  contactId={c.contact?.id}
-                  onRefreshAvatar={refreshAvatar}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
-                    <span className="shrink-0 text-[10px] text-stone-500">{formatChatTime(c.lastMessageAt)}</span>
-                  </div>
-                  {subtitle && (
-                    <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>
-                      {subtitle}
-                    </p>
-                  )}
-                  <div className="mt-0.5 flex items-center gap-1.5">
-                    {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0 text-stone-500" />}
-                    <p className="truncate text-xs text-stone-400">{c.lastMessagePreview || '—'}</p>
-                    {unidentified && (
-                      <span className="ml-auto shrink-0 rounded px-1 py-px text-[9px] font-semibold text-amber-200 bg-amber-500/20">
-                        ?
-                      </span>
-                    )}
-                    {c.unreadCount > 0 && (
-                      <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
-                        {c.unreadCount}
-                      </span>
-                    )}
-                    {c.aiEnabled && <Bot className="h-3.5 w-3.5 shrink-0 text-sky-400" />}
-                  </div>
-                  {(c.contact?.tags || []).length > 0 && (
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {c.contact.tags.slice(0, 3).map((t) => (
-                        <span
-                          key={t.id}
-                          className="rounded-full px-1.5 py-px text-[9px] font-semibold"
-                          style={{ backgroundColor: `${t.color}26`, color: t.color }}
-                        >
-                          {t.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </button>
-            )})
+                conversation={c}
+                active={activeId}
+                onOpen={openConversation}
+                onPrefetch={prefetchConversation}
+                onRefreshAvatar={refreshAvatar}
+              />
+            ))
           )}
         </div>
       </div>

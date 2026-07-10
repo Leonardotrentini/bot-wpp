@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Bot,
@@ -7,6 +7,7 @@ import {
   Loader2,
   MessageSquare,
   Pencil,
+  Play,
   Plus,
   Send,
   Tag as TagIcon,
@@ -26,10 +27,18 @@ import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.jsx'
 import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
+import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
+import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
 import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr } from '../../lib/contactDisplay.js'
 import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia } from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
+import { getCrmBootstrapCache, setCrmBootstrapCache } from '../../lib/crmBootstrapCache.js'
+import {
+  CRM_CONVERSATIONS_LIST_PARAMS,
+  getBestCachedConversationsList,
+  mirrorConversationsListCache,
+} from '../../lib/conversationsListCache.js'
 import {
   getCrmConversations,
   patchCrmConversation,
@@ -68,6 +77,22 @@ const TABS = [
   { id: 'agents', label: 'Agentes IA' },
 ]
 
+function readCrmInitialState() {
+  const boot = getCrmBootstrapCache()
+  const conversations = getBestCachedConversationsList() || []
+  const stages = boot?.stages || []
+  const hasCachedKanban = conversations.length > 0 || stages.length > 0
+  return {
+    conversations,
+    stages,
+    tags: boot?.tags || [],
+    quickReplies: boot?.quickReplies || [],
+    agents: boot?.agents || [],
+    waConnected: boot?.waConnected ?? true,
+    loading: !hasCachedKanban,
+  }
+}
+
 function CrmSettingsToolBtn({ title, onClick, children }) {
   return (
     <button
@@ -81,10 +106,10 @@ function CrmSettingsToolBtn({ title, onClick, children }) {
   )
 }
 
-function CrmTabHeader({ tab, onChange, onOpenSettings }) {
+function CrmTabHeader({ tab, onChange, onOpenSettings, refreshing }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 pb-2">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -99,6 +124,12 @@ function CrmTabHeader({ tab, onChange, onOpenSettings }) {
             {t.label}
           </button>
         ))}
+        {refreshing ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-stone-500">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Atualizando…
+          </span>
+        ) : null}
       </div>
       <div className="flex items-center gap-1.5">
         <CrmSettingsToolBtn title="Tags" onClick={() => onOpenSettings('tags')}>
@@ -493,15 +524,23 @@ const ACTION_LABELS = {
   set_status: 'Mudar status',
 }
 
+const DEFAULT_FLOW_COOLDOWN_HOURS = 24
+
 const EMPTY_FLOW = {
   name: '',
   enabled: false,
   trigger: { type: 'new_conversation' },
   actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
-  cooldownPerContactHours: 24,
+  cooldownPerContactHours: DEFAULT_FLOW_COOLDOWN_HOURS,
 }
 
-function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, saving }) {
+function normalizeFlowCooldown(hours) {
+  const n = Number(hours)
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_FLOW_COOLDOWN_HOURS
+  return Math.min(720, Math.round(n))
+}
+
+function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversations, waConnected, onSave, saving }) {
   const toast = useToast()
   const [flow, setFlow] = useState(EMPTY_FLOW)
 
@@ -509,7 +548,10 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
     if (isOpen) {
       setFlow(
         initial
-          ? JSON.parse(JSON.stringify(initial))
+          ? {
+              ...JSON.parse(JSON.stringify(initial)),
+              cooldownPerContactHours: normalizeFlowCooldown(initial.cooldownPerContactHours),
+            }
           : { ...EMPTY_FLOW, actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }] },
       )
     }
@@ -536,7 +578,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
       isOpen={isOpen}
       onClose={onClose}
       title={initial ? 'Editar fluxo' : 'Novo fluxo'}
-      size="lg"
+      size="xl"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -549,7 +591,8 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
         </>
       }
     >
-      <div className="space-y-4">
+      <div className="grid gap-5 lg:grid-cols-[1fr,minmax(260px,320px)]">
+        <div className="max-h-[min(70vh,640px)] space-y-4 overflow-y-auto pr-1">
         <Input
           label="Nome do fluxo"
           value={flow.name}
@@ -702,13 +745,58 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, onSave, sav
           </div>
         </div>
 
-        <Input
-          label="Cooldown por contato (horas) — evita repetir o fluxo para a mesma pessoa"
-          type="number"
-          min={0}
-          max={720}
-          value={flow.cooldownPerContactHours}
-          onChange={(e) => setFlow((f) => ({ ...f, cooldownPerContactHours: Math.max(0, Number(e.target.value) || 0) }))}
+        <div>
+          <Input
+            label="Cooldown por contato (horas)"
+            type="number"
+            min={1}
+            max={720}
+            value={flow.cooldownPerContactHours}
+            onChange={(e) =>
+              setFlow((f) => ({
+                ...f,
+                cooldownPerContactHours: e.target.value === '' ? '' : Math.max(1, Number(e.target.value) || 1),
+              }))
+            }
+            onBlur={() =>
+              setFlow((f) => ({
+                ...f,
+                cooldownPerContactHours: normalizeFlowCooldown(f.cooldownPerContactHours),
+              }))
+            }
+          />
+          <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
+            Padrão: <span className="text-stone-400">{DEFAULT_FLOW_COOLDOWN_HOURS}h</span> — evita que o mesmo contato
+            receba este fluxo repetido (proteção anti-spam). Recomendado manter em 24h ou mais.
+          </p>
+        </div>
+        </div>
+
+        <div className="space-y-4 lg:sticky lg:top-0 lg:self-start">
+          <FlowPreview flow={flow} tags={tags} stages={stages} agents={agents} />
+          <FlowTester
+            flow={flow}
+            flowId={initial?.id}
+            conversations={conversations}
+            waConnected={waConnected}
+          />
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function FlowTestModal({ isOpen, onClose, flow, tags, stages, agents, conversations, waConnected }) {
+  if (!flow) return null
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={`Testar: ${flow.name}`} size="md">
+      <div className="space-y-4">
+        <FlowPreview flow={flow} tags={tags} stages={stages} agents={agents} compact />
+        <FlowTester
+          flow={flow}
+          flowId={flow.id}
+          conversations={conversations}
+          waConnected={waConnected}
         />
       </div>
     </Modal>
@@ -1257,19 +1345,33 @@ export function Crm() {
   const toast = useToast()
   const navigate = useNavigate()
   const [tab, setTab] = useState('kanban')
+  const initial = useMemo(() => readCrmInitialState(), [])
 
-  const [conversations, setConversations] = useState([])
-  const [stages, setStages] = useState([])
-  const [tags, setTags] = useState([])
-  const [quickReplies, setQuickReplies] = useState([])
+  const [conversations, setConversations] = useState(initial.conversations)
+  const [stages, setStages] = useState(initial.stages)
+  const [tags, setTags] = useState(initial.tags)
+  const [quickReplies, setQuickReplies] = useState(initial.quickReplies)
   const [flows, setFlows] = useState([])
-  const [agents, setAgents] = useState([])
+  const [agents, setAgents] = useState(initial.agents)
   const [aiConfigured, setAiConfigured] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(initial.loading)
+  const [refreshing, setRefreshing] = useState(false)
+  const [flowsLoading, setFlowsLoading] = useState(false)
+  const [agentsLoading, setAgentsLoading] = useState(false)
+
+  const conversationsRef = useRef(conversations)
+  const flowsLoadedRef = useRef(false)
+  const agentsLoadedRef = useRef(initial.agents.length > 0)
+  const kanbanLoadSeq = useRef(0)
+
+  useEffect(() => {
+    conversationsRef.current = conversations
+  }, [conversations])
 
   const [flowModal, setFlowModal] = useState(false)
   const [flowEditing, setFlowEditing] = useState(null)
   const [flowSaving, setFlowSaving] = useState(false)
+  const [flowTestTarget, setFlowTestTarget] = useState(null)
   const [agentModal, setAgentModal] = useState(false)
   const [agentEditing, setAgentEditing] = useState(null)
   const [agentSaving, setAgentSaving] = useState(false)
@@ -1277,37 +1379,99 @@ export function Crm() {
   const [kanbanEdit, setKanbanEdit] = useState(null)
   const [kanbanTags, setKanbanTags] = useState(null)
   const [settingsPanel, setSettingsPanel] = useState(null)
-  const [waConnected, setWaConnected] = useState(true)
+  const [waConnected, setWaConnected] = useState(initial.waConnected)
 
-  const loadAll = useCallback(async () => {
+  const loadKanbanData = useCallback(async () => {
+    const seq = ++kanbanLoadSeq.current
+    const hasData = conversationsRef.current.length > 0
+    if (!hasData) setLoading(true)
+    else setRefreshing(true)
     try {
-      const [convos, st, tg, qr, fl, ag] = await Promise.allSettled([
-        getCrmConversations({ limit: 200 }),
+      const [convos, st, tg] = await Promise.allSettled([
+        getCrmConversations(CRM_CONVERSATIONS_LIST_PARAMS),
         getCrmStages(),
         getCrmTags(),
-        getCrmQuickReplies(),
-        getCrmFlows(),
-        getCrmAgents(),
       ])
-      if (convos.status === 'fulfilled') setConversations(convos.value.data.conversations || [])
-      if (st.status === 'fulfilled') setStages(st.value.data.stages || [])
-      if (tg.status === 'fulfilled') setTags(tg.value.data.tags || [])
-      if (qr.status === 'fulfilled') setQuickReplies(qr.value.data.quickReplies || [])
-      if (fl.status === 'fulfilled') setFlows(fl.value.data.flows || [])
-      if (ag.status === 'fulfilled') {
-        setAgents(ag.value.data.agents || [])
-        setAiConfigured(Boolean(ag.value.data.aiConfigured))
+      if (seq !== kanbanLoadSeq.current) return
+      const nextBoot = { ...(getCrmBootstrapCache() || {}) }
+      if (convos.status === 'fulfilled') {
+        const rows = convos.value.data.conversations || []
+        setConversations(rows)
+        mirrorConversationsListCache(rows, CRM_CONVERSATIONS_LIST_PARAMS)
       }
-      const wa = await getWhatsAppStatus().catch(() => null)
-      if (wa?.data) setWaConnected(Boolean(wa.data.connected))
+      if (st.status === 'fulfilled') {
+        setStages(st.value.data.stages || [])
+        nextBoot.stages = st.value.data.stages || []
+      }
+      if (tg.status === 'fulfilled') {
+        setTags(tg.value.data.tags || [])
+        nextBoot.tags = tg.value.data.tags || []
+      }
+      if (nextBoot.stages || nextBoot.tags) setCrmBootstrapCache(nextBoot)
     } finally {
-      setLoading(false)
+      if (seq === kanbanLoadSeq.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [])
 
+  const loadSecondary = useCallback(async () => {
+    const nextBoot = { ...(getCrmBootstrapCache() || {}) }
+    const [qr, wa] = await Promise.allSettled([getCrmQuickReplies(), getWhatsAppStatus()])
+    if (qr.status === 'fulfilled') {
+      setQuickReplies(qr.value.data.quickReplies || [])
+      nextBoot.quickReplies = qr.value.data.quickReplies || []
+    }
+    if (wa.status === 'fulfilled') {
+      const connected = Boolean(wa.value.data?.connected)
+      setWaConnected(connected)
+      nextBoot.waConnected = connected
+    }
+    setCrmBootstrapCache(nextBoot)
+  }, [])
+
+  const loadFlows = useCallback(async () => {
+    if (flowsLoadedRef.current) return
+    flowsLoadedRef.current = true
+    setFlowsLoading(true)
+    try {
+      const { data } = await getCrmFlows()
+      setFlows(data.flows || [])
+    } catch {
+      flowsLoadedRef.current = false
+      toast.error('Falha ao carregar fluxos.')
+    } finally {
+      setFlowsLoading(false)
+    }
+  }, [toast])
+
+  const loadAgents = useCallback(async () => {
+    if (agentsLoadedRef.current) return
+    agentsLoadedRef.current = true
+    setAgentsLoading(true)
+    try {
+      const { data } = await getCrmAgents()
+      setAgents(data.agents || [])
+      setAiConfigured(Boolean(data.aiConfigured))
+      setCrmBootstrapCache({ agents: data.agents || [] })
+    } catch {
+      agentsLoadedRef.current = false
+      toast.error('Falha ao carregar agentes.')
+    } finally {
+      setAgentsLoading(false)
+    }
+  }, [toast])
+
   useEffect(() => {
-    loadAll()
-  }, [loadAll])
+    loadKanbanData()
+    loadSecondary()
+  }, [loadKanbanData, loadSecondary])
+
+  useEffect(() => {
+    if (tab === 'flows') loadFlows()
+    if (tab === 'agents') loadAgents()
+  }, [tab, loadFlows, loadAgents])
 
   useEffect(() => {
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
@@ -1373,7 +1537,7 @@ export function Crm() {
           trigger: flow.trigger,
           conditions: flow.conditions || [],
           actions: flow.actions.map(stripFlowActionForSave),
-          cooldownPerContactHours: flow.cooldownPerContactHours,
+          cooldownPerContactHours: normalizeFlowCooldown(flow.cooldownPerContactHours),
         }
         if (flowEditing) {
           const { data } = await updateCrmFlow(flowEditing.id, payload)
@@ -1448,15 +1612,18 @@ export function Crm() {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-20">
-        <Spinner />
+      <div className="space-y-4">
+        <CrmTabHeader tab={tab} onChange={setTab} onOpenSettings={setSettingsPanel} />
+        <div className="flex justify-center py-20">
+          <Spinner />
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-4">
-      <CrmTabHeader tab={tab} onChange={setTab} onOpenSettings={setSettingsPanel} />
+      <CrmTabHeader tab={tab} onChange={setTab} onOpenSettings={setSettingsPanel} refreshing={refreshing} />
 
       {tab === 'kanban' && (
         <>
@@ -1526,7 +1693,11 @@ export function Crm() {
               <Plus className="h-4 w-4" /> Novo fluxo
             </Button>
           </div>
-          {flows.length === 0 ? (
+          {flowsLoading ? (
+            <div className="flex justify-center py-16">
+              <Spinner />
+            </div>
+          ) : flows.length === 0 ? (
             <Card className="py-12 text-center">
               <Zap className="mx-auto h-10 w-10 text-stone-600" />
               <p className="mt-3 text-sm text-stone-400">Nenhum fluxo criado.</p>
@@ -1571,9 +1742,20 @@ export function Crm() {
                       }}
                     />
                   </div>
+                  <div className="mt-3">
+                    <FlowPreview flow={flow} tags={tags} stages={stages} agents={agents} compact />
+                  </div>
                   <div className="mt-3 flex items-center gap-2">
                     <Badge variant={flow.enabled ? 'success' : 'muted'}>{flow.enabled ? 'Ativo' : 'Pausado'}</Badge>
                     <div className="ml-auto flex gap-1">
+                      <button
+                        type="button"
+                        title="Testar fluxo"
+                        onClick={() => setFlowTestTarget(flow)}
+                        className="rounded-lg p-1.5 text-stone-500 transition hover:bg-accent-500/10 hover:text-accent-300"
+                      >
+                        <Play className="h-4 w-4" />
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -1622,7 +1804,11 @@ export function Crm() {
               <Plus className="h-4 w-4" /> Novo agente
             </Button>
           </div>
-          {agents.length === 0 ? (
+          {agentsLoading ? (
+            <div className="flex justify-center py-16">
+              <Spinner />
+            </div>
+          ) : agents.length === 0 ? (
             <Card className="py-12 text-center">
               <Bot className="mx-auto h-10 w-10 text-stone-600" />
               <p className="mt-3 text-sm text-stone-400">Nenhum agente criado.</p>
@@ -1715,8 +1901,20 @@ export function Crm() {
         tags={tags}
         stages={stages}
         agents={agents}
+        conversations={conversations}
+        waConnected={waConnected}
         onSave={saveFlow}
         saving={flowSaving}
+      />
+      <FlowTestModal
+        isOpen={Boolean(flowTestTarget)}
+        onClose={() => setFlowTestTarget(null)}
+        flow={flowTestTarget}
+        tags={tags}
+        stages={stages}
+        agents={agents}
+        conversations={conversations}
+        waConnected={waConnected}
       />
       <AgentModal
         isOpen={agentModal}
