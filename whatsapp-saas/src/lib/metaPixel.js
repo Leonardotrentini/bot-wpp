@@ -36,10 +36,21 @@ export function initMetaPixel(pixelId) {
 export function trackMetaPixel(eventName, params = {}, eventId) {
   if (typeof window === 'undefined' || typeof window.fbq !== 'function') return false
   const options = eventId ? { eventID: eventId } : undefined
+  const standardEvents = new Set([
+    'PageView',
+    'Lead',
+    'Purchase',
+    'AddToCart',
+    'InitiateCheckout',
+    'ViewContent',
+    'CompleteRegistration',
+    'Subscribe',
+  ])
+  const method = standardEvents.has(eventName) ? 'track' : 'trackCustom'
   if (options) {
-    window.fbq('track', eventName, params, options)
+    window.fbq(method, eventName, params, options)
   } else {
-    window.fbq('track', eventName, params)
+    window.fbq(method, eventName, params)
   }
   return true
 }

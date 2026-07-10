@@ -178,7 +178,7 @@ export function Integrations() {
             <Toggle
               checked={form.sendQuotes}
               onChange={(v) => setForm((f) => ({ ...f, sendQuotes: v }))}
-              label='Enviar evento "Lead" ao salvar orçamento'
+              label='Enviar evento "LeadSubmitted" ao salvar orçamento'
             />
             <Toggle
               checked={form.sendPurchases}
@@ -208,7 +208,7 @@ export function Integrations() {
             <p className="font-medium text-stone-400">Eventos enviados automaticamente</p>
             <ul className="mt-2 list-inside list-disc space-y-1">
               <li>
-                <strong className="text-stone-400">Lead</strong> — quando você salva um orçamento no card do cliente (com valor em R$)
+                <strong className="text-stone-400">LeadSubmitted</strong> — quando você salva um orçamento no card do cliente (valor em R$, canal WhatsApp)
               </li>
               <li>
                 <strong className="text-stone-400">Purchase</strong> — quando confirma uma compra (valor + ticket opcional)

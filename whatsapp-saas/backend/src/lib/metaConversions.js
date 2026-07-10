@@ -7,6 +7,9 @@ const crypto = require("crypto")
 const GRAPH_API_VERSION = "v22.0"
 const DEFAULT_EVENT_SOURCE_URL = "https://vesto.group/dashboard/chat"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
+const META_MESSAGING_CHANNEL = "whatsapp"
+/** Meta exige LeadSubmitted (não Lead) para action_source business_messaging */
+const META_QUOTE_EVENT_NAME = "LeadSubmitted"
 
 function hashMetaValue(value) {
   if (value == null || value === "") return null
@@ -186,12 +189,19 @@ async function recordIntegrationResult(prisma, userId, { eventName, error, event
     .catch(() => {})
 }
 
+function businessMessagingFields() {
+  return {
+    action_source: "business_messaging",
+    messaging_channel: META_MESSAGING_CHANNEL,
+  }
+}
+
 function buildQuoteEvent({ contact, amount, eventId, userId }) {
   return {
-    event_name: "Lead",
+    event_name: META_QUOTE_EVENT_NAME,
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
-    action_source: "business_messaging",
+    ...businessMessagingFields(),
     event_source_url: DEFAULT_EVENT_SOURCE_URL,
     user_data: ensureUserData(contact, { userId }),
     custom_data: {
@@ -215,7 +225,7 @@ function buildPurchaseEvent({ contact, amount, ticket, eventId, userId }) {
     event_name: "Purchase",
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
-    action_source: "business_messaging",
+    ...businessMessagingFields(),
     event_source_url: DEFAULT_EVENT_SOURCE_URL,
     user_data: ensureUserData(contact, { userId }),
     custom_data: custom,
@@ -235,19 +245,19 @@ async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
   try {
     const result = await sendMetaEvent(integration, buildQuoteEvent({ contact, amount, eventId, userId }))
     await recordIntegrationResult(prisma, userId, {
-      eventName: "Lead",
+      eventName: META_QUOTE_EVENT_NAME,
       eventsReceived: result.events_received,
     })
     return {
       sent: true,
       eventId,
-      eventName: "Lead",
+      eventName: META_QUOTE_EVENT_NAME,
       value: amount,
       eventsReceived: result.events_received,
     }
   } catch (err) {
-    await recordIntegrationResult(prisma, userId, { eventName: "Lead", error: err.message })
-    return { sent: false, eventId, eventName: "Lead", value: amount, error: err.message }
+    await recordIntegrationResult(prisma, userId, { eventName: META_QUOTE_EVENT_NAME, error: err.message })
+    return { sent: false, eventId, eventName: META_QUOTE_EVENT_NAME, value: amount, error: err.message }
   }
 }
 
