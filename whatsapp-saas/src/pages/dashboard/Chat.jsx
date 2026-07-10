@@ -35,6 +35,7 @@ import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingMo
 import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
 import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
+import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
 import {
   getCrmConversations,
@@ -1204,6 +1205,27 @@ export function Chat() {
                 Salvar contato
               </Button>
             </div>
+
+            <ContactLeadActions
+              contact={active.contact}
+              conversationId={active.id}
+              onContactUpdate={(contact) => {
+                setConversations((prev) =>
+                  prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...contact } } : c)),
+                )
+                setTags((prev) => {
+                  const ids = new Set(prev.map((t) => t.id))
+                  const merged = [...prev]
+                  for (const t of contact.tags || []) {
+                    if (!ids.has(t.id)) merged.push(t)
+                  }
+                  return merged.sort((a, b) => a.name.localeCompare(b.name))
+                })
+              }}
+              onConversationUpdate={(conversation) => {
+                setConversations((prev) => prev.map((c) => (c.id === conversation.id ? conversation : c)))
+              }}
+            />
 
             <div>
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Estágio (CRM)</p>

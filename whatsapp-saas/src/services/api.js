@@ -623,6 +623,40 @@ export async function removeCrmContactTag(contactId, tagId) {
   return mockResponse({ contact: null })
 }
 
+export async function getCrmContactActivity(contactId) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/contacts/${encodeURIComponent(contactId)}/activity`)
+  return mockResponse({ activities: [] })
+}
+
+export async function saveCrmContactQuote(contactId, { amount }) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/quote`, { amount })
+  }
+  return mockResponse({
+    contact: {
+      id: contactId,
+      quote: { amount, currency: 'BRL', savedAt: new Date().toISOString() },
+    },
+  })
+}
+
+export async function confirmCrmContactPurchase(contactId, { amount, ticket, moveToClosed = true }) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/purchase/confirm`, {
+      amount,
+      ticket,
+      moveToClosed,
+    })
+  }
+  return mockResponse({
+    contact: {
+      id: contactId,
+      purchase: { amount, ticket, currency: 'BRL', confirmedAt: new Date().toISOString() },
+    },
+    conversation: null,
+  })
+}
+
 export async function getCrmTags() {
   if (resolveUseRealApi()) return apiClient.get('/crm/tags')
   return mockResponse({ tags: [] })

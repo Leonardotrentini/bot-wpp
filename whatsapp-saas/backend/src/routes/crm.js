@@ -39,6 +39,12 @@ const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
+const {
+  logContactActivity,
+  getContactActivityTimeline,
+  saveContactQuote,
+  confirmContactPurchase,
+} = require("../lib/crmContactActivity")
 
 const DEFAULT_STAGES = [
   { name: "Novo", color: "#38bdf8", isDefault: true },
@@ -434,6 +440,14 @@ function createCrmRouter({ io }) {
 
     const stageChanged = data.kanbanStageId && data.kanbanStageId !== convo.kanbanStageId
     if (stageChanged) {
+      const stage = await prisma.crmKanbanStage.findUnique({ where: { id: data.kanbanStageId } })
+      logContactActivity(prisma, {
+        userId,
+        contactId: convo.contactId,
+        type: "stage_changed",
+        payload: { stageId: data.kanbanStageId, stageName: stage?.name || null },
+      }).catch((err) => console.error("[crm-activity] stage_changed:", err?.message || err))
+
       onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: data.kanbanStageId }).catch((err) =>
         console.error("[crm-flow] stage_change:", err?.message || err),
       )
@@ -459,11 +473,31 @@ function createCrmRouter({ io }) {
     const data = { ...parsed.data }
     if (data.name !== undefined) data.name = data.name ? String(data.name).trim() : null
 
+    const nameChanged = data.name !== undefined && data.name !== contact.name
+    const notesChanged = data.notes !== undefined && data.notes !== (contact.notes || "")
+
     const updated = await prisma.crmContact.update({
       where: { id: contact.id },
       data,
       include: { tags: { include: { tag: true } } },
     })
+
+    if (nameChanged) {
+      logContactActivity(prisma, {
+        userId,
+        contactId: contact.id,
+        type: "contact_named",
+        payload: { name: updated.name },
+      }).catch((err) => console.error("[crm-activity] contact_named:", err?.message || err))
+    }
+    if (notesChanged) {
+      logContactActivity(prisma, {
+        userId,
+        contactId: contact.id,
+        type: "notes_updated",
+        payload: {},
+      }).catch((err) => console.error("[crm-activity] notes_updated:", err?.message || err))
+    }
 
     const conversation = await prisma.crmConversation.findFirst({
       where: { contactId: contact.id, userId },
@@ -588,6 +622,13 @@ function createCrmRouter({ io }) {
       include: { tags: { include: { tag: true } } },
     })
 
+    logContactActivity(prisma, {
+      userId,
+      contactId: contact.id,
+      type: "contact_named",
+      payload: { name: savedName },
+    }).catch((err) => console.error("[crm-activity] contact_named:", err?.message || err))
+
     const conversation = await prisma.crmConversation.findFirst({
       where: { contactId: contact.id, userId },
       include: CONVERSATION_INCLUDE,
@@ -622,6 +663,13 @@ function createCrmRouter({ io }) {
       create: { contactId: contact.id, tagId: tag.id },
       update: {},
     })
+    logContactActivity(prisma, {
+      userId,
+      contactId: contact.id,
+      type: "tag_added",
+      payload: { tagId: tag.id, tagName: tag.name },
+    }).catch((err) => console.error("[crm-activity] tag_added:", err?.message || err))
+
     const updated = await prisma.crmContact.findUnique({
       where: { id: contact.id },
       include: { tags: { include: { tag: true } } },
@@ -633,14 +681,79 @@ function createCrmRouter({ io }) {
     const userId = req.user.sub
     const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    const tag = await prisma.crmTag.findFirst({ where: { id: req.params.tagId, userId } })
     await prisma.crmContactTag
       .delete({ where: { contactId_tagId: { contactId: contact.id, tagId: req.params.tagId } } })
       .catch(() => {})
+    if (tag) {
+      logContactActivity(prisma, {
+        userId,
+        contactId: contact.id,
+        type: "tag_removed",
+        payload: { tagId: tag.id, tagName: tag.name },
+      }).catch((err) => console.error("[crm-activity] tag_removed:", err?.message || err))
+    }
     const updated = await prisma.crmContact.findUnique({
       where: { id: contact.id },
       include: { tags: { include: { tag: true } } },
     })
     return res.json({ contact: formatContactRow(updated) })
+  })
+
+  router.get("/contacts/:id/activity", async (req, res) => {
+    const userId = req.user.sub
+    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    const activities = await getContactActivityTimeline(prisma, userId, contact.id)
+    return res.json({ activities })
+  })
+
+  router.post("/contacts/:id/quote", async (req, res) => {
+    const userId = req.user.sub
+    const schema = z.object({ amount: z.coerce.number().positive() })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um valor de orçamento válido." })
+    }
+    const result = await saveContactQuote(prisma, io, {
+      userId,
+      contactId: req.params.id,
+      amount: parsed.data.amount,
+    })
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    }
+    if (result.error === "INVALID_AMOUNT") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
+    }
+    return res.json({ contact: result.contact })
+  })
+
+  router.post("/contacts/:id/purchase/confirm", async (req, res) => {
+    const userId = req.user.sub
+    const schema = z.object({
+      amount: z.coerce.number().positive(),
+      ticket: z.string().max(120).optional().nullable(),
+      moveToClosed: z.boolean().optional().default(true),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um valor de compra válido." })
+    }
+    const result = await confirmContactPurchase(prisma, io, {
+      userId,
+      contactId: req.params.id,
+      amount: parsed.data.amount,
+      ticket: parsed.data.ticket,
+      moveToClosed: parsed.data.moveToClosed,
+    })
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    }
+    if (result.error === "INVALID_AMOUNT") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
+    }
+    return res.json({ contact: result.contact, conversation: result.conversation })
   })
 
   // ------------------------- Tags -------------------------

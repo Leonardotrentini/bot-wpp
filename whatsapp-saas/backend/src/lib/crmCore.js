@@ -155,6 +155,13 @@ function extractIdentityHintsFromRecord(record, remoteJid) {
   return { pushName, phone }
 }
 
+function parseContactCommerceField(customFields, key) {
+  if (!customFields || typeof customFields !== "object" || Array.isArray(customFields)) return null
+  const row = customFields[key]
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null
+  return row
+}
+
 function formatContactRow(contact, { tags } = {}) {
   if (!contact) return null
   const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
@@ -170,6 +177,9 @@ function formatContactRow(contact, { tags } = {}) {
     isLid: Boolean(contact.isLid),
     needsIdentification: contactNeedsIdentification({ ...contact, phone: phoneDigits }),
     notes: contact.notes || "",
+    createdAt: contact.createdAt ? contact.createdAt.toISOString() : null,
+    quote: parseContactCommerceField(contact.customFields, "quote"),
+    purchase: parseContactCommerceField(contact.customFields, "purchase"),
     lastSeenAt: contact.lastSeenAt ? contact.lastSeenAt.toISOString() : null,
     tags: (tags || contact.tags || []).map((ct) => ({
       id: ct.tag?.id ?? ct.id,

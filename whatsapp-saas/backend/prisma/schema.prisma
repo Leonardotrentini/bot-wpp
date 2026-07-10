@@ -312,9 +312,23 @@ model CrmContact {
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   tags         CrmContactTag[]
+  activities   CrmContactActivity[]
   conversation CrmConversation?
 
   @@unique([userId, remoteJid])
+  @@index([userId])
+}
+
+model CrmContactActivity {
+  id        String     @id @default(cuid())
+  userId    String
+  contactId String
+  contact   CrmContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  type      String // lead_created | stage_changed | tag_added | tag_removed | quote_saved | purchase_confirmed | contact_named | notes_updated
+  payload   Json?
+  createdAt DateTime   @default(now())
+
+  @@index([contactId, createdAt(sort: Desc)])
   @@index([userId])
 }
 
