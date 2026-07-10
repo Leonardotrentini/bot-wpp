@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Mic, Film, ImageIcon, FileText } from 'lucide-react'
 import { getCrmMessageMedia } from '../../services/api.js'
 import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
@@ -57,7 +57,7 @@ function mediaDataUrl(mimetype, base64) {
   return mediaDataUrlFromParts(mimetype, base64)
 }
 
-function MediaFallback({ kind, error }) {
+function MediaFallback({ kind, error, compact }) {
   const labels = {
     audio: { icon: Mic, text: '🎤 Áudio' },
     video: { icon: Film, text: '🎬 Vídeo' },
@@ -67,20 +67,47 @@ function MediaFallback({ kind, error }) {
   const meta = labels[kind] || { icon: FileText, text: '📎 Mídia' }
   const Icon = meta.icon
   return (
-    <div className="flex items-center gap-2 text-sm italic text-stone-400">
+    <div className={`flex items-center gap-2 text-sm italic text-stone-400 ${compact ? 'py-0.5' : ''}`}>
       <Icon className="h-4 w-4 shrink-0" />
       <span>{error ? 'Não foi possível carregar' : meta.text}</span>
     </div>
   )
 }
 
-function useCrmMessageMedia(message) {
+function useInView(rootMargin = '240px') {
+  const ref = useRef(null)
+  const [inView, setInView] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || inView) return undefined
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin },
+    )
+
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [inView, rootMargin])
+
+  return { ref, inView }
+}
+
+function useCrmMessageMedia(message, loadEnabled) {
   const kind = inferMediaKind(message)
+  const hasCached = Boolean(mediaCache.get(message.id))
+  const shouldLoad = loadEnabled || hasCached
   const [retryKey, setRetryKey] = useState(0)
   const [state, setState] = useState(() => {
     const cached = mediaCache.get(message.id)
     if (cached) return { ...cached, loading: false }
-    return { loading: Boolean(kind), error: null, src: null, mimetype: message.mediaMime || null }
+    return { loading: false, error: null, src: null, mimetype: message.mediaMime || null }
   })
 
   const retry = useCallback(() => {
@@ -89,7 +116,8 @@ function useCrmMessageMedia(message) {
   }, [message.id])
 
   useEffect(() => {
-    if (!kind || !message?.id) return undefined
+    if (!kind || !message?.id || !shouldLoad) return undefined
+
     const cached = mediaCache.get(message.id)
     if (cached && retryKey === 0) {
       setState({ ...cached, loading: false })
@@ -127,13 +155,14 @@ function useCrmMessageMedia(message) {
     return () => {
       cancelled = true
     }
-  }, [message.id, kind, retryKey])
+  }, [message.id, kind, retryKey, shouldLoad])
 
-  return { kind, retry, ...state }
+  return { kind, retry, shouldLoad, ...state }
 }
 
 export function ChatMessageContent({ message }) {
-  const { kind, loading, error, src, retry, mimetype } = useCrmMessageMedia(message)
+  const { ref, inView } = useInView()
+  const { kind, loading, error, src, retry, mimetype, shouldLoad } = useCrmMessageMedia(message, inView)
   const fileName = kind === 'document' ? documentDisplayName(message) : null
   const body = kind === 'document' ? documentCaption(message) : String(message?.body || '').trim()
 
@@ -142,8 +171,10 @@ export function ChatMessageContent({ message }) {
   }
 
   return (
-    <div className="space-y-2">
-      {loading ? (
+    <div ref={ref} className="space-y-2">
+      {!shouldLoad ? (
+        <MediaFallback kind={kind} compact />
+      ) : loading ? (
         <div className="flex items-center gap-2 py-1 text-xs text-stone-400">
           <Loader2 className="h-4 w-4 animate-spin" />
           Carregando mídia…

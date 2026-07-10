@@ -61,6 +61,13 @@ import {
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
 import { revokeAudioPreview, warmUpAudioRecording } from '../../lib/audioRecorder.js'
+import {
+  appendCachedMessage,
+  fetchConversationMessagesCached,
+  getCachedConversationMessages,
+  prefetchConversationMessages,
+  setCachedConversationMessages,
+} from '../../lib/conversationMessagesCache.js'
 
 // ---------------------------------------------------------------- helpers
 
@@ -130,6 +137,7 @@ export function Chat() {
   const [messages, setMessages] = useState([])
   const [hasMore, setHasMore] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
+  const [refreshingMessages, setRefreshingMessages] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
 
   const [draft, setDraft] = useState('')
@@ -262,16 +270,43 @@ export function Chat() {
     return () => clearInterval(id)
   }, [syncJob?.id, syncJob?.status])
 
+  const fetchMessagesPage = useCallback(async (conversationId, params = {}) => {
+    const { data } = await getCrmConversationMessages(conversationId, params)
+    return { messages: data.messages || [], hasMore: Boolean(data.hasMore) }
+  }, [])
+
+  const prefetchConversation = useCallback(
+    (conversationId) => {
+      prefetchConversationMessages(conversationId, (id, params) => fetchMessagesPage(id, params))
+    },
+    [fetchMessagesPage],
+  )
+
   const openConversation = useCallback(
     async (id) => {
       setActiveId(id)
       setSearchParams(id ? { c: id } : {}, { replace: true })
-      setMessages([])
-      setLoadingMessages(true)
+
+      const cached = getCachedConversationMessages(id)
+      if (cached?.messages?.length) {
+        setMessages(cached.messages)
+        setHasMore(cached.hasMore)
+        setLoadingMessages(false)
+        setRefreshingMessages(true)
+      } else {
+        setMessages([])
+        setHasMore(false)
+        setLoadingMessages(true)
+        setRefreshingMessages(false)
+      }
+
       try {
-        const { data } = await getCrmConversationMessages(id, { limit: 50 })
-        setMessages(data.messages || [])
-        setHasMore(Boolean(data.hasMore))
+        const fresh = await fetchConversationMessagesCached(id, (convId, params) =>
+          fetchMessagesPage(convId, params),
+        )
+        if (activeIdRef.current !== id) return
+        setMessages(fresh.messages)
+        setHasMore(fresh.hasMore)
         markCrmConversationRead(id)
           .then(({ data: d }) => {
             if (d.conversation) {
@@ -280,12 +315,17 @@ export function Chat() {
           })
           .catch(() => {})
       } catch {
-        toastRef.current.error('Falha ao carregar mensagens.')
+        if (activeIdRef.current === id && !cached?.messages?.length) {
+          toastRef.current.error('Falha ao carregar mensagens.')
+        }
       } finally {
-        setLoadingMessages(false)
+        if (activeIdRef.current === id) {
+          setLoadingMessages(false)
+          setRefreshingMessages(false)
+        }
       }
     },
-    [setSearchParams],
+    [setSearchParams, fetchMessagesPage],
   )
 
   useEffect(() => {
@@ -299,15 +339,21 @@ export function Chat() {
     setLoadingOlder(true)
     try {
       const before = messages[0]?.timestamp
-      const { data } = await getCrmConversationMessages(activeId, { limit: 50, before })
-      setMessages((prev) => [...(data.messages || []), ...prev])
-      setHasMore(Boolean(data.hasMore))
+      const result = await fetchMessagesPage(activeId, { limit: 50, before })
+      setMessages((prev) => {
+        const ids = new Set(prev.map((m) => m.id))
+        const unique = result.messages.filter((m) => !ids.has(m.id))
+        const next = [...unique, ...prev]
+        setCachedConversationMessages(activeId, { messages: next, hasMore: result.hasMore })
+        return next
+      })
+      setHasMore(result.hasMore)
     } catch {
       toastRef.current.error('Falha ao carregar histórico.')
     } finally {
       setLoadingOlder(false)
     }
-  }, [activeId, messages, loadingOlder])
+  }, [activeId, messages, loadingOlder, fetchMessagesPage])
 
   // ------------------------------------------------ tempo real
 
@@ -320,7 +366,12 @@ export function Chat() {
         })
       }
       if (conversationId === activeIdRef.current && message) {
-        setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]))
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === message.id)) return prev
+          const next = [...prev, message]
+          appendCachedMessage(conversationId, message)
+          return next
+        })
         markCrmConversationRead(conversationId).catch(() => {})
       }
     })
@@ -348,8 +399,13 @@ export function Chat() {
   }, [loadConversations])
 
   useEffect(() => {
+    listEndRef.current?.scrollIntoView({ behavior: 'auto' })
+  }, [activeId])
+
+  useEffect(() => {
+    if (!messages.length) return
     listEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length, activeId])
+  }, [messages.length])
 
   useEffect(() => {
     setNotesDraft(active?.contact?.notes || '')
@@ -375,7 +431,11 @@ export function Chat() {
         if (attachment?.base64) {
           primeCrmMessageMediaCache(data.message.id, attachment.mime, attachment.base64)
         }
-        setMessages((prev) => (prev.some((m) => m.id === data.message.id) ? prev : [...prev, data.message]))
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === data.message.id)) return prev
+          appendCachedMessage(activeId, data.message)
+          return [...prev, data.message]
+        })
       }
       if (data.conversation) {
         setConversations((prev) => {
@@ -688,6 +748,8 @@ export function Chat() {
                 key={c.id}
                 type="button"
                 onClick={() => openConversation(c.id)}
+                onMouseEnter={() => prefetchConversation(c.id)}
+                onFocus={() => prefetchConversation(c.id)}
                 className={`flex w-full items-center gap-3 border-b border-brand-800/60 px-3 py-3 text-left transition hover:bg-white/5 ${
                   c.id === activeId ? 'bg-accent-500/10' : ''
                 }`}
@@ -791,14 +853,22 @@ export function Chat() {
             </div>
 
             <div ref={threadRef} className="flex-1 space-y-1 overflow-y-auto px-4 py-3">
-              {hasMore && (
+              {refreshingMessages && !loadingMessages && (
+                <div className="flex justify-center pb-1">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-800/80 px-2.5 py-0.5 text-[10px] text-stone-500">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Atualizando…
+                  </span>
+                </div>
+              )}
+              {hasMore && !loadingMessages && (
                 <div className="flex justify-center pb-2">
                   <Button size="sm" variant="ghost" onClick={loadOlder} disabled={loadingOlder}>
                     {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Carregar mensagens antigas'}
                   </Button>
                 </div>
               )}
-              {loadingMessages ? (
+              {loadingMessages && messages.length === 0 ? (
                 <div className="flex justify-center py-10">
                   <Spinner />
                 </div>
