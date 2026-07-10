@@ -5,7 +5,7 @@ import { Button } from '../common/Button.jsx'
 import { Select } from '../common/Select.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { contactTitle } from '../../lib/contactDisplay.js'
-import { flowMessageHasContent, stripFlowActionForSave } from '../../lib/flowMedia.js'
+import { buildFlowApiPayload, flowMessageHasContent } from '../../lib/flowMedia.js'
 import { testCrmFlow, testCrmFlowDraft } from '../../services/api.js'
 
 function flowIsTestable(flow) {
@@ -19,7 +19,10 @@ function flowIsTestable(flow) {
   })
 }
 
-export function FlowTester({ flow, flowId, conversations = [], waConnected = true, onTested }) {
+/**
+ * @param {boolean} [testDraft] — true: testa o formulário atual (modal); false: testa fluxo salvo no servidor
+ */
+export function FlowTester({ flow, flowId, conversations = [], waConnected = true, onTested, testDraft = false }) {
   const toast = useToast()
   const [conversationId, setConversationId] = useState('')
   const [testing, setTesting] = useState(false)
@@ -37,22 +40,17 @@ export function FlowTester({ flow, flowId, conversations = [], waConnected = tru
     setTesting(true)
     setLastResult(null)
     try {
-      const payload = {
-        name: flow.name?.trim() || 'Teste',
-        enabled: false,
-        trigger: flow.trigger,
-        conditions: flow.conditions || [],
-        actions: flow.actions.map(stripFlowActionForSave),
-        cooldownPerContactHours: flow.cooldownPerContactHours ?? 24,
-      }
-      const { data } = flowId
+      const payload = buildFlowApiPayload(flow)
+      const useSaved = Boolean(flowId) && !testDraft
+      const { data } = useSaved
         ? await testCrmFlow(flowId, conversationId)
         : await testCrmFlowDraft(payload, conversationId)
       setLastResult(data)
       onTested?.(data)
       toast.success(data.message || 'Teste executado.')
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao testar o fluxo.')
+      const msg = err?.response?.data?.message
+      toast.error(msg || 'Falha ao testar o fluxo.')
     } finally {
       setTesting(false)
     }

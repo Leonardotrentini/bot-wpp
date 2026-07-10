@@ -1,6 +1,25 @@
-import { Bot, Film, Kanban, Mic, Tag as TagIcon, Zap } from 'lucide-react'
-import { VideoMediaPreview } from '../common/MediaPreview.jsx'
-import { flowMessageHasContent } from '../../lib/flowMedia.js'
+import { Bot, FileText, Film, ImageIcon, Kanban, Mic, Tag as TagIcon, Zap } from 'lucide-react'
+import { ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
+import { FLOW_MEDIA_LABELS, flowMessageHasContent } from '../../lib/flowMedia.js'
+
+const URL_IN_TEXT_RE = /(https?:\/\/[^\s]+)/g
+
+function isUrlPart(part) {
+  return /^https?:\/\//i.test(part)
+}
+
+function renderTextWithLinks(text) {
+  const parts = String(text || '').split(URL_IN_TEXT_RE)
+  return parts.map((part, i) =>
+    isUrlPart(part) ? (
+      <span key={i} className="text-sky-300 underline">
+        {part}
+      </span>
+    ) : (
+      part
+    ),
+  )
+}
 
 const ACTION_ICONS = {
   add_tag: TagIcon,
@@ -48,13 +67,28 @@ function MessageBubble({ action }) {
             compact
           />
         ) : null}
+        {mediaType === 'image' && previewSrc ? (
+          <ImageMediaPreview src={previewSrc} alt="" className="mb-1 max-h-40 w-full rounded-md object-cover" />
+        ) : null}
         {mediaType !== 'none' && !previewSrc ? (
           <div className="mb-1 flex items-center gap-2 rounded-md bg-black/20 px-2 py-1.5 text-xs text-stone-300">
-            {mediaType === 'audio' ? <Mic className="h-4 w-4" /> : <Film className="h-4 w-4" />}
-            {action.mediaName || (mediaType === 'audio' ? 'Áudio anexado' : 'Vídeo anexado')}
+            {mediaType === 'audio' ? (
+              <Mic className="h-4 w-4" />
+            ) : mediaType === 'document' ? (
+              <FileText className="h-4 w-4" />
+            ) : mediaType === 'image' ? (
+              <ImageIcon className="h-4 w-4" />
+            ) : (
+              <Film className="h-4 w-4" />
+            )}
+            {action.mediaName ||
+              FLOW_MEDIA_LABELS[mediaType] ||
+              (mediaType === 'audio' ? 'Áudio anexado' : 'Arquivo anexado')}
           </div>
         ) : null}
-        {body ? <p className="whitespace-pre-wrap break-words leading-relaxed">{body}</p> : null}
+        {body ? (
+          <p className="whitespace-pre-wrap break-words leading-relaxed">{renderTextWithLinks(body)}</p>
+        ) : null}
         {!body && mediaType === 'none' ? (
           <p className="text-xs italic text-stone-400">Mensagem vazia</p>
         ) : null}

@@ -125,7 +125,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
       if (type === "send_message") {
         const body = String(action.body || "").trim()
         const mediaType = action.mediaType && action.mediaType !== "none" ? String(action.mediaType) : "none"
-        const hasMedia = ["image", "video", "audio"].includes(mediaType)
+        const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
         if (!body && !hasMedia) continue
         await prisma.crmDelivery.create({
           data: {

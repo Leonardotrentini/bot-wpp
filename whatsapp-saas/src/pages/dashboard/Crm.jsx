@@ -31,7 +31,7 @@ import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
 import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr } from '../../lib/contactDisplay.js'
-import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia } from '../../lib/flowMedia.js'
+import { flowMessageHasContent, stripFlowActionForSave, emptyFlowMessageMedia, FLOW_MEDIA_LABELS, buildFlowApiPayload, normalizeFlowCooldown, DEFAULT_FLOW_COOLDOWN_HOURS } from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
 import { getCrmBootstrapCache, setCrmBootstrapCache } from '../../lib/crmBootstrapCache.js'
 import {
@@ -524,20 +524,12 @@ const ACTION_LABELS = {
   set_status: 'Mudar status',
 }
 
-const DEFAULT_FLOW_COOLDOWN_HOURS = 24
-
 const EMPTY_FLOW = {
   name: '',
   enabled: false,
   trigger: { type: 'new_conversation' },
   actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
   cooldownPerContactHours: DEFAULT_FLOW_COOLDOWN_HOURS,
-}
-
-function normalizeFlowCooldown(hours) {
-  const n = Number(hours)
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_FLOW_COOLDOWN_HOURS
-  return Math.min(720, Math.round(n))
 }
 
 function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversations, waConnected, onSave, saving }) {
@@ -779,6 +771,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             flowId={initial?.id}
             conversations={conversations}
             waConnected={waConnected}
+            testDraft
           />
         </div>
       </div>
@@ -1531,14 +1524,7 @@ export function Crm() {
     async (flow) => {
       setFlowSaving(true)
       try {
-        const payload = {
-          name: flow.name.trim(),
-          enabled: flow.enabled,
-          trigger: flow.trigger,
-          conditions: flow.conditions || [],
-          actions: flow.actions.map(stripFlowActionForSave),
-          cooldownPerContactHours: normalizeFlowCooldown(flow.cooldownPerContactHours),
-        }
+        const payload = buildFlowApiPayload(flow)
         if (flowEditing) {
           const { data } = await updateCrmFlow(flowEditing.id, payload)
           setFlows((prev) => prev.map((f) => (f.id === flowEditing.id ? data.flow : f)))
@@ -1722,7 +1708,8 @@ export function Crm() {
                           {(flow.actions || [])
                             .map((a) => {
                               if (a.type === 'send_message' && a.mediaType && a.mediaType !== 'none') {
-                                return `${ACTION_LABELS[a.type]} (${a.mediaType === 'audio' ? 'áudio' : 'vídeo'})`
+                                const label = FLOW_MEDIA_LABELS[a.mediaType] || a.mediaType
+                                return `${ACTION_LABELS[a.type]} (${label.toLowerCase()})`
                               }
                               return ACTION_LABELS[a.type] || a.type
                             })

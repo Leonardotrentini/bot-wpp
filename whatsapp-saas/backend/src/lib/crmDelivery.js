@@ -44,7 +44,7 @@ async function processOneDelivery(deps, delivery) {
 
   try {
     const mediaType = delivery.mediaType && delivery.mediaType !== "none" ? delivery.mediaType : "none"
-    const hasMedia = ["image", "video", "audio"].includes(mediaType)
+    const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
     let resp
     if (hasMedia) {
       const media = String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")

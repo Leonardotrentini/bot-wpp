@@ -872,7 +872,7 @@ function createCrmRouter({ io }) {
         z.object({
           type: z.enum(["send_message", "add_tag", "move_stage", "assign_ai", "set_status"]),
           body: z.string().max(4096).optional(),
-          mediaType: z.enum(["none", "image", "video", "audio"]).optional(),
+          mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional(),
           mediaBase64: z.string().optional().nullable(),
           mediaMime: z.string().max(120).optional().nullable(),
           mediaName: z.string().max(255).optional().nullable(),
@@ -996,7 +996,12 @@ function createCrmRouter({ io }) {
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
-      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Fluxo ou conversa inválidos." })
+      const first = parsed.error.issues[0]
+      const hint = first?.path?.length ? `${first.path.join(".")}: ` : ""
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: `Fluxo inválido (${hint}${first?.message || "verifique os campos"}).`,
+      })
     }
     if (parsed.data.flow.trigger.type === "keyword" && !parsed.data.flow.trigger.keywords?.length) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe pelo menos uma palavra-chave." })
