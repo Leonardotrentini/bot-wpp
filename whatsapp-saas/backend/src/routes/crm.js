@@ -155,7 +155,8 @@ function createCrmRouter({ io }) {
 
     const where = { userId }
     if (status && ["open", "pending", "resolved", "archived"].includes(status)) where.status = status
-    if (stageId) where.kanbanStageId = String(stageId)
+    if (stageId === "none") where.kanbanStageId = null
+    else if (stageId) where.kanbanStageId = String(stageId)
     if (tagId) where.contact = { tags: { some: { tagId: String(tagId) } } }
     if (q && String(q).trim()) {
       const term = String(q).trim()

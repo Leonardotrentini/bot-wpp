@@ -110,13 +110,6 @@ function mediaTypeFromMime(mime, name = '') {
   return 'none'
 }
 
-const STATUS_LABELS = {
-  open: 'Aberta',
-  pending: 'Pendente',
-  resolved: 'Resolvida',
-  archived: 'Arquivada',
-}
-
 // ---------------------------------------------------------------- página
 
 export function Chat() {
@@ -129,8 +122,8 @@ export function Chat() {
   const [conversations, setConversations] = useState([])
   const [loadingList, setLoadingList] = useState(true)
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
   const [tagFilter, setTagFilter] = useState('')
+  const [stageFilter, setStageFilter] = useState('')
   const [unidentifiedOnly, setUnidentifiedOnly] = useState(false)
 
   const [activeId, setActiveId] = useState(searchParams.get('c') || null)
@@ -202,8 +195,8 @@ export function Chat() {
     try {
       const params = {}
       if (query.trim()) params.q = query.trim()
-      if (statusFilter) params.status = statusFilter
       if (tagFilter) params.tagId = tagFilter
+      if (stageFilter) params.stageId = stageFilter
       const { data } = await getCrmConversations(params)
       if (seq !== listLoadSeq.current) return
       setConversations(data.conversations || [])
@@ -217,7 +210,7 @@ export function Chat() {
     } finally {
       if (seq === listLoadSeq.current) setLoadingList(false)
     }
-  }, [query, statusFilter, tagFilter])
+  }, [query, tagFilter, stageFilter])
 
   useEffect(() => {
     const t = setTimeout(loadConversations, query ? 350 : 0)
@@ -697,18 +690,20 @@ export function Chat() {
             />
           </div>
           <div className="flex gap-2">
-            <Select className="flex-1 min-w-0" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="">Todas</option>
-              <option value="open">Abertas</option>
-              <option value="pending">Pendentes</option>
-              <option value="resolved">Resolvidas</option>
-              <option value="archived">Arquivadas</option>
-            </Select>
-            <Select className="flex-1 min-w-0" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
+            <Select className="min-w-0 flex-1" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
               <option value="">Todas as tags</option>
               {tags.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
+                </option>
+              ))}
+            </Select>
+            <Select className="min-w-0 flex-1" value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
+              <option value="">Todos os kanbans</option>
+              <option value="none">Sem estágio</option>
+              {stages.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
                 </option>
               ))}
             </Select>
@@ -839,9 +834,6 @@ export function Chat() {
                   <Bot className="mr-1 h-3 w-3" /> IA ativa
                 </Badge>
               )}
-              <Badge variant={active.status === 'open' ? 'success' : active.status === 'pending' ? 'warning' : 'muted'}>
-                {STATUS_LABELS[active.status] || active.status}
-              </Badge>
               <button
                 type="button"
                 onClick={() => setShowPanel((v) => !v)}
@@ -1088,19 +1080,6 @@ export function Chat() {
                 {savingContact ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
                 Salvar contato
               </Button>
-            </div>
-
-            <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Status</p>
-              <Select
-                value={active.status}
-                onChange={(e) => updateConversation({ status: e.target.value })}
-              >
-                <option value="open">Aberta</option>
-                <option value="pending">Pendente</option>
-                <option value="resolved">Resolvida</option>
-                <option value="archived">Arquivada</option>
-              </Select>
             </div>
 
             <div>
