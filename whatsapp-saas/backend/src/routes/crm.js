@@ -54,6 +54,7 @@ const {
   dismissReminderAlert,
   processDueContactReminders,
 } = require("../lib/crmContactReminders")
+const { listCrmSales } = require("../lib/crmSales")
 
 const DEFAULT_STAGES = [
   { name: "Novo", color: "#38bdf8", isDefault: true },
@@ -715,6 +716,23 @@ function createCrmRouter({ io }) {
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
     const activities = await getContactActivityTimeline(prisma, userId, contact.id)
     return res.json({ activities })
+  })
+
+  router.get("/sales", async (req, res) => {
+    const userId = req.user.sub
+    const schema = z.object({
+      from: z.string().optional().nullable(),
+      to: z.string().optional().nullable(),
+      q: z.string().max(120).optional().nullable(),
+      page: z.coerce.number().int().min(1).optional().default(1),
+      limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+    })
+    const parsed = schema.safeParse(req.query)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Parâmetros inválidos." })
+    }
+    const result = await listCrmSales(prisma, userId, parsed.data)
+    return res.json(result)
   })
 
   router.delete("/contacts/:id/activity/:activityId", async (req, res) => {

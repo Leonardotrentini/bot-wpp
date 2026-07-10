@@ -14,6 +14,7 @@ import { Chat } from './pages/dashboard/Chat.jsx'
 import { Crm } from './pages/dashboard/Crm.jsx'
 import { Members } from './pages/dashboard/Members.jsx'
 import { Integrations } from './pages/dashboard/Integrations.jsx'
+import { Sales } from './pages/dashboard/Sales.jsx'
 import { Settings } from './pages/dashboard/Settings.jsx'
 import { Admin } from './pages/dashboard/Admin.jsx'
 
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="groups/:id" element={<GroupDetails />} />
         <Route path="chat" element={<Chat />} />
         <Route path="crm" element={<Crm />} />
+        <Route path="sales" element={<Sales />} />
         <Route path="automations" element={<Messages defaultTab="automacoes" />} />
         <Route path="automations/library" element={<Messages defaultTab="criar" />} />
         <Route path="automations/cadences" element={<Messages defaultTab="cadencia" />} />

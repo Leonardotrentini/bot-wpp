@@ -673,6 +673,25 @@ export async function deleteCrmContactActivity(contactId, activityId) {
   return mockResponse({ ok: true })
 }
 
+export async function getCrmSales({ from, to, q, page, limit } = {}) {
+  if (resolveUseRealApi()) {
+    return apiClient.get('/crm/sales', {
+      params: {
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+        ...(q ? { q } : {}),
+        ...(page ? { page } : {}),
+        ...(limit ? { limit } : {}),
+      },
+    })
+  }
+  return mockResponse({
+    sales: [],
+    summary: { count: 0, totalAmount: 0, averageAmount: 0 },
+    pagination: { page: 1, limit: 30, total: 0, pages: 0 },
+  })
+}
+
 export async function saveCrmContactQuote(contactId, { amount }) {
   if (resolveUseRealApi()) {
     return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/quote`, { amount })
