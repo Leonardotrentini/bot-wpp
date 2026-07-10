@@ -1,6 +1,7 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { DashboardSidebar } from './DashboardSidebar.jsx'
 import { DashboardHeader } from './DashboardHeader.jsx'
+import { ReminderAlertsProvider } from '../../contexts/ReminderAlertsContext.jsx'
 import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -36,9 +37,10 @@ export function DashboardLayout() {
   }, [pathname])
 
   return (
-    <div className="min-h-screen bg-brand-950">
-      <DashboardSidebar />
-      <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
+    <ReminderAlertsProvider>
+      <div className="min-h-screen bg-brand-950">
+        <DashboardSidebar />
+        <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
         {isImpersonating && (
           <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-accent-500/30 bg-accent-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
             <p className="inline-flex items-center gap-2 text-sm text-accent-200">
@@ -61,7 +63,8 @@ export function DashboardLayout() {
         <main className="p-4 lg:p-6">
           <Outlet />
         </main>
+        </div>
       </div>
-    </div>
+    </ReminderAlertsProvider>
   )
 }

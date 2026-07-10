@@ -106,6 +106,7 @@ const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } 
 const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
 const { maybeReplyWithAi } = require("./lib/crmAiAgent")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
+const { processDueContactReminders } = require("./lib/crmContactReminders")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -3509,6 +3510,8 @@ httpServer.listen(port, () => {
         .catch((err) => console.error("[crm] delivery scheduler:", err?.message || err))
         .then(() => processNoReplyFlows(getCrmDeps()))
         .catch((err) => console.error("[crm] no-reply flows:", err?.message || err))
+        .then(() => processDueContactReminders(prisma, io))
+        .catch((err) => console.error("[crm] reminders:", err?.message || err))
         .finally(() => {
           schedulerTickBusy = false
         })

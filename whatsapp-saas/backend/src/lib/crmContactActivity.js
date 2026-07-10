@@ -41,6 +41,8 @@ function activityLabel(type, payload = {}) {
       return payload.label ? `Lembrete agendado: ${payload.label}` : "Lembrete agendado"
     case "reminder_cancelled":
       return payload.label ? `Lembrete cancelado: ${payload.label}` : "Lembrete cancelado"
+    case "reminder_triggered":
+      return payload.label ? `Lembrete disparado: ${payload.label}` : "Lembrete disparado"
     default:
       return type
   }

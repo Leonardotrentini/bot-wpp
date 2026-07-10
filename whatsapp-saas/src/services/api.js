@@ -688,6 +688,18 @@ export async function cancelCrmContactReminder(contactId, reminderId) {
   return mockResponse({ contact: { id: contactId, reminders: [], nextReminder: null } })
 }
 
+export async function getCrmReminderAlerts() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/reminders/alerts')
+  return mockResponse({ alerts: [] })
+}
+
+export async function dismissCrmReminderAlert(reminderId) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/reminders/${encodeURIComponent(reminderId)}/dismiss`)
+  }
+  return mockResponse({ ok: true })
+}
+
 export async function getCrmTags() {
   if (resolveUseRealApi()) return apiClient.get('/crm/tags')
   return mockResponse({ tags: [] })

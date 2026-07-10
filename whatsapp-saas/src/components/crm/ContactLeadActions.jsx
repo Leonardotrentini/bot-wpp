@@ -10,6 +10,7 @@ import {
   createCrmContactReminder,
   cancelCrmContactReminder,
 } from '../../services/api.js'
+import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
 
 function formatBrl(value) {
   const n = Number(value)
@@ -29,13 +30,23 @@ function formatReminderWhen(iso) {
 }
 
 function defaultReminderDate() {
-  const d = new Date()
-  d.setDate(d.getDate() + 1)
-  return d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+  return new Date().toLocaleDateString('en-CA')
 }
 
 function defaultReminderTime() {
-  return '09:00'
+  const d = new Date(Date.now() + 2 * 60_000)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function reminderFieldsFromDate(date) {
+  return {
+    date: date.toLocaleDateString('en-CA'),
+    time: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
+  }
+}
+
+function applyReminderOffset(minutes) {
+  return reminderFieldsFromDate(new Date(Date.now() + minutes * 60_000))
 }
 
 function combineDateAndTime(dateStr, timeStr) {
@@ -63,6 +74,7 @@ function activityIcon(type) {
       return ShoppingBag
     case 'reminder_set':
     case 'reminder_cancelled':
+    case 'reminder_triggered':
       return Bell
     default:
       return History
@@ -134,11 +146,19 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
 
   useEffect(() => {
     if (reminderOpen) {
-      setReminderDate(defaultReminderDate())
-      setReminderTime(defaultReminderTime())
+      const preset = applyReminderOffset(2)
+      setReminderDate(preset.date)
+      setReminderTime(preset.time)
       setReminderNote('')
+      void ensureNotificationPermission()
     }
   }, [reminderOpen])
+
+  const applyReminderPreset = (minutes) => {
+    const preset = applyReminderOffset(minutes)
+    setReminderDate(preset.date)
+    setReminderTime(preset.time)
+  }
 
   const handleSaveQuote = async () => {
     const amount = parseAmountInput(quoteAmount)
@@ -450,6 +470,22 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
         )}
 
         <p className="mb-3 text-sm text-stone-400">Escolha quando quer ser lembrado deste lead.</p>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {[
+            { label: 'Em 2 min', minutes: 2 },
+            { label: 'Em 15 min', minutes: 15 },
+            { label: 'Em 1 h', minutes: 60 },
+          ].map((preset) => (
+            <button
+              key={preset.minutes}
+              type="button"
+              onClick={() => applyReminderPreset(preset.minutes)}
+              className="rounded-full border border-accent-500/35 bg-accent-500/10 px-3 py-1 text-[11px] font-medium text-accent-300 transition hover:bg-accent-500/20"
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
         <div className="mb-3 grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-stone-500">Data</label>

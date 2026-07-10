@@ -328,6 +328,8 @@ model CrmContactReminder {
   note        String?
   scheduledAt DateTime
   status      String     @default("pending") // pending | done | cancelled
+  triggeredAt DateTime?
+  dismissedAt DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 

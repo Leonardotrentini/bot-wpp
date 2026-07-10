@@ -49,6 +49,9 @@ const {
   listContactReminders,
   createContactReminder,
   cancelContactReminder,
+  listReminderAlerts,
+  dismissReminderAlert,
+  processDueContactReminders,
 } = require("../lib/crmContactReminders")
 
 const DEFAULT_STAGES = [
@@ -809,6 +812,19 @@ function createCrmRouter({ io }) {
       return res.status(404).json({ error: "NOT_FOUND", message: "Lembrete não encontrado." })
     }
     return res.json({ contact: result.contact })
+  })
+
+  router.get("/reminders/alerts", async (req, res) => {
+    const alerts = await listReminderAlerts(prisma, req.user.sub)
+    return res.json({ alerts })
+  })
+
+  router.post("/reminders/:id/dismiss", async (req, res) => {
+    const result = await dismissReminderAlert(prisma, req.user.sub, req.params.id)
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Lembrete não encontrado." })
+    }
+    return res.json({ ok: true })
   })
 
   // ------------------------- Tags -------------------------
