@@ -202,7 +202,6 @@ function buildQuoteEvent({ contact, amount, eventId, userId }) {
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
     ...businessMessagingFields(),
-    event_source_url: DEFAULT_EVENT_SOURCE_URL,
     user_data: ensureUserData(contact, { userId }),
     custom_data: {
       currency: "BRL",
@@ -226,7 +225,6 @@ function buildPurchaseEvent({ contact, amount, ticket, eventId, userId }) {
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
     ...businessMessagingFields(),
-    event_source_url: DEFAULT_EVENT_SOURCE_URL,
     user_data: ensureUserData(contact, { userId }),
     custom_data: custom,
   }

@@ -14,12 +14,14 @@ import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
 import { trackCrmMetaEvent } from '../../lib/metaPixel.js'
 
 function notifyMetaTracking(toastApi, tracking, actionLabel) {
-  if (!tracking || tracking.skipped) return
+  if (!tracking || tracking.skipped) return false
   trackCrmMetaEvent(tracking)
-  if (tracking.sent) return
+  if (tracking.sent) return false
   if (tracking.error) {
     toastApi.info(`${actionLabel} salvo. Meta não recebeu: ${tracking.error}`)
+    return true
   }
+  return false
 }
 
 function formatBrl(value) {
@@ -180,8 +182,12 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     try {
       const { data } = await saveCrmContactQuote(contactId, { amount })
       if (data.contact) onContactUpdate?.(data.contact)
-      notifyMetaTracking(toastRef.current, data.tracking, 'Orçamento')
-      toastRef.current.success('Orçamento salvo.')
+      const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Orçamento')
+      if (!metaWarned) {
+        toastRef.current.success(
+          data.tracking?.sent ? 'Orçamento salvo e enviado à Meta.' : 'Orçamento salvo.',
+        )
+      }
       setQuoteOpen(false)
       if (historyOpen) loadHistory()
     } catch (err) {
@@ -205,8 +211,12 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       })
       if (data.contact) onContactUpdate?.(data.contact)
       if (data.conversation) onConversationUpdate?.(data.conversation)
-      notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
-      toastRef.current.success('Compra confirmada.')
+      const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
+      if (!metaWarned) {
+        toastRef.current.success(
+          data.tracking?.sent ? 'Compra confirmada e enviada à Meta.' : 'Compra confirmada.',
+        )
+      }
       setPurchaseOpen(false)
       if (historyOpen) loadHistory()
     } catch (err) {
