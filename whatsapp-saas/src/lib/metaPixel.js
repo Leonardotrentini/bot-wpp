@@ -45,8 +45,7 @@ export function trackMetaPixel(eventName, params = {}, eventId) {
 }
 
 export function trackCrmMetaEvent(tracking) {
-  if (!tracking?.eventId || !tracking?.eventName) return
-  if (tracking.sent === false && tracking.skipped) return
+  if (!tracking?.eventId || !tracking?.eventName || tracking.skipped) return
 
   const params = { currency: 'BRL' }
   if (tracking.value != null) params.value = tracking.value

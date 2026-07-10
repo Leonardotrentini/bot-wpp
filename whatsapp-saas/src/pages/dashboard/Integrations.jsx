@@ -164,10 +164,14 @@ export function Integrations() {
           />
           <Input
             label="Código de teste (opcional)"
-            placeholder="TEST12345 — use ao validar no Events Manager"
+            placeholder="TEST12345 — ex.: TEST20643"
             value={form.testEventCode}
             onChange={(e) => setForm((f) => ({ ...f, testEventCode: e.target.value }))}
           />
+          <p className="-mt-2 text-xs text-stone-500">
+            Usado apenas no botão &quot;Enviar evento de teste&quot;. Orçamentos e compras reais vão para produção
+            (sem código de teste). Abra o Gerenciador de Eventos → aba <strong className="text-stone-400">Testar eventos</strong>.
+          </p>
 
           <div className="space-y-3 rounded-xl border border-brand-800 bg-brand-950/40 p-4">
             <Toggle checked={form.enabled} onChange={(v) => setForm((f) => ({ ...f, enabled: v }))} label="Integração ativa" />

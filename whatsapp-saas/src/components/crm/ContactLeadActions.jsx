@@ -13,6 +13,15 @@ import {
 import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
 import { trackCrmMetaEvent } from '../../lib/metaPixel.js'
 
+function notifyMetaTracking(toastApi, tracking, actionLabel) {
+  if (!tracking || tracking.skipped) return
+  trackCrmMetaEvent(tracking)
+  if (tracking.sent) return
+  if (tracking.error) {
+    toastApi.info(`${actionLabel} salvo. Meta não recebeu: ${tracking.error}`)
+  }
+}
+
 function formatBrl(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '—'
@@ -171,7 +180,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     try {
       const { data } = await saveCrmContactQuote(contactId, { amount })
       if (data.contact) onContactUpdate?.(data.contact)
-      if (data.tracking) trackCrmMetaEvent(data.tracking)
+      notifyMetaTracking(toastRef.current, data.tracking, 'Orçamento')
       toastRef.current.success('Orçamento salvo.')
       setQuoteOpen(false)
       if (historyOpen) loadHistory()
@@ -196,7 +205,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       })
       if (data.contact) onContactUpdate?.(data.contact)
       if (data.conversation) onConversationUpdate?.(data.conversation)
-      if (data.tracking) trackCrmMetaEvent(data.tracking)
+      notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
       toastRef.current.success('Compra confirmada.')
       setPurchaseOpen(false)
       if (historyOpen) loadHistory()
