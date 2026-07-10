@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ExternalLink, FileText, Film } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { ExternalLink, FileText, Film, X } from 'lucide-react'
 
 export function formatMediaSize(bytes) {
   if (!bytes || bytes < 1) return ''
@@ -176,12 +177,22 @@ export function DocumentMediaPreview({ src, mediaName, mimetype, className }) {
   )
 }
 
-export function ImageMediaPreview({ src, alt, className }) {
+export function ImageMediaPreview({ src, alt, className, expandable = true }) {
   const [failed, setFailed] = useState(!src)
+  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     setFailed(!src)
   }, [src])
+
+  useEffect(() => {
+    if (!expanded) return undefined
+    const onKey = (e) => {
+      if (e.key === 'Escape') setExpanded(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [expanded])
 
   if (!src || failed) {
     return (
@@ -191,5 +202,56 @@ export function ImageMediaPreview({ src, alt, className }) {
     )
   }
 
-  return <img src={src} alt={alt || ''} className={className} onError={() => setFailed(true)} />
+  const thumbnail = (
+    <img
+      src={src}
+      alt={alt || ''}
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  )
+
+  if (!expandable) return thumbnail
+
+  const lightbox =
+    expanded &&
+    createPortal(
+      <div className="fixed inset-0 z-[10060] flex items-center justify-center p-4">
+        <button
+          type="button"
+          aria-label="Fechar imagem"
+          className="absolute inset-0 bg-black/85 backdrop-blur-sm"
+          onClick={() => setExpanded(false)}
+        />
+        <button
+          type="button"
+          aria-label="Fechar"
+          onClick={() => setExpanded(false)}
+          className="absolute right-4 top-4 z-10 rounded-full bg-black/50 p-2 text-stone-200 transition hover:bg-black/70"
+        >
+          <X className="h-5 w-5" />
+        </button>
+        <img
+          src={src}
+          alt={alt || 'Imagem ampliada'}
+          className="relative z-[1] max-h-[92vh] max-w-[92vw] rounded-lg object-contain shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>,
+      document.body,
+    )
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setExpanded(true)}
+        className="block max-w-full cursor-zoom-in text-left transition hover:opacity-95"
+        title="Clique para ampliar"
+      >
+        {thumbnail}
+      </button>
+      {lightbox}
+    </>
+  )
 }
