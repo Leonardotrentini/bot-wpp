@@ -125,6 +125,9 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
   const contactId = contact?.id
   const pendingReminders = contact?.reminders || []
 
+  const onContactUpdateRef = useRef(onContactUpdate)
+  onContactUpdateRef.current = onContactUpdate
+
   const loadHistory = useCallback(async () => {
     if (!contactId) return
     setLoadingHistory(true)
@@ -132,7 +135,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     try {
       const { data } = await getCrmContactActivity(contactId)
       setActivities(data.activities || [])
-      if (data.contact) onContactUpdate?.(data.contact)
+      if (data.contact) onContactUpdateRef.current?.(data.contact)
     } catch (err) {
       const message = err?.response?.data?.message || 'Falha ao carregar histórico.'
       setHistoryError(message)
@@ -141,16 +144,16 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     } finally {
       setLoadingHistory(false)
     }
-  }, [contactId, onContactUpdate])
+  }, [contactId])
 
   useEffect(() => {
     if (!contactId || !hasLegacyQuoteTags(contact?.tags)) return
     getCrmContactActivity(contactId)
       .then(({ data }) => {
-        if (data.contact) onContactUpdate?.(data.contact)
+        if (data.contact) onContactUpdateRef.current?.(data.contact)
       })
       .catch(() => {})
-  }, [contactId, contact?.tags, onContactUpdate])
+  }, [contactId, contact?.tags])
 
   useEffect(() => {
     if (!historyOpen || !contactId) return
