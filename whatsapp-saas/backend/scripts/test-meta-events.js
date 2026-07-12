@@ -108,7 +108,17 @@ function testPayloads() {
   assert(ctwaQuote.user_data.ctwa_clid, "CTWA ctwa_clid")
   assert(ctwaQuote.custom_data.event_source === "ctwa", "CTWA event_source")
   assert(ctwaQuote.custom_data.content_category === CONTENT_CATEGORY.QUOTE, "CTWA Quote content_category")
-  assert(ctwaQuote.event_source_url === VESTO_EVENT_SOURCE_URL, "CTWA Quote event_source_url")
+  assert(!ctwaQuote.event_source_url, "CTWA must not send event_source_url (business_messaging)")
+
+  const ctwaQualified = buildLeadQualifiedEvent({
+    contact: mockContactCtwa,
+    eventId: "test-qualified-ctwa-1",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: ctwaMode,
+  })
+  assert(ctwaQualified.action_source === "business_messaging", "CTWA LeadQualified action_source")
+  assert(!ctwaQualified.event_source_url, "CTWA LeadQualified must not send event_source_url")
 
   const crmPurchase = buildPurchaseEvent({
     contact: mockContactCrm,

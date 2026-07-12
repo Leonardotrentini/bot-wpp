@@ -169,11 +169,11 @@ function buildFunnelEvent({
     event_name: eventName,
     event_time: eventTimeSec,
     event_id: eventId,
-    event_source_url: VESTO_EVENT_SOURCE_URL,
     custom_data: { ...customData, event_source: eventSource },
   }
 
   if (mode.mode === "ctwa") {
+    // business_messaging: Meta rejeita event_source_url (erro 2804064 em LeadQualified etc.)
     return {
       ...base,
       action_source: "business_messaging",
@@ -188,6 +188,7 @@ function buildFunnelEvent({
 
   return {
     ...base,
+    event_source_url: VESTO_EVENT_SOURCE_URL,
     action_source: "system_generated",
     user_data: buildCrmUserData(contact, { userId }),
   }
