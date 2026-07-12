@@ -1,5 +1,5 @@
 /**
- * Utilitários Meta — WhatsApp business_messaging (page_id, ctwa_clid).
+ * Utilitários Meta — WhatsApp business_messaging (page_id, ctwa_clid) + atribuição LP.
  */
 
 function parseFacebookPageId(value) {
@@ -21,7 +21,35 @@ function resolveCtwaClid(contact) {
   return clid ? String(clid).trim() : null
 }
 
-/** Extrai ctwa_clid de webhooks Evolution/Baileys (anúncio Click-to-WhatsApp). */
+function resolveFbclid(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const fbclid = custom.meta?.fbclid || custom.fbclid
+  return fbclid ? String(fbclid).trim() : null
+}
+
+function resolveFbp(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const fbp = custom.meta?.fbp || custom.fbp
+  return fbp ? String(fbp).trim() : null
+}
+
+/** Monta fbc para CAPI — usa timestamp do clique na LP quando disponível. */
+function resolveFbc(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const stored = custom.meta?.fbc || custom.fbc
+  if (stored) return String(stored).trim()
+
+  const fbclid = resolveFbclid(contact)
+  if (!fbclid) return null
+
+  const clickAt = custom.meta?.clickAt
+  const clickSec =
+    clickAt != null && Number.isFinite(Number(clickAt))
+      ? Math.floor(Number(clickAt) / 1000)
+      : Math.floor(Date.now() / 1000)
+  return `fb.1.${clickSec}.${fbclid}`
+}
+
 function extractCtwaClidFromRecord(record) {
   if (!record || typeof record !== "object") return null
 
@@ -54,41 +82,40 @@ function extractCtwaClidFromRecord(record) {
   return walk(record.message) || walk(record)
 }
 
-function resolveFbclid(contact) {
-  const custom = parseCustomFields(contact?.customFields)
-  const fbclid = custom.meta?.fbclid || custom.fbclid
-  return fbclid ? String(fbclid).trim() : null
-}
-
-/** Monta fbc para CAPI quando só fbclid está salvo no contato. */
-function resolveFbc(contact) {
-  const custom = parseCustomFields(contact?.customFields)
-  const stored = custom.meta?.fbc || custom.fbc
-  if (stored) return String(stored).trim()
-
-  const fbclid = resolveFbclid(contact)
-  if (!fbclid) return null
-  return `fb.1.${Math.floor(Date.now() / 1000)}.${fbclid}`
-}
-
-async function storeContactMetaAttribution(prisma, contact, { ctwaClid, fbclid, fbc } = {}) {
+async function storeContactMetaAttribution(
+  prisma,
+  contact,
+  { ctwaClid, fbclid, fbc, fbp, clickAt, utm, pageUrl, attributionRef } = {},
+) {
   if (!contact?.id) return contact
 
   const custom = parseCustomFields(contact.customFields)
   custom.meta = { ...(custom.meta || {}) }
 
   let changed = false
-  if (ctwaClid && custom.meta.ctwaClid !== ctwaClid) {
-    custom.meta.ctwaClid = ctwaClid
-    changed = true
+  const set = (key, value) => {
+    if (value != null && value !== "" && custom.meta[key] !== value) {
+      custom.meta[key] = value
+      changed = true
+    }
   }
-  if (fbclid && custom.meta.fbclid !== fbclid) {
-    custom.meta.fbclid = fbclid
-    changed = true
-  }
-  if (fbc && custom.meta.fbc !== fbc) {
-    custom.meta.fbc = fbc
-    changed = true
+
+  set("ctwaClid", ctwaClid)
+  set("fbclid", fbclid)
+  set("fbc", fbc)
+  set("fbp", fbp)
+  if (clickAt != null) set("clickAt", Number(clickAt))
+  if (pageUrl) set("pageUrl", String(pageUrl).slice(0, 2048))
+  if (attributionRef) set("attributionRef", attributionRef)
+
+  if (utm && typeof utm === "object") {
+    custom.meta.utm = { ...(custom.meta.utm || {}) }
+    for (const [k, v] of Object.entries(utm)) {
+      if (v != null && v !== "") {
+        custom.meta.utm[k] = String(v)
+        changed = true
+      }
+    }
   }
 
   if (!changed) return contact
@@ -108,6 +135,7 @@ module.exports = {
   parseCustomFields,
   resolveCtwaClid,
   resolveFbclid,
+  resolveFbp,
   resolveFbc,
   extractCtwaClidFromRecord,
   storeContactCtwaClid,

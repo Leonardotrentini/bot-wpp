@@ -96,6 +96,8 @@ const {
 const jwt = require("jsonwebtoken")
 const { createCrmRouter } = require("./routes/crm")
 const { createIntegrationsRouter } = require("./routes/integrations")
+const { createPublicMetaRouter } = require("./routes/publicMeta")
+const path = require("path")
 const {
   isIndividualJid,
   ingestCrmMessage,
@@ -169,6 +171,13 @@ app.use(
   }),
 )
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
+
+app.get("/vesto-attribution.js", (_req, res) => {
+  res.type("application/javascript")
+  res.sendFile(path.join(__dirname, "../public/vesto-attribution.js"))
+})
+
+app.use("/api/public", createPublicMetaRouter())
 
 app.use("/api/admin", adminRoutes)
 app.use("/api/crm", createCrmRouter({ io }))

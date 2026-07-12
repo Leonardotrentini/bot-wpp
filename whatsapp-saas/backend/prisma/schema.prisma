@@ -593,6 +593,8 @@ model MetaIntegration {
   adAccountId     String?
   adsAccessToken  String?
   adsEnabled      Boolean   @default(false)
+  vestoPublicKey  String?   @unique
+  allowedOrigins  String[]  @default([])
   lastEventAt     DateTime?
   lastEventName   String?
   lastError       String?
@@ -600,4 +602,29 @@ model MetaIntegration {
   lastAdsError    String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  attributionLeads MetaAttributionLead[]
+}
+
+/** Clique na LP (ref vst_) aguardando associação com contato WhatsApp. */
+model MetaAttributionLead {
+  id           String    @id @default(cuid())
+  userId       String
+  integration  MetaIntegration @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  ref          String    @unique
+  fbclid       String?
+  fbc          String?
+  fbp          String?
+  clickAt      DateTime?
+  pageUrl      String?
+  utmSource    String?
+  utmMedium    String?
+  utmCampaign  String?
+  utmContent   String?
+  utmTerm      String?
+  contactId    String?
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }

@@ -10,7 +10,20 @@ import { getMetaIntegration, saveMetaIntegration, testMetaIntegration } from '..
 import { initMetaPixel } from '../../lib/metaPixel.js'
 import { MetaIntegrationGuide } from '../../components/integrations/MetaIntegrationGuide.jsx'
 import { MetaAdsPanel } from '../../components/integrations/MetaAdsPanel.jsx'
+import { MetaLpAttributionPanel } from '../../components/integrations/MetaLpAttributionPanel.jsx'
 import { UtmUrlGenerator } from '../../components/integrations/UtmUrlGenerator.jsx'
+
+function originsToText(origins) {
+  if (!Array.isArray(origins) || !origins.length) return ''
+  return origins.join('\n')
+}
+
+function parseOriginsText(text) {
+  return String(text || '')
+    .split(/[\n,;]+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
 
 function formatWhen(iso) {
   if (!iso) return '—'
@@ -39,6 +52,9 @@ export function Integrations() {
     adAccountId: '',
     adsAccessToken: '',
     adsEnabled: false,
+    allowedOriginsText: '',
+    lpWhatsapp: '',
+    lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
   })
   const [meta, setMeta] = useState(null)
 
@@ -60,6 +76,9 @@ export function Integrations() {
           adAccountId: integration.adAccountId || '',
           adsAccessToken: '',
           adsEnabled: integration.adsEnabled === true,
+          allowedOriginsText: originsToText(integration.allowedOrigins),
+          lpWhatsapp: '',
+          lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
         })
         if (integration.enabled && integration.pixelId) {
           initMetaPixel(integration.pixelId)
@@ -88,6 +107,7 @@ export function Integrations() {
         testEventCode: form.testEventCode.trim() || null,
         adAccountId: form.adAccountId.trim() || null,
         adsEnabled: form.adsEnabled,
+        allowedOrigins: parseOriginsText(form.allowedOriginsText),
       }
       if (form.accessToken.trim()) {
         payload.accessToken = form.accessToken.trim()
@@ -308,6 +328,8 @@ export function Integrations() {
           </div>
 
           <UtmUrlGenerator />
+
+          <MetaLpAttributionPanel form={form} setForm={setForm} meta={meta} />
 
           <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={load} />
 

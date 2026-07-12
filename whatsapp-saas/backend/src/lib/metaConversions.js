@@ -14,7 +14,9 @@
 
 const crypto = require("crypto")
 const { formatAdsFields, normalizeAdAccountId } = require("./metaAds")
-const { parseFacebookPageId, resolveCtwaClid, resolveFbc } = require("./metaMessaging")
+const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttributionLead")
+const { parseFacebookPageId, resolveCtwaClid, resolveFbc, resolveFbp } = require("./metaMessaging")
+const { getStoredClickAt } = require("./metaAttributionLead")
 
 const GRAPH_API_VERSION = "v22.0"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
@@ -131,6 +133,8 @@ function buildCrmUserData(contact, { userId }) {
   const userData = ensureUserData(contact, { userId })
   const fbc = resolveFbc(contact)
   if (fbc) userData.fbc = fbc
+  const fbp = resolveFbp(contact)
+  if (fbp) userData.fbp = fbp
   return userData
 }
 
@@ -155,12 +159,14 @@ function buildFunnelEvent({
   integration,
   mode,
   customData,
+  eventTime,
 }) {
   const eventSource = eventSourceForMode(mode)
+  const eventTimeSec = eventTime != null ? eventTime : Math.floor(Date.now() / 1000)
 
   const base = {
     event_name: eventName,
-    event_time: Math.floor(Date.now() / 1000),
+    event_time: eventTimeSec,
     event_id: eventId,
     event_source_url: VESTO_EVENT_SOURCE_URL,
     custom_data: { ...customData, event_source: eventSource },
@@ -186,7 +192,8 @@ function buildFunnelEvent({
   }
 }
 
-function buildConversationStartedEvent({ contact, eventId, userId, integration, mode }) {
+function buildConversationStartedEvent({ contact, eventId, userId, integration, mode, eventTime }) {
+  const clickSec = getStoredClickAt(contact)
   return buildFunnelEvent({
     eventName: CONVERSATION_STARTED_EVENT,
     contact,
@@ -194,6 +201,7 @@ function buildConversationStartedEvent({ contact, eventId, userId, integration, 
     userId,
     integration,
     mode,
+    eventTime: eventTime != null ? eventTime : clickSec || undefined,
     customData: buildFunnelCustomData({
       contentCategory: CONTENT_CATEGORY.CONVERSATION_STARTED,
       eventSource: eventSourceForMode(mode),
@@ -283,6 +291,8 @@ function formatIntegrationRow(row) {
     lastSuccess: row.lastError ? null : row.lastEventAt ? true : null,
     updatedAt: row.updatedAt.toISOString(),
     ...formatAdsFields(row),
+    vestoPublicKey: row.vestoPublicKey || "",
+    allowedOrigins: Array.isArray(row.allowedOrigins) ? row.allowedOrigins : [],
   }
 }
 
@@ -319,6 +329,13 @@ async function upsertMetaIntegration(prisma, userId, data) {
   const adsAccessTokenRaw = data.adsAccessToken != null ? String(data.adsAccessToken).trim() : null
   const adsAccessToken = adsAccessTokenRaw || existing?.adsAccessToken || null
 
+  const allowedOrigins =
+    data.allowedOrigins != null
+      ? parseAllowedOriginsInput(data.allowedOrigins)
+      : existing?.allowedOrigins || []
+
+  const vestoPublicKey = existing?.vestoPublicKey || generateVestoPublicKey()
+
   const row = await prisma.metaIntegration.upsert({
     where: { userId },
     create: {
@@ -333,6 +350,8 @@ async function upsertMetaIntegration(prisma, userId, data) {
       adAccountId,
       adsAccessToken,
       adsEnabled: data.adsEnabled === true,
+      vestoPublicKey,
+      allowedOrigins,
     },
     update: {
       pixelId,
@@ -345,6 +364,8 @@ async function upsertMetaIntegration(prisma, userId, data) {
       adAccountId: data.adAccountId != null ? adAccountId : undefined,
       adsAccessToken: data.adsAccessToken != null ? adsAccessToken || null : undefined,
       adsEnabled: data.adsEnabled != null ? data.adsEnabled === true : undefined,
+      allowedOrigins: data.allowedOrigins != null ? allowedOrigins : undefined,
+      vestoPublicKey: existing?.vestoPublicKey ? undefined : vestoPublicKey,
     },
   })
 

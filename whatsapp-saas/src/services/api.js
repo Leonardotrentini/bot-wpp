@@ -566,6 +566,8 @@ export async function saveMetaIntegration(payload) {
       sendQuotes: payload.sendQuotes !== false,
       sendPurchases: payload.sendPurchases !== false,
       testEventCode: payload.testEventCode || '',
+      allowedOrigins: payload.allowedOrigins || [],
+      vestoPublicKey: 'vpk_demo123',
       hasAccessToken: true,
       connected: true,
     },

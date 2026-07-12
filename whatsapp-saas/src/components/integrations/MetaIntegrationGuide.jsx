@@ -168,6 +168,31 @@ export function MetaIntegrationGuide({ pixelId }) {
             </div>
           </Section>
 
+          <Section title="Landing Page — script Vesto + Pixel" defaultOpen>
+            <ol className="list-inside list-decimal space-y-2">
+              <li>
+                Em <strong className="text-stone-400">Integrações → Meta</strong>, cadastre os domínios da LP (um por
+                linha) e salve.
+              </li>
+              <li>Copie o <strong className="text-stone-400">script Vesto</strong> gerado automaticamente.</li>
+              <li>
+                Cole na LP antes de <code className="text-stone-400">&lt;/body&gt;</code> e adicione{' '}
+                <code className="text-stone-400">data-vesto-whatsapp</code> no botão WhatsApp.
+              </li>
+              <li>
+                Mantenha o Pixel <code className="text-stone-400">{pixelHint}</code> com PageView +{' '}
+                <strong className="text-stone-400">Contact</strong> no clique.
+              </li>
+              <li>
+                O script envia <code className="text-stone-400">fbc</code>/<code className="text-stone-400">fbp</code>{' '}
+                ao Vesto e inclui <code className="text-stone-400">(vst_...)</code> na mensagem do WhatsApp.
+              </li>
+            </ol>
+            <p className="mt-2 text-stone-500">
+              CORS é liberado só para os domínios salvos na conta — cada cliente configura os seus, sem suporte manual.
+            </p>
+          </Section>
+
           <Section title="Landing Page — Pixel {pixelHint}" defaultOpen>
             <ul className="list-inside list-disc space-y-2">
               <li>

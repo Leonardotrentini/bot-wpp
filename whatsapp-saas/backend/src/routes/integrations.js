@@ -51,6 +51,7 @@ function createIntegrationsRouter() {
       adAccountId: z.string().max(32).optional().nullable(),
       adsAccessToken: z.string().max(512).optional().nullable(),
       adsEnabled: z.boolean().optional(),
+      allowedOrigins: z.array(z.string().max(253)).optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
