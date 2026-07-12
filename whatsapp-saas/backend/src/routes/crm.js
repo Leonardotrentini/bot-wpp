@@ -56,7 +56,12 @@ const {
 } = require("../lib/crmContactReminders")
 const { listCrmSales } = require("../lib/crmSales")
 const { ensureDefaultTags, isQualifiedTagName } = require("../lib/crmDefaults")
-const { trackLeadQualifiedEvent } = require("../lib/metaConversions")
+const { trackMetaForContactTag } = require("../lib/metaConversions")
+
+function isQuoteTagName(name) {
+  const n = String(name || "").trim()
+  return n === "Orçamento" || n.startsWith("Orçamento ")
+}
 
 const DEFAULT_STAGES = [
   { name: "Novo", color: "#38bdf8", isDefault: true },
@@ -689,13 +694,20 @@ function createCrmRouter({ io }) {
       include: { tags: { include: { tag: true } } },
     })
 
-    if (isQualifiedTagName(tag.name)) {
-      trackLeadQualifiedEvent(prisma, { userId, contact: updated }).catch((err) =>
-        console.error("[meta] LeadQualified:", err?.message || err),
-      )
+    let metaTracking = null
+    if (isQualifiedTagName(tag.name) || isQuoteTagName(tag.name) || tag.name === "Comprou") {
+      metaTracking = await trackMetaForContactTag(prisma, { userId, contact: updated, tagName: tag.name })
     }
 
-    return res.json({ contact: formatContactRow(updated) })
+    const refreshed = await prisma.crmContact.findUnique({
+      where: { id: contact.id },
+      include: { tags: { include: { tag: true } } },
+    })
+
+    return res.json({
+      contact: formatContactRow(refreshed),
+      metaTracking,
+    })
   })
 
   router.delete("/contacts/:id/tags/:tagId", async (req, res) => {

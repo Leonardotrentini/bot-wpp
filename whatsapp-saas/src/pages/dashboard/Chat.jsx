@@ -69,6 +69,7 @@ import {
 } from '../../services/api.js'
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
+import { toastMetaTracking } from '../../lib/metaTrackingFeedback.js'
 import {
   groupChatId,
   groupToListItem,
@@ -922,6 +923,9 @@ export function Chat() {
           : await addCrmContactTag(active.contact.id, tag.id)
         if (data.contact) {
           setConversations((prev) => prev.map((c) => (c.id === activeId ? { ...c, contact: data.contact } : c)))
+        }
+        if (!has && data.metaTracking) {
+          toastMetaTracking(toastRef.current, data.metaTracking)
         }
       } catch {
         toastRef.current.error('Falha ao atualizar tags.')

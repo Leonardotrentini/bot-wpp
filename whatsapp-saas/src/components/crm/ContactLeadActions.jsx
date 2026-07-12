@@ -13,16 +13,11 @@ import {
 } from '../../services/api.js'
 import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
 import { trackCrmMetaEvent } from '../../lib/metaPixel.js'
+import { toastMetaTracking, metaFunnelLabel } from '../../lib/metaTrackingFeedback.js'
 
 function notifyMetaTracking(toastApi, tracking, actionLabel) {
-  if (!tracking || tracking.skipped) return false
-  trackCrmMetaEvent(tracking)
-  if (tracking.sent) return false
-  if (tracking.error) {
-    toastApi.info(`${actionLabel} salvo. Meta não recebeu: ${tracking.error}`)
-    return true
-  }
-  return false
+  toastMetaTracking(toastApi, tracking, actionLabel)
+  return Boolean(tracking?.sent)
 }
 
 function formatBrl(value) {
@@ -318,6 +313,9 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     <>
       <div>
         <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Lead</p>
+        {contact.metaFunnel && (
+          <p className="mb-2 text-[11px] leading-snug text-stone-500">{metaFunnelLabel(contact.metaFunnel)}</p>
+        )}
         {(contact.quote || contact.purchase || contact.nextReminder) && (
           <div className="mb-2 space-y-1 rounded-xl border border-brand-700/80 bg-brand-900/50 px-3 py-2 text-xs text-stone-300">
             {contact.quote?.amount != null && (

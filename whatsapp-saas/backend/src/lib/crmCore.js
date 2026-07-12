@@ -162,6 +162,18 @@ function parseContactCommerceField(customFields, key) {
   return row
 }
 
+const { contactHasLpAttribution } = require("./metaAttributionLead")
+
+function formatContactMetaFunnel(contact) {
+  if (!contact) return null
+  return {
+    conversationStarted: Boolean(contact.conversationStartedEventSentAt),
+    leadQualified: Boolean(contact.qualifiedEventSentAt),
+    quote: Boolean(contact.quoteEventSentAt),
+    hasAttribution: contactHasLpAttribution(contact),
+  }
+}
+
 function formatContactRow(contact, { tags } = {}) {
   if (!contact) return null
   const phoneDigits = contact.phone || phoneDigitsFromJid(contact.remoteJid)
@@ -204,6 +216,7 @@ function formatContactRow(contact, { tags } = {}) {
       name: ct.tag?.name ?? ct.name,
       color: ct.tag?.color ?? ct.color,
     })),
+    metaFunnel: formatContactMetaFunnel(contact),
   }
 }
 
@@ -524,6 +537,8 @@ module.exports = {
   extractIdentityHintsFromRecord,
   phoneFromChatItem,
   lidFallbackLabel,
+  parseContactCommerceField,
+  formatContactMetaFunnel,
   formatContactRow,
   formatConversationRow,
   formatMessageRow,

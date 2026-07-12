@@ -819,6 +819,58 @@ async function testMetaIntegration(prisma, userId) {
   }
 }
 
+const { isQualifiedTagName } = require("./crmDefaults")
+const { parseContactCommerceField } = require("./crmCore")
+
+const QUOTE_TAG_NAME = "Orçamento"
+const PURCHASE_TAG_NAME = "Comprou"
+
+function isQuoteTagName(name) {
+  const n = String(name || "").trim()
+  return n === QUOTE_TAG_NAME || n.startsWith(`${QUOTE_TAG_NAME} `)
+}
+
+async function trackMetaForContactTag(prisma, { userId, contact, tagName }) {
+  const name = String(tagName || "")
+  if (isQualifiedTagName(name)) {
+    return trackLeadQualifiedEvent(prisma, { userId, contact })
+  }
+  if (isQuoteTagName(name)) {
+    const quote = parseContactCommerceField(contact.customFields, "quote")
+    const amount = Number(quote?.amount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return {
+        sent: false,
+        skipped: true,
+        reason: "no_quote_amount",
+        eventName: QUOTE_EVENT,
+        message: "Use o botão Orçamento com valor. Só a tag visual não envia Quote à Meta.",
+      }
+    }
+    return trackCrmQuoteEvent(prisma, { userId, contact, amount })
+  }
+  if (name === PURCHASE_TAG_NAME) {
+    const purchase = parseContactCommerceField(contact.customFields, "purchase")
+    const amount = Number(purchase?.amount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return {
+        sent: false,
+        skipped: true,
+        reason: "no_purchase_amount",
+        eventName: PURCHASE_EVENT,
+        message: "Use o botão Compra com valor. Só a tag visual não envia Purchase à Meta.",
+      }
+    }
+    return trackCrmPurchaseEvent(prisma, {
+      userId,
+      contact,
+      amount,
+      ticket: purchase.ticket || null,
+    })
+  }
+  return null
+}
+
 module.exports = {
   CONVERSATION_STARTED_EVENT,
   LEAD_QUALIFIED_EVENT,
@@ -841,4 +893,5 @@ module.exports = {
   buildLeadQualifiedEvent,
   buildQuoteEvent,
   buildPurchaseEvent,
+  trackMetaForContactTag,
 }
