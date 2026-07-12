@@ -8,7 +8,7 @@
 
 const { normalizeEvolutionMessages, filterMessagesForGroup, toIsoFromEvolutionTimestamp } = require("./evolutionMessages")
 const { isIndividualJid, ingestCrmMessage, emitCrmEvent, formatConversationRow, phoneFromChatItem } = require("./crmCore")
-const { syncContactProfiles, lookupDirectoryInfo } = require("./crmProfile")
+const { syncContactProfiles, lookupDirectoryInfo, enqueueAvatarFetches } = require("./crmProfile")
 
 const CRM_SYNC_PAGE_SIZE = Number(process.env.CRM_SYNC_PAGE_SIZE || 50)
 const CRM_SYNC_MAX_PAGES_PER_CHAT = Number(process.env.CRM_SYNC_MAX_PAGES_PER_CHAT || 20)
@@ -281,6 +281,12 @@ async function runSyncJob(deps, { userId, instanceName, job }) {
       currentChat: null,
       finishedAt: new Date(),
     })
+    const avatarQueue = await enqueueAvatarFetches(deps, { userId, instanceName, limit: 50 }).catch(() => ({
+      queued: 0,
+    }))
+    if (avatarQueue.queued) {
+      console.log(`[crm-sync] fotos enfileiradas: ${avatarQueue.queued}`)
+    }
     console.log(`[crm-sync] concluído: ${current.doneChats}/${current.totalChats} chats, ${current.totalMessages} msgs (${instanceName})`)
   } catch (err) {
     console.error("[crm-sync] job falhou:", err?.message || err)

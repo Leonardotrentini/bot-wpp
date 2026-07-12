@@ -32,7 +32,7 @@ const {
   normalizeMessageMediaKind,
 } = require("../lib/crmCore")
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
-const { syncContactProfiles } = require("../lib/crmProfile")
+const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw } = require("../lib/crmMedia")
 const { onStageChange, testFlowOnConversation } = require("../lib/crmFlows")
 const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
@@ -1396,6 +1396,37 @@ function createCrmRouter({ io }) {
   router.get("/sync/status", async (req, res) => {
     const job = await getCrmSyncStatus(prisma, req.user.sub)
     return res.json({ job })
+  })
+
+  router.post("/avatars/enqueue", async (req, res) => {
+    try {
+      const userId = req.user.sub
+      const conn = await ensureWhatsAppConnected(prisma, userId)
+      if (!conn) {
+        return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+      }
+
+      const schema = z.object({
+        contactIds: z.array(z.string().min(1).max(64)).optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      })
+      const parsed = schema.safeParse(req.body || {})
+      if (!parsed.success) {
+        return res.status(400).json({ error: "VALIDATION_ERROR", message: "Payload inválido." })
+      }
+
+      const result = await enqueueAvatarFetches(syncDeps, {
+        userId,
+        instanceName: conn.instanceName,
+        contactIds: parsed.data.contactIds,
+        limit: parsed.data.limit,
+      })
+
+      return res.json({ ok: true, ...result })
+    } catch (err) {
+      console.error("[crm] avatars/enqueue:", err?.message || err)
+      return res.status(500).json({ error: "ENQUEUE_FAILED", message: "Falha ao enfileirar fotos de perfil." })
+    }
   })
 
   router.post("/profiles/refresh", async (req, res) => {

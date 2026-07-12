@@ -31,6 +31,7 @@ import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
 import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr } from '../../lib/contactDisplay.js'
+import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
 import {
   buildNoReplyTriggerPatch,
   formatNoReplyDelay,
@@ -1413,6 +1414,7 @@ export function Crm() {
   const [kanbanTags, setKanbanTags] = useState(null)
   const [settingsPanel, setSettingsPanel] = useState(null)
   const [waConnected, setWaConnected] = useState(initial.waConnected)
+  useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !loading })
 
   const loadKanbanData = useCallback(async () => {
     const seq = ++kanbanLoadSeq.current

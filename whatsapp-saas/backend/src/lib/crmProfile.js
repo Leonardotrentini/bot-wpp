@@ -554,6 +554,45 @@ function contactNeedsAvatar(contact) {
   return !contact.avatarUrl
 }
 
+/**
+ * Enfileira busca de foto na Evolution (fila espaçada — não bloqueia).
+ * Prioriza conversas recentes ou IDs explícitos.
+ */
+async function enqueueAvatarFetches(deps, { userId, instanceName, contactIds = null, limit = 25 } = {}) {
+  const { prisma } = deps
+  if (!prisma || !instanceName || !userId) return { queued: 0, candidates: 0 }
+
+  const cap = Math.min(Math.max(1, Number(limit) || 25), 50)
+  let contacts = []
+
+  if (Array.isArray(contactIds) && contactIds.length) {
+    const ids = [...new Set(contactIds.map((id) => String(id).trim()).filter(Boolean))].slice(0, 50)
+    contacts = await prisma.crmContact.findMany({
+      where: { userId, id: { in: ids }, avatarUrl: null },
+      select: { id: true, remoteJid: true },
+    })
+  } else {
+    const convos = await prisma.crmConversation.findMany({
+      where: { userId, contact: { avatarUrl: null } },
+      orderBy: { lastMessageAt: "desc" },
+      take: cap,
+      select: { contact: { select: { id: true, remoteJid: true, avatarUrl: true } } },
+    })
+    contacts = convos.map((row) => row.contact).filter((c) => c && !c.avatarUrl)
+  }
+
+  let queued = 0
+  for (const contact of contacts) {
+    if (queued >= cap) break
+    if (!contact?.remoteJid) continue
+    if (scheduleProfileFetch(deps, { userId, instanceName, remoteJid: contact.remoteJid })) {
+      queued += 1
+    }
+  }
+
+  return { queued, candidates: contacts.length }
+}
+
 module.exports = {
   buildContactDirectory,
   mergeChatsIntoDirectory,
@@ -573,4 +612,5 @@ module.exports = {
   scheduleProfileFetch,
   contactNeedsProfile,
   contactNeedsAvatar,
+  enqueueAvatarFetches,
 }

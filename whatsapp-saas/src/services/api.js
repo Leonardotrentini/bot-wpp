@@ -1019,6 +1019,13 @@ export async function refreshCrmContactAvatar(contactId) {
   return mockResponse({ avatarUrl: null, contact: null })
 }
 
+export async function enqueueCrmAvatars({ contactIds, limit } = {}) {
+  if (resolveUseRealApi()) {
+    return apiClient.post('/crm/avatars/enqueue', { contactIds, limit })
+  }
+  return mockResponse({ ok: true, queued: contactIds?.length || 0, candidates: contactIds?.length || 0 })
+}
+
 export async function refreshCrmProfiles() {
   if (resolveUseRealApi()) return apiClient.post('/crm/profiles/refresh')
   return mockResponse({ ok: true, enriched: 0, queued: 0, directorySize: 0 })

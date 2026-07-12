@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { requestContactAvatarEnqueue } from '../../lib/crmAvatarEnqueue.js'
 
 function initialsFromName(name) {
   const parts = String(name || '')
@@ -17,11 +18,21 @@ const sizeClasses = {
   xl: 'h-28 w-28 text-3xl rounded-full',
 }
 
-export function UserAvatar({ name, src, size = 'md', className = '', contactId, onRefreshAvatar }) {
+export function UserAvatar({
+  name,
+  src,
+  size = 'md',
+  className = '',
+  contactId,
+  onRefreshAvatar,
+  autoFetch = true,
+}) {
   const box = sizeClasses[size] || sizeClasses.md
+  const rootRef = useRef(null)
   const [imgFailed, setImgFailed] = useState(false)
   const [srcOverride, setSrcOverride] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [pendingFetch, setPendingFetch] = useState(false)
 
   const effectiveSrc = srcOverride || src
 
@@ -29,26 +40,67 @@ export function UserAvatar({ name, src, size = 'md', className = '', contactId, 
     setImgFailed(false)
     setSrcOverride(null)
     setRefreshing(false)
+    setPendingFetch(false)
   }, [src, contactId])
 
-  const handleError = useCallback(async () => {
-    if (contactId && onRefreshAvatar && !refreshing) {
-      setRefreshing(true)
-      try {
-        const fresh = await onRefreshAvatar(contactId)
-        if (fresh) {
-          setSrcOverride(fresh)
-          setImgFailed(false)
-          return
-        }
-      } catch {
-        /* fallback para iniciais */
-      } finally {
-        setRefreshing(false)
+  const tryRefresh = useCallback(async () => {
+    if (!contactId || !onRefreshAvatar || refreshing) return false
+    setRefreshing(true)
+    try {
+      const fresh = await onRefreshAvatar(contactId)
+      if (fresh) {
+        setSrcOverride(fresh)
+        setImgFailed(false)
+        setPendingFetch(false)
+        return true
       }
+    } catch {
+      /* fallback para iniciais */
+    } finally {
+      setRefreshing(false)
     }
-    setImgFailed(true)
+    return false
   }, [contactId, onRefreshAvatar, refreshing])
+
+  const handleError = useCallback(async () => {
+    const ok = await tryRefresh()
+    if (!ok) setImgFailed(true)
+  }, [tryRefresh])
+
+  useEffect(() => {
+    if (!autoFetch || !contactId || effectiveSrc || !onRefreshAvatar) return undefined
+
+    const node = rootRef.current
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      requestContactAvatarEnqueue(contactId)
+      setPendingFetch(true)
+      return undefined
+    }
+
+    let visible = false
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0]
+        if (!entry?.isIntersecting || visible) return
+        visible = true
+        setPendingFetch(true)
+        requestContactAvatarEnqueue(contactId)
+        observer.disconnect()
+      },
+      { rootMargin: '80px', threshold: 0.01 },
+    )
+
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [autoFetch, contactId, effectiveSrc, onRefreshAvatar])
+
+  useEffect(() => {
+    if (!pendingFetch || effectiveSrc || !contactId) return undefined
+    const timer = setTimeout(() => {
+      tryRefresh().finally(() => setPendingFetch(false))
+    }, 4500)
+    return () => clearTimeout(timer)
+  }, [pendingFetch, effectiveSrc, contactId, tryRefresh])
 
   if (effectiveSrc && !imgFailed) {
     return (
@@ -63,7 +115,10 @@ export function UserAvatar({ name, src, size = 'md', className = '', contactId, 
 
   return (
     <div
-      className={`${box} flex shrink-0 items-center justify-center border border-accent-500/25 bg-accent-500/10 font-semibold text-accent-300 ${className}`}
+      ref={rootRef}
+      className={`${box} flex shrink-0 items-center justify-center border border-accent-500/25 bg-accent-500/10 font-semibold text-accent-300 ${
+        pendingFetch ? 'animate-pulse' : ''
+      } ${className}`}
       aria-hidden
     >
       {initialsFromName(name)}
