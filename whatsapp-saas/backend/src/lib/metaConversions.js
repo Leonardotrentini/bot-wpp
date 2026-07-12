@@ -25,6 +25,10 @@ const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.
 const VESTO_EVENT_SOURCE_URL = "https://vesto.group/dashboard/chat"
 const META_MESSAGING_CHANNEL = "whatsapp"
 const CRM_EVENT_SOURCE = "Vesto"
+const WABA_DATASET_CACHE_MS = 60 * 60 * 1000
+
+/** cache em memória: wabaId → { datasetId, expiresAt } */
+const wabaDatasetCache = new Map()
 
 const CONVERSATION_STARTED_EVENT = "ConversationStarted"
 const LEAD_QUALIFIED_EVENT = "LeadQualified"
@@ -502,8 +506,38 @@ async function updateMetaLpIntegration(prisma, userId, data) {
   return { integration: formatIntegrationRow(row) }
 }
 
-async function sendMetaEvent(integration, eventPayload, { useTestCode = false } = {}) {
-  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${integration.pixelId}/events?access_token=${encodeURIComponent(integration.accessToken)}`
+async function resolveWabaDatasetId(wabaId, accessToken) {
+  const key = String(wabaId)
+  const cached = wabaDatasetCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.datasetId
+
+  const token = encodeURIComponent(accessToken)
+  const base = `https://graph.facebook.com/${GRAPH_API_VERSION}/${wabaId}/dataset`
+
+  let res = await fetch(`${base}?access_token=${token}`)
+  let json = await res.json().catch(() => ({}))
+  if (!res.ok || !json?.id) {
+    res = await fetch(`${base}?access_token=${token}`, { method: "POST" })
+    json = await res.json().catch(() => ({}))
+  }
+
+  if (!res.ok || !json?.id) {
+    const message = formatMetaError(json)
+    const err = new Error(
+      message ||
+        "Não foi possível obter o dataset da conta WhatsApp. Verifique o WABA e permissões whatsapp_business_manage_events no token.",
+    )
+    err.metaResponse = json
+    throw err
+  }
+
+  wabaDatasetCache.set(key, { datasetId: String(json.id), expiresAt: Date.now() + WABA_DATASET_CACHE_MS })
+  return String(json.id)
+}
+
+async function sendMetaEvent(integration, eventPayload, { useTestCode = false, eventTargetId = null } = {}) {
+  const targetId = eventTargetId || integration.pixelId
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${targetId}/events?access_token=${encodeURIComponent(integration.accessToken)}`
   const body = { data: [eventPayload] }
 
   if (useTestCode && integration.testEventCode) {
@@ -571,7 +605,12 @@ async function dispatchMetaEvent(prisma, {
 
   try {
     const payload = buildPayload({ eventId, mode })
-    const result = await sendMetaEvent(integration, payload)
+    let eventTargetId = integration.pixelId
+    if (mode.mode === "ctwa") {
+      const wabaId = parseFacebookPageId(integration.facebookPageId)
+      eventTargetId = await resolveWabaDatasetId(wabaId, integration.accessToken)
+    }
+    const result = await sendMetaEvent(integration, payload, { eventTargetId })
     await recordIntegrationResult(prisma, userId, { eventName, eventsReceived: result.events_received })
     return {
       sent: true,
@@ -580,6 +619,7 @@ async function dispatchMetaEvent(prisma, {
       value: amount,
       trackingMode: mode.mode,
       eventsReceived: result.events_received,
+      metaTargetId: eventTargetId,
       ...extraReturn,
     }
   } catch (err) {
@@ -818,6 +858,16 @@ async function testMetaIntegration(prisma, userId) {
 
   for (const t of tests) {
     await sendTest(t.name, t.payload)
+  }
+
+  if (integration.facebookPageId) {
+    const wabaId = parseFacebookPageId(integration.facebookPageId)
+    try {
+      const datasetId = await resolveWabaDatasetId(wabaId, integration.accessToken)
+      results.push({ name: "CTWA Dataset (WABA)", ok: true, datasetId })
+    } catch (err) {
+      results.push({ name: "CTWA Dataset (WABA)", ok: false, error: err.message })
+    }
   }
 
   const failed = results.filter((r) => !r.ok)

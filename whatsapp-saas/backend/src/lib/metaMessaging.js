@@ -15,10 +15,46 @@ function parseCustomFields(value) {
   return { ...value }
 }
 
+/** ctwa_clid real da Meta começa com ARA e é longo (Baileys: externalAdReply.ctwaClid). */
+function isValidCtwaClid(value) {
+  const s = String(value || "").trim()
+  if (s.length < 40) return false
+  return /^ARA[A-Za-z0-9_-]+$/.test(s)
+}
+
+function extractCtwaFromBaileysMessage(message) {
+  if (!message || typeof message !== "object") return null
+
+  const parts = [
+    message.extendedTextMessage,
+    message.imageMessage,
+    message.videoMessage,
+    message.documentMessage,
+    message.audioMessage,
+    message.stickerMessage,
+  ].filter(Boolean)
+
+  for (const part of parts) {
+    const ad = part.contextInfo?.externalAdReply
+    if (!ad) continue
+    const clid = ad.ctwaClid || ad.ctwa_clid
+    if (isValidCtwaClid(clid)) return String(clid).trim()
+  }
+
+  const topAd = message.contextInfo?.externalAdReply
+  if (topAd) {
+    const clid = topAd.ctwaClid || topAd.ctwa_clid
+    if (isValidCtwaClid(clid)) return String(clid).trim()
+  }
+
+  return null
+}
+
 function resolveCtwaClid(contact) {
   const custom = parseCustomFields(contact?.customFields)
   const clid = custom.meta?.ctwaClid || custom.ctwaClid
-  return clid ? String(clid).trim() : null
+  const s = clid ? String(clid).trim() : null
+  return isValidCtwaClid(s) ? s : null
 }
 
 function resolveFbclid(contact) {
@@ -53,6 +89,9 @@ function resolveFbc(contact) {
 function extractCtwaClidFromRecord(record) {
   if (!record || typeof record !== "object") return null
 
+  const fromBaileys = extractCtwaFromBaileysMessage(record.message)
+  if (fromBaileys) return fromBaileys
+
   const direct = [
     record?.referral?.ctwa_clid,
     record?.referral?.ctwaClid,
@@ -60,7 +99,7 @@ function extractCtwaClidFromRecord(record) {
     record?.data?.referral?.ctwa_clid,
   ]
   for (const value of direct) {
-    if (value) return String(value).trim()
+    if (isValidCtwaClid(value)) return String(value).trim()
   }
 
   const seen = new Set()
@@ -69,8 +108,8 @@ function extractCtwaClidFromRecord(record) {
     if (seen.has(node)) return null
     seen.add(node)
 
-    if (typeof node.ctwa_clid === "string" && node.ctwa_clid.trim()) return node.ctwa_clid.trim()
-    if (typeof node.ctwaClid === "string" && node.ctwaClid.trim()) return node.ctwaClid.trim()
+    if (isValidCtwaClid(node.ctwa_clid)) return String(node.ctwa_clid).trim()
+    if (isValidCtwaClid(node.ctwaClid)) return String(node.ctwaClid).trim()
 
     for (const value of Object.values(node)) {
       const found = walk(value, depth + 1)
@@ -133,6 +172,7 @@ async function storeContactCtwaClid(prisma, contact, ctwaClid) {
 module.exports = {
   parseFacebookPageId,
   parseCustomFields,
+  isValidCtwaClid,
   resolveCtwaClid,
   resolveFbclid,
   resolveFbp,

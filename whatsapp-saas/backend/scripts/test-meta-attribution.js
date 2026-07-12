@@ -10,6 +10,7 @@ const {
   validateRef,
   normalizeHostname,
 } = require("../src/lib/metaAttributionLead")
+const { isValidCtwaClid, extractCtwaClidFromRecord } = require("../src/lib/metaMessaging")
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg)
@@ -35,6 +36,27 @@ function testRef() {
   assert(normalizeHostname("https://WWW.Example.com/path") === "example.com", "normalize")
 }
 
+function testCtwaClid() {
+  const valid =
+    "ARAkLkA8rmlFeiCktEJQ-QTwRiyYHAFDLMNDBH0CD3qpjd0HR4irJ6LEkR7JwFF4XvnO2E4Nx0-eM-GABDLOPaOdRMv-_zfUQ2a"
+  assert(isValidCtwaClid(valid), "valid ctwa_clid")
+  assert(!isValidCtwaClid("short"), "reject short")
+  assert(!isValidCtwaClid("notARAvalid123456789012345678901234567890"), "reject non-ARA")
+
+  const record = {
+    message: {
+      extendedTextMessage: {
+        text: "Oi",
+        contextInfo: {
+          externalAdReply: { ctwaClid: valid },
+        },
+      },
+    },
+  }
+  assert(extractCtwaClidFromRecord(record) === valid, "baileys externalAdReply")
+}
+
 testDomains()
 testRef()
+testCtwaClid()
 console.log("✓ Meta attribution unit tests OK")

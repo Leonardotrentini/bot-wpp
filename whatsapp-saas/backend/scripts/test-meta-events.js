@@ -29,7 +29,7 @@ const mockContactCtwa = {
   id: "contact-ctwa-1",
   phone: "554796747378",
   pushName: "Lead CTWA",
-  customFields: { meta: { ctwaClid: "ARAkTestCtwaClid123456789" } },
+  customFields: { meta: { ctwaClid: "ARAkTestCtwaClid12345678901234567890123456789012" } },
 }
 
 const mockIntegration = {
