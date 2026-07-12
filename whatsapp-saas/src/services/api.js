@@ -574,7 +574,38 @@ export async function saveMetaIntegration(payload) {
 
 export async function testMetaIntegration() {
   if (resolveUseRealApi()) return apiClient.post('/integrations/meta/test')
-  return mockResponse({ ok: true, message: 'Evento de teste enviado (simulado).' })
+  return mockResponse({ ok: true, message: 'Eventos de teste enviados (simulado).' })
+}
+
+export async function getMetaAdsDashboard(period = '7d') {
+  if (resolveUseRealApi()) return apiClient.get('/integrations/meta/ads', { params: { period } })
+  return mockResponse({
+    ok: true,
+    period,
+    account: { id: 'act_000', name: 'Conta demo', currency: 'BRL' },
+    summary: { spend: 1250.5, impressions: 45000, clicks: 890, cpc: 1.4 },
+    campaigns: [
+      { id: '1', name: 'Campanha LP WhatsApp', spend: 800, impressions: 30000, clicks: 520, cpc: 1.54 },
+      { id: '2', name: 'CTWA Mensagem', spend: 450.5, impressions: 15000, clicks: 370, cpc: 1.22 },
+    ],
+    creatives: [
+      {
+        id: 'ad-1',
+        name: 'Criativo vídeo 01',
+        status: 'ACTIVE',
+        campaignName: 'Campanha LP WhatsApp',
+        thumbnailUrl: null,
+        title: 'Fale conosco no WhatsApp',
+        body: 'Orçamento rápido para seu projeto.',
+      },
+    ],
+    syncedAt: new Date().toISOString(),
+  })
+}
+
+export async function testMetaAdsConnection() {
+  if (resolveUseRealApi()) return apiClient.post('/integrations/meta/ads/test')
+  return mockResponse({ ok: true, message: 'Conta de anúncios conectada (simulado).' })
 }
 
 export async function connectWhatsApp() {

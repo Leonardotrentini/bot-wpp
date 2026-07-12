@@ -10,7 +10,9 @@ const {
   getMetaIntegration,
   upsertMetaIntegration,
   testMetaIntegration,
+  getMetaIntegrationCredentials,
 } = require("../lib/metaConversions")
+const { fetchMetaAdsDashboard, testMetaAdsConnection } = require("../lib/metaAds")
 
 function createIntegrationsRouter() {
   const router = express.Router()
@@ -46,6 +48,9 @@ function createIntegrationsRouter() {
       sendQuotes: z.boolean().optional(),
       sendPurchases: z.boolean().optional(),
       testEventCode: z.string().max(64).optional().nullable(),
+      adAccountId: z.string().max(32).optional().nullable(),
+      adsAccessToken: z.string().max(512).optional().nullable(),
+      adsEnabled: z.boolean().optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
@@ -62,6 +67,42 @@ function createIntegrationsRouter() {
 
   router.post("/meta/test", async (req, res) => {
     const result = await testMetaIntegration(prisma, req.user.sub)
+    if (result.error === "NOT_CONFIGURED") {
+      return res.status(400).json({ error: result.error, message: result.message })
+    }
+    if (result.error) {
+      return res.status(502).json({ error: result.error, message: result.message })
+    }
+    return res.json(result)
+  })
+
+  router.get("/meta/ads", async (req, res) => {
+    const period = String(req.query.period || "7d")
+    const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
+    if (!integration?.adsEnabled) {
+      return res.status(400).json({
+        error: "NOT_ENABLED",
+        message: "Ative a leitura de anúncios e salve a integração.",
+      })
+    }
+
+    const result = await fetchMetaAdsDashboard(prisma, req.user.sub, integration, { period })
+    if (result.error === "NOT_CONFIGURED") {
+      return res.status(400).json({ error: result.error, message: result.message })
+    }
+    if (result.error) {
+      return res.status(502).json({ error: result.error, message: result.message })
+    }
+    return res.json(result)
+  })
+
+  router.post("/meta/ads/test", async (req, res) => {
+    const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
+    if (!integration) {
+      return res.status(400).json({ error: "NOT_CONFIGURED", message: "Salve a integração Meta antes de testar." })
+    }
+
+    const result = await testMetaAdsConnection(prisma, req.user.sub, integration)
     if (result.error === "NOT_CONFIGURED") {
       return res.status(400).json({ error: result.error, message: result.message })
     }

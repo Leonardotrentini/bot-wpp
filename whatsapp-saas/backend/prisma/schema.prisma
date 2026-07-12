@@ -590,9 +590,14 @@ model MetaIntegration {
   sendQuotes      Boolean   @default(true)
   sendPurchases   Boolean   @default(true)
   testEventCode   String?
+  adAccountId     String?
+  adsAccessToken  String?
+  adsEnabled      Boolean   @default(false)
   lastEventAt     DateTime?
   lastEventName   String?
   lastError       String?
+  lastAdsSyncAt   DateTime?
+  lastAdsError    String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 }

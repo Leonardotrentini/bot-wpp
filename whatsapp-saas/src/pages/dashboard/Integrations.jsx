@@ -9,6 +9,7 @@ import { useToast } from '../../contexts/ToastContext.jsx'
 import { getMetaIntegration, saveMetaIntegration, testMetaIntegration } from '../../services/api.js'
 import { initMetaPixel } from '../../lib/metaPixel.js'
 import { MetaIntegrationGuide } from '../../components/integrations/MetaIntegrationGuide.jsx'
+import { MetaAdsPanel } from '../../components/integrations/MetaAdsPanel.jsx'
 import { UtmUrlGenerator } from '../../components/integrations/UtmUrlGenerator.jsx'
 
 function formatWhen(iso) {
@@ -35,6 +36,9 @@ export function Integrations() {
     sendQuotes: true,
     sendPurchases: true,
     testEventCode: '',
+    adAccountId: '',
+    adsAccessToken: '',
+    adsEnabled: false,
   })
   const [meta, setMeta] = useState(null)
 
@@ -53,6 +57,9 @@ export function Integrations() {
           sendQuotes: integration.sendQuotes !== false,
           sendPurchases: integration.sendPurchases !== false,
           testEventCode: integration.testEventCode || '',
+          adAccountId: integration.adAccountId || '',
+          adsAccessToken: '',
+          adsEnabled: integration.adsEnabled === true,
         })
         if (integration.enabled && integration.pixelId) {
           initMetaPixel(integration.pixelId)
@@ -79,15 +86,21 @@ export function Integrations() {
         sendQuotes: form.sendQuotes,
         sendPurchases: form.sendPurchases,
         testEventCode: form.testEventCode.trim() || null,
+        adAccountId: form.adAccountId.trim() || null,
+        adsEnabled: form.adsEnabled,
       }
       if (form.accessToken.trim()) {
         payload.accessToken = form.accessToken.trim()
       }
+      if (form.adsAccessToken.trim()) {
+        payload.adsAccessToken = form.adsAccessToken.trim()
+      }
       const { data } = await saveMetaIntegration(payload)
       setMeta(data.integration)
-      setForm((f) => ({ ...f, accessToken: '' }))
+      setForm((f) => ({ ...f, accessToken: '', adsAccessToken: '' }))
       if (data.integration?.pixelId) initMetaPixel(data.integration.pixelId)
       toast.success('Integração Meta salva.')
+      await load()
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao salvar integração.')
     } finally {
@@ -295,6 +308,8 @@ export function Integrations() {
           </div>
 
           <UtmUrlGenerator />
+
+          <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={load} />
 
           <MetaIntegrationGuide pixelId={form.pixelId || meta?.pixelId} />
         </div>

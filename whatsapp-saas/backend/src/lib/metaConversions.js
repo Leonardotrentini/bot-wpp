@@ -13,6 +13,7 @@
  */
 
 const crypto = require("crypto")
+const { formatAdsFields, normalizeAdAccountId } = require("./metaAds")
 const { parseFacebookPageId, resolveCtwaClid, resolveFbc } = require("./metaMessaging")
 
 const GRAPH_API_VERSION = "v22.0"
@@ -281,6 +282,7 @@ function formatIntegrationRow(row) {
     lastError: row.lastError || null,
     lastSuccess: row.lastError ? null : row.lastEventAt ? true : null,
     updatedAt: row.updatedAt.toISOString(),
+    ...formatAdsFields(row),
   }
 }
 
@@ -310,6 +312,13 @@ async function upsertMetaIntegration(prisma, userId, data) {
     data.facebookPageId != null ? String(data.facebookPageId).trim() : existing?.facebookPageId || ""
   const facebookPageId = facebookPageIdRaw.replace(/\D/g, "") || null
 
+  const adAccountIdRaw =
+    data.adAccountId != null ? String(data.adAccountId).trim() : existing?.adAccountId || ""
+  const adAccountId = adAccountIdRaw ? normalizeAdAccountId(adAccountIdRaw) : null
+
+  const adsAccessTokenRaw = data.adsAccessToken != null ? String(data.adsAccessToken).trim() : null
+  const adsAccessToken = adsAccessTokenRaw || existing?.adsAccessToken || null
+
   const row = await prisma.metaIntegration.upsert({
     where: { userId },
     create: {
@@ -321,6 +330,9 @@ async function upsertMetaIntegration(prisma, userId, data) {
       sendQuotes: data.sendQuotes !== false,
       sendPurchases: data.sendPurchases !== false,
       testEventCode: data.testEventCode ? String(data.testEventCode).trim() : null,
+      adAccountId,
+      adsAccessToken,
+      adsEnabled: data.adsEnabled === true,
     },
     update: {
       pixelId,
@@ -330,6 +342,9 @@ async function upsertMetaIntegration(prisma, userId, data) {
       sendQuotes: data.sendQuotes !== false,
       sendPurchases: data.sendPurchases !== false,
       testEventCode: data.testEventCode != null ? String(data.testEventCode).trim() || null : undefined,
+      adAccountId: data.adAccountId != null ? adAccountId : undefined,
+      adsAccessToken: data.adsAccessToken != null ? adsAccessToken || null : undefined,
+      adsEnabled: data.adsEnabled != null ? data.adsEnabled === true : undefined,
     },
   })
 
