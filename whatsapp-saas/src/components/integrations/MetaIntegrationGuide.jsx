@@ -123,7 +123,7 @@ export function MetaIntegrationGuide({ pixelId }) {
                 <code className="text-stone-400">event_source_url</code>: https://vesto.group/dashboard/chat
               </li>
               <li>Telefone hasheado + external_id do contato</li>
-              <li>CTWA: ctwa_clid + page_id · CRM: fbc quando disponível</li>
+              <li>CTWA: ctwa_clid + whatsapp_business_account_id (WABA) · CRM: fbc quando disponível</li>
             </ul>
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-left text-[11px]">

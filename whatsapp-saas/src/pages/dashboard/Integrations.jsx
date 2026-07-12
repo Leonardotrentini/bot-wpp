@@ -254,14 +254,15 @@ export function Integrations() {
             onChange={(e) => setForm((f) => ({ ...f, pixelId: e.target.value }))}
           />
           <Input
-            label="ID da Página do Facebook"
-            placeholder="Ex.: 102035112882607"
+            label="ID da conta WhatsApp Business (WABA)"
+            placeholder="Ex.: 123456789012345"
             value={form.facebookPageId}
             onChange={(e) => setForm((f) => ({ ...f, facebookPageId: e.target.value }))}
           />
           <p className="-mt-2 text-xs text-stone-500">
-            Opcional — necessário apenas para leads que vieram de anúncio <strong className="text-stone-400">Click-to-WhatsApp</strong>.
-            Campanhas <strong className="text-stone-400">LP → WhatsApp</strong> usam modo CRM automático (não precisa de page_id).
+            Obrigatório para anúncios <strong className="text-stone-400">Click-to-WhatsApp</strong> — não use o ID da
+            Página do Facebook. Encontre em Meta Business Suite → Contas do WhatsApp → Configurações → ID da conta.
+            Campanhas <strong className="text-stone-400">LP → WhatsApp</strong> não precisam deste campo.
           </p>
           <Input
             label="Token da API de Conversões"

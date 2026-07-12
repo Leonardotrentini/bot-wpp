@@ -9,7 +9,7 @@
  *
  * Modos:
  * - CRM (LP/orgânico): action_source system_generated + fbc quando disponível
- * - CTWA (anúncio WhatsApp): action_source business_messaging + ctwa_clid + page_id
+ * - CTWA (anúncio WhatsApp): action_source business_messaging + ctwa_clid + whatsapp_business_account_id
  *   (Meta só aceita event_name da allowlist — não custom; ver CTWA_META_EVENT_NAMES)
  */
 
@@ -155,15 +155,18 @@ function buildCrmUserData(contact, { userId }) {
   return userData
 }
 
-function buildCtwaUserData(contact, { userId, facebookPageId, ctwaClid }) {
-  const pageId = parseFacebookPageId(facebookPageId)
-  if (!pageId) {
-    const err = new Error("Configure o ID da Página do Facebook para leads de anúncio Click-to-WhatsApp.")
-    err.code = "MISSING_PAGE_ID"
+function buildCtwaUserData(contact, { userId, whatsappBusinessAccountId, ctwaClid }) {
+  const wabaId = parseFacebookPageId(whatsappBusinessAccountId)
+  if (!wabaId) {
+    const err = new Error(
+      "Configure o ID da conta WhatsApp Business (WABA) em Integrações — obrigatório para anúncios Click-to-WhatsApp.",
+    )
+    err.code = "MISSING_WABA_ID"
     throw err
   }
   const userData = ensureUserData(contact, { userId })
-  userData.page_id = pageId
+  // CTWA WhatsApp: Meta exige whatsapp_business_account_id + ctwa_clid (não page_id — erro 2804072).
+  userData.whatsapp_business_account_id = wabaId
   userData.ctwa_clid = ctwaClid
   return userData
 }
@@ -196,7 +199,7 @@ function buildFunnelEvent({
       messaging_channel: META_MESSAGING_CHANNEL,
       user_data: buildCtwaUserData(contact, {
         userId,
-        facebookPageId: integration.facebookPageId,
+        whatsappBusinessAccountId: integration.facebookPageId,
         ctwaClid: mode.ctwaClid,
       }),
     }
@@ -551,7 +554,8 @@ async function dispatchMetaEvent(prisma, {
   const eventId = `${eventIdPrefix}-${contact.id}-${Date.now()}`
 
   if (mode.mode === "ctwa" && !integration.facebookPageId) {
-    const message = "Lead veio de anúncio Click-to-WhatsApp. Configure o ID da Página do Facebook em Integrações."
+    const message =
+      "Lead veio de anúncio Click-to-WhatsApp. Configure o ID da conta WhatsApp Business (WABA) em Integrações."
     await recordIntegrationResult(prisma, userId, { eventName, error: message })
     return {
       sent: false,
@@ -560,7 +564,7 @@ async function dispatchMetaEvent(prisma, {
       value: amount,
       trackingMode: mode.mode,
       error: message,
-      reason: "missing_page_id",
+      reason: "missing_waba_id",
       ...extraReturn,
     }
   }
