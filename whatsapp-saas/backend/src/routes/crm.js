@@ -1408,7 +1408,7 @@ function createCrmRouter({ io }) {
 
       const schema = z.object({
         contactIds: z.array(z.string().min(1).max(64)).optional(),
-        limit: z.number().int().min(1).max(50).optional(),
+        limit: z.number().int().min(1).max(30).optional(),
       })
       const parsed = schema.safeParse(req.body || {})
       if (!parsed.success) {

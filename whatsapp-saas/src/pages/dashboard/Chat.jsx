@@ -35,7 +35,7 @@ import { useAuth } from '../../contexts/AuthContext.jsx'
 import { onSocketEvent } from '../../services/socket.js'
 import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
 import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
-import { enqueueAvatarsFromConversations } from '../../lib/crmAvatarEnqueue.js'
+import { runBackgroundAvatarSweep } from '../../lib/crmAvatarEnqueue.js'
 import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingModal.jsx'
 import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
 import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
@@ -672,7 +672,7 @@ export function Chat() {
       if (job?.status === 'done') {
         toastRef.current.success('Sincronização concluída.')
         loadConversationsRef.current()
-        enqueueAvatarsFromConversations(conversationsRef.current, { max: 60 })
+        runBackgroundAvatarSweep(conversationsRef.current)
       }
     })
     const offHandoff = onSocketEvent('crm:handoff', () => {

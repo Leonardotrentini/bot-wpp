@@ -444,8 +444,31 @@ function queueStaleAvatarRefreshes(deps, { userId, instanceName, limit = PROFILE
 
 const lastAttemptByKey = new Map()
 const avatarAttemptByKey = new Map()
+const queuedCountByUser = new Map()
+const enqueueApiTimestamps = new Map()
 let fetchChain = Promise.resolve()
-let queuedCount = 0
+
+const ENQUEUE_API_MAX_PER_MIN = Number(process.env.CRM_AVATAR_ENQUEUE_MAX_PER_MIN || 12)
+
+function getQueuedCount(userId) {
+  return queuedCountByUser.get(userId) || 0
+}
+
+function bumpQueuedCount(userId, delta) {
+  const next = Math.max(0, getQueuedCount(userId) + delta)
+  if (next === 0) queuedCountByUser.delete(userId)
+  else queuedCountByUser.set(userId, next)
+}
+
+function canAcceptEnqueueApi(userId) {
+  const now = Date.now()
+  const prev = enqueueApiTimestamps.get(userId) || []
+  const recent = prev.filter((ts) => now - ts < 60_000)
+  if (recent.length >= ENQUEUE_API_MAX_PER_MIN) return false
+  recent.push(now)
+  enqueueApiTimestamps.set(userId, recent)
+  return true
+}
 
 /**
  * Agenda uma busca de perfil para um contato sem nome/foto (fila com espaçamento).
@@ -462,10 +485,10 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid, avatarRef
 
   const last = attemptMap.get(key) || 0
   if (Date.now() - last < retryMs) return false
-  if (queuedCount >= PROFILE_QUEUE_MAX) return false
+  if (getQueuedCount(userId) >= PROFILE_QUEUE_MAX) return false
 
   attemptMap.set(key, Date.now())
-  queuedCount += 1
+  bumpQueuedCount(userId, 1)
 
   fetchChain = fetchChain
     .then(async () => {
@@ -535,7 +558,7 @@ function scheduleProfileFetch(deps, { userId, instanceName, remoteJid, avatarRef
       console.warn(`[crm-profile] fetch ${remoteJid}:`, err?.message || err)
     })
     .finally(() => {
-      queuedCount -= 1
+      bumpQueuedCount(userId, -1)
     })
 
   return true
@@ -560,13 +583,27 @@ function contactNeedsAvatar(contact) {
  */
 async function enqueueAvatarFetches(deps, { userId, instanceName, contactIds = null, limit = 25 } = {}) {
   const { prisma } = deps
-  if (!prisma || !instanceName || !userId) return { queued: 0, candidates: 0 }
+  if (!prisma || !instanceName || !userId) return { queued: 0, candidates: 0, skipped: "invalid" }
 
-  const cap = Math.min(Math.max(1, Number(limit) || 25), 50)
+  if (!canAcceptEnqueueApi(userId)) {
+    return { queued: 0, candidates: 0, skipped: "rate_limited" }
+  }
+
+  if (getQueuedCount(userId) >= PROFILE_QUEUE_MAX) {
+    return { queued: 0, candidates: 0, skipped: "queue_full" }
+  }
+
+  const cap = Math.min(Math.max(1, Number(limit) || 25), 30)
+  const queueBudget = Math.max(0, PROFILE_QUEUE_MAX - getQueuedCount(userId))
+  const effectiveCap = Math.min(cap, queueBudget)
+  if (effectiveCap === 0) {
+    return { queued: 0, candidates: 0, skipped: "queue_full" }
+  }
+
   let contacts = []
 
   if (Array.isArray(contactIds) && contactIds.length) {
-    const ids = [...new Set(contactIds.map((id) => String(id).trim()).filter(Boolean))].slice(0, 50)
+    const ids = [...new Set(contactIds.map((id) => String(id).trim()).filter(Boolean))].slice(0, 30)
     contacts = await prisma.crmContact.findMany({
       where: { userId, id: { in: ids }, avatarUrl: null },
       select: { id: true, remoteJid: true },
@@ -575,7 +612,7 @@ async function enqueueAvatarFetches(deps, { userId, instanceName, contactIds = n
     const convos = await prisma.crmConversation.findMany({
       where: { userId, contact: { avatarUrl: null } },
       orderBy: { lastMessageAt: "desc" },
-      take: cap,
+      take: effectiveCap,
       select: { contact: { select: { id: true, remoteJid: true, avatarUrl: true } } },
     })
     contacts = convos.map((row) => row.contact).filter((c) => c && !c.avatarUrl)
@@ -583,7 +620,7 @@ async function enqueueAvatarFetches(deps, { userId, instanceName, contactIds = n
 
   let queued = 0
   for (const contact of contacts) {
-    if (queued >= cap) break
+    if (queued >= effectiveCap) break
     if (!contact?.remoteJid) continue
     if (scheduleProfileFetch(deps, { userId, instanceName, remoteJid: contact.remoteJid })) {
       queued += 1

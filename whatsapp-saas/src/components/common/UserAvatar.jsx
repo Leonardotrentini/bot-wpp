@@ -43,6 +43,12 @@ export function UserAvatar({
     setPendingFetch(false)
   }, [src, contactId])
 
+  useEffect(() => {
+    if (!pendingFetch || effectiveSrc) return undefined
+    const timer = setTimeout(() => setPendingFetch(false), 45000)
+    return () => clearTimeout(timer)
+  }, [pendingFetch, effectiveSrc])
+
   const tryRefresh = useCallback(async () => {
     if (!contactId || !onRefreshAvatar || refreshing) return false
     setRefreshing(true)
@@ -93,14 +99,6 @@ export function UserAvatar({
     observer.observe(node)
     return () => observer.disconnect()
   }, [autoFetch, contactId, effectiveSrc, onRefreshAvatar])
-
-  useEffect(() => {
-    if (!pendingFetch || effectiveSrc || !contactId) return undefined
-    const timer = setTimeout(() => {
-      tryRefresh().finally(() => setPendingFetch(false))
-    }, 4500)
-    return () => clearTimeout(timer)
-  }, [pendingFetch, effectiveSrc, contactId, tryRefresh])
 
   if (effectiveSrc && !imgFailed) {
     return (

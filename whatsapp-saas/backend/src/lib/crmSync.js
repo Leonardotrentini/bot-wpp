@@ -281,7 +281,7 @@ async function runSyncJob(deps, { userId, instanceName, job }) {
       currentChat: null,
       finishedAt: new Date(),
     })
-    const avatarQueue = await enqueueAvatarFetches(deps, { userId, instanceName, limit: 50 }).catch(() => ({
+    const avatarQueue = await enqueueAvatarFetches(deps, { userId, instanceName, limit: 30 }).catch(() => ({
       queued: 0,
     }))
     if (avatarQueue.queued) {
