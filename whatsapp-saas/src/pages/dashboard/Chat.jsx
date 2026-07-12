@@ -327,31 +327,29 @@ export function Chat() {
 
   const monitoredGroupCount = monitoredGroups.length
 
-  const displayedConversations = useMemo(() => {
-    let rows = chatList
-
-    if (groupsOnly) {
-      rows = rows.filter((c) => c.kind === 'group')
-    } else if (unidentifiedOnly) {
-      rows = rows.filter((c) => c.kind !== 'group' && contactNeedsIdentification(c.contact))
-    }
-
-    if (tagFilter || stageFilter) {
-      rows = rows.filter((c) => c.kind !== 'group')
-    }
-
+  const displayedGroups = useMemo(() => {
+    let rows = monitoredGroups.map(groupToListItem)
     const term = query.trim().toLowerCase()
     if (term) {
       rows = rows.filter((c) => {
-        if (c.kind !== 'group') return true
         const name = (c.contact?.name || '').toLowerCase()
         const preview = (c.lastMessagePreview || '').toLowerCase()
         return name.includes(term) || preview.includes(term)
       })
     }
+    return sortChatListItems(rows)
+  }, [monitoredGroups, query])
 
+  const displayedDirect = useMemo(() => {
+    if (groupsOnly) return []
+    let rows = conversations
+    if (unidentifiedOnly) {
+      rows = rows.filter((c) => contactNeedsIdentification(c.contact))
+    }
     return rows
-  }, [chatList, groupsOnly, unidentifiedOnly, tagFilter, stageFilter, query])
+  }, [conversations, groupsOnly, unidentifiedOnly])
+
+  const hasListItems = groupsOnly ? displayedGroups.length > 0 : displayedGroups.length + displayedDirect.length > 0
 
   const unidentifiedCount = useMemo(
     () => conversations.filter((c) => contactNeedsIdentification(c.contact)).length,
@@ -398,6 +396,17 @@ export function Chat() {
   }, [listParams])
 
   loadConversationsRef.current = loadConversations
+
+  useEffect(() => {
+    const refreshGroups = () => {
+      getGroups()
+        .then(({ data }) => setMonitoredGroups((data.groups || []).filter(isMonitoredGroup)))
+        .catch(() => {})
+    }
+    refreshGroups()
+    const id = setInterval(refreshGroups, 30000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     const cached = getCachedConversationsList(listParams)
@@ -1198,7 +1207,7 @@ export function Chat() {
             <div className="flex justify-center py-10">
               <Spinner />
             </div>
-          ) : displayedConversations.length === 0 ? (
+          ) : !hasListItems ? (
             <div className="px-4 py-10 text-center">
               <MessageSquare className="mx-auto h-8 w-8 text-stone-600" />
               <p className="mt-2 text-sm text-stone-400">
@@ -1210,16 +1219,47 @@ export function Chat() {
               </p>
             </div>
           ) : (
-            displayedConversations.map((c) => (
-              <ConversationListItem
-                key={c.id}
-                conversation={c}
-                active={activeId}
-                onOpen={openConversation}
-                onPrefetch={prefetchConversation}
-                onRefreshAvatar={refreshAvatar}
-              />
-            ))
+            <>
+              {displayedGroups.length > 0 && (
+                <>
+                  {!groupsOnly && (
+                    <div className="border-b border-brand-800/80 bg-brand-950/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-sky-400/90">
+                      <Users className="mr-1 inline h-3 w-3" />
+                      Grupos ativos ({displayedGroups.length})
+                    </div>
+                  )}
+                  {displayedGroups.map((c) => (
+                    <ConversationListItem
+                      key={c.id}
+                      conversation={c}
+                      active={activeId}
+                      onOpen={openConversation}
+                      onPrefetch={prefetchConversation}
+                      onRefreshAvatar={refreshAvatar}
+                    />
+                  ))}
+                </>
+              )}
+              {!groupsOnly && displayedDirect.length > 0 && (
+                <>
+                  {displayedGroups.length > 0 && (
+                    <div className="border-b border-brand-800/80 bg-brand-950/40 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-stone-500">
+                      {unidentifiedOnly ? `Sem identificação (${displayedDirect.length})` : 'Conversas 1:1'}
+                    </div>
+                  )}
+                  {displayedDirect.map((c) => (
+                    <ConversationListItem
+                      key={c.id}
+                      conversation={c}
+                      active={activeId}
+                      onOpen={openConversation}
+                      onPrefetch={prefetchConversation}
+                      onRefreshAvatar={refreshAvatar}
+                    />
+                  ))}
+                </>
+              )}
+            </>
           )}
         </div>
       </div>

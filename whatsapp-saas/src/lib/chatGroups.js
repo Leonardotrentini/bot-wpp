@@ -18,13 +18,15 @@ export function parseGroupChatId(id) {
 }
 
 export function groupToListItem(group) {
+  const lastMessageAt =
+    group.lastMessageAt || group.messagesLastSyncAt || group.activatedAt || null
   return {
     id: groupChatId(group.id),
     kind: 'group',
     groupJid: group.id,
     remoteJid: group.id,
-    lastMessageAt: group.lastMessageAt || null,
-    lastMessagePreview: group.lastMessage || '',
+    lastMessageAt,
+    lastMessagePreview: group.lastMessage || 'Grupo ativo',
     lastMessageFromMe: false,
     unreadCount: 0,
     aiEnabled: false,
