@@ -158,6 +158,11 @@ export async function getAdminOrganizations(params = {}) {
   return apiClient.get('/admin/organizations', { params })
 }
 
+export async function getAdminOrganization(orgId) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.get(`/admin/organizations/${encodeURIComponent(orgId)}`)
+}
+
 export async function createAdminOrganization(body) {
   if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
   return apiClient.post('/admin/organizations', body)

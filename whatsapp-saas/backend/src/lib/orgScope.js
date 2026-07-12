@@ -45,7 +45,22 @@ async function backfillAllUserOrganizations() {
     created += 1
   }
 
-  return { scanned: users.length, created }
+  const { removed } = await cleanupEmptyOrganizations()
+  return { scanned: users.length, created, removed }
+}
+
+/** Remove empresas órfãs (sem membros), ex.: duplicatas criadas por engano. */
+async function cleanupEmptyOrganizations() {
+  const empty = await prisma.organization.findMany({
+    where: { members: { none: {} } },
+    select: { id: true },
+  })
+  if (!empty.length) return { removed: 0 }
+
+  await prisma.organization.deleteMany({
+    where: { id: { in: empty.map((e) => e.id) } },
+  })
+  return { removed: empty.length }
 }
 
 async function getOrgMemberIds(organizationId) {
@@ -133,6 +148,7 @@ async function loadAuthContext(userId) {
 module.exports = {
   ensureUserOrganization,
   backfillAllUserOrganizations,
+  cleanupEmptyOrganizations,
   getOrgMemberIds,
   resolveDataScope,
   readUserFilter,

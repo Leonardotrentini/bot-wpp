@@ -15,6 +15,7 @@ import {
   deleteAdminOrgMember,
   deleteAdminUser,
   getAdminOrganizations,
+  getAdminOrganization,
   getAdminPlans,
   getAdminUsers,
   impersonateAdminUser,
@@ -64,8 +65,7 @@ export function Admin() {
   const [memberEdits, setMemberEdits] = useState({})
   const [savingMemberId, setSavingMemberId] = useState(null)
 
-  function openManageOrg(org) {
-    setManageOrg(org)
+  function initMemberEdits(org) {
     setMemberEdits(
       Object.fromEntries(
         (org.members || []).map((m) => [
@@ -76,6 +76,18 @@ export function Admin() {
     )
   }
 
+  async function openManageOrg(org) {
+    try {
+      const { data } = await getAdminOrganization(org.id)
+      const fresh = data.organization
+      setManageOrg(fresh)
+      initMemberEdits(fresh)
+    } catch {
+      setManageOrg(org)
+      initMemberEdits(org)
+    }
+  }
+
   function updateMemberEdit(userId, patch) {
     setMemberEdits((prev) => ({
       ...prev,
@@ -84,20 +96,16 @@ export function Admin() {
   }
 
   async function refreshManageOrg(orgId) {
-    const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
-    const list = data.organizations || []
+      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
+    const list = (data.organizations || []).sort((a, b) => {
+      if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount
+      return a.name.localeCompare(b.name, 'pt-BR')
+    })
     setOrgs(list)
     const updated = list.find((o) => o.id === orgId)
     if (updated) {
       setManageOrg(updated)
-      setMemberEdits(
-        Object.fromEntries(
-          (updated.members || []).map((m) => [
-            m.userId,
-            { name: m.name || '', email: m.email || '', password: '', role: m.role },
-          ]),
-        ),
-      )
+      initMemberEdits(updated)
     }
     await load()
   }
@@ -159,7 +167,11 @@ export function Admin() {
     try {
       await backfillAdminOrganizations().catch(() => {})
       const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
-      setOrgs(data.organizations || [])
+      const list = (data.organizations || []).sort((a, b) => {
+        if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount
+        return a.name.localeCompare(b.name, 'pt-BR')
+      })
+      setOrgs(list)
     } catch (e) {
       toast.error(e.response?.data?.message || 'Não foi possível carregar empresas.')
       setOrgs([])
@@ -601,7 +613,12 @@ export function Admin() {
                   <tbody className="divide-y divide-brand-800/80">
                     {orgs.map((org) => (
                       <tr key={org.id} className="text-stone-300 hover:bg-white/[0.03]">
-                        <td className="px-4 py-3 font-medium text-stone-100">{org.name}</td>
+                        <td className="px-4 py-3 font-medium text-stone-100">
+                          {org.name}
+                          {org.memberCount === 0 && (
+                            <span className="ml-2 text-xs text-amber-500">(vazia)</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-stone-400">
                           {org.owner ? `${org.owner.name} (${org.owner.email})` : '—'}
                         </td>

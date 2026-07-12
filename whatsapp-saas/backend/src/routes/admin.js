@@ -30,6 +30,41 @@ function mapAdminUserRow(u) {
   }
 }
 
+function mapAdminOrganization(org) {
+  return {
+    id: org.id,
+    name: org.name,
+    createdAt: org.createdAt.toISOString(),
+    members: org.members.map((m) => ({
+      userId: m.userId,
+      name: m.user.name,
+      email: m.user.email,
+      role: m.role,
+      joinedAt: m.joinedAt.toISOString(),
+      whatsappConnected: Boolean(m.user.whatsappConnection?.connected),
+      whatsappPhone: m.user.whatsappConnection?.phone || null,
+    })),
+    memberCount: org.members.length,
+    owner: org.members.find((m) => m.role === "OWNER")?.user || null,
+  }
+}
+
+const orgInclude = {
+  members: {
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          whatsappConnection: { select: { connected: true, phone: true } },
+        },
+      },
+    },
+    orderBy: [{ role: "asc" }, { joinedAt: "asc" }],
+  },
+}
+
 router.get("/users", authMiddleware, requireAdmin, async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page || "1", 10) || 1)
   const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize || "20", 10) || 20))
@@ -196,45 +231,25 @@ router.get("/organizations", authMiddleware, requireAdmin, async (req, res) => {
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize,
-      include: {
-        members: {
-          include: {
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                whatsappConnection: { select: { connected: true, phone: true } },
-              },
-            },
-          },
-          orderBy: [{ role: "asc" }, { joinedAt: "asc" }],
-        },
-      },
+      include: orgInclude,
     }),
   ])
 
   res.json({
-    organizations: rows.map((org) => ({
-      id: org.id,
-      name: org.name,
-      createdAt: org.createdAt.toISOString(),
-      members: org.members.map((m) => ({
-        userId: m.userId,
-        name: m.user.name,
-        email: m.user.email,
-        role: m.role,
-        joinedAt: m.joinedAt.toISOString(),
-        whatsappConnected: Boolean(m.user.whatsappConnection?.connected),
-        whatsappPhone: m.user.whatsappConnection?.phone || null,
-      })),
-      memberCount: org.members.length,
-      owner: org.members.find((m) => m.role === "OWNER")?.user || null,
-    })),
+    organizations: rows.map(mapAdminOrganization),
     total,
     page,
     pageSize,
   })
+})
+
+router.get("/organizations/:id", authMiddleware, requireAdmin, async (req, res) => {
+  const org = await prisma.organization.findUnique({
+    where: { id: req.params.id },
+    include: orgInclude,
+  })
+  if (!org) return res.status(404).json({ error: "NOT_FOUND", message: "Empresa não encontrada." })
+  res.json({ organization: mapAdminOrganization(org) })
 })
 
 router.post("/organizations/backfill", authMiddleware, requireAdmin, async (_req, res) => {
