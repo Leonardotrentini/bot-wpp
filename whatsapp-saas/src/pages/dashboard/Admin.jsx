@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Eye, LogOut, Pencil, Shield, Trash2, UserPlus, Building2 } from 'lucide-react'
+import { Eye, LogIn, LogOut, Pencil, Shield, Trash2, UserPlus, Building2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -265,23 +265,28 @@ export function Admin() {
     }
   }
 
-  async function onViewAs(u) {
-    if (u.role === 'ADMIN') {
-      toast.error('Não é possível acessar a conta de outro administrador.')
-      return
-    }
-    setViewAsId(u.id)
+  async function onEnterAsUser(userId, label) {
+    if (!userId) return toast.error('Conta indisponível.')
+    setViewAsId(userId)
     try {
-      const { user } = await impersonateAdminUser(u.id)
+      const { user } = await impersonateAdminUser(userId)
       setCurrentUser(user)
       refreshImpersonation()
-      toast.success(`Visualizando conta de ${user.name}`)
+      toast.success(`Entrando na conta de ${label || user.name}`)
       navigate('/dashboard')
     } catch (e) {
       toast.error(e.response?.data?.message || 'Não foi possível acessar a conta.')
     } finally {
       setViewAsId(null)
     }
+  }
+
+  async function onViewAs(u) {
+    if (u.role === 'ADMIN') {
+      toast.error('Não é possível acessar a conta de outro administrador.')
+      return
+    }
+    await onEnterAsUser(u.id, u.name)
   }
 
   function resetCreateForm() {
@@ -624,9 +629,21 @@ export function Admin() {
                         </td>
                         <td className="px-4 py-3 text-stone-400">{org.memberCount}</td>
                         <td className="px-4 py-3 text-right">
-                          <Button size="sm" variant="secondary" type="button" onClick={() => openManageOrg(org)}>
-                            Gerenciar acessos
-                          </Button>
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              type="button"
+                              disabled={!org.owner?.id || viewAsId === org.owner?.id}
+                              title={org.owner ? `Entrar como ${org.owner.name}` : 'Empresa sem dono'}
+                              onClick={() => onEnterAsUser(org.owner.id, org.owner.name)}
+                            >
+                              <LogIn className="h-4 w-4" />
+                              Entrar na conta
+                            </Button>
+                            <Button size="sm" variant="secondary" type="button" onClick={() => openManageOrg(org)}>
+                              Gerenciar acessos
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -708,6 +725,16 @@ export function Admin() {
                         nova senha.
                       </p>
                       <div className="flex flex-wrap items-center justify-end gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          disabled={viewAsId === m.userId}
+                          onClick={() => onEnterAsUser(m.userId, draft.name)}
+                        >
+                          <LogIn className="h-4 w-4" />
+                          Entrar na conta
+                        </Button>
                         {draft.role === 'SELLER' && (
                           <Button
                             type="button"
