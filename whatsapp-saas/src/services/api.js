@@ -145,6 +145,11 @@ export async function getAdminPlans() {
   return apiClient.get('/admin/plans')
 }
 
+export async function backfillAdminOrganizations() {
+  if (!resolveUseRealApi()) return { data: { scanned: 0, created: 0 } }
+  return apiClient.post('/admin/organizations/backfill')
+}
+
 export async function getAdminOrganizations(params = {}) {
   if (!resolveUseRealApi()) {
     await delay()

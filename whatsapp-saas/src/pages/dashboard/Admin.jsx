@@ -11,6 +11,7 @@ import {
   createAdminUser,
   createAdminOrgMember,
   createAdminOrganization,
+  backfillAdminOrganizations,
   deleteAdminOrgMember,
   deleteAdminUser,
   getAdminOrganizations,
@@ -50,7 +51,7 @@ export function Admin() {
     password: '',
     role: 'USER',
   })
-  const [tab, setTab] = useState('users')
+  const [tab, setTab] = useState('organizations')
   const [orgs, setOrgs] = useState([])
   const [orgsLoading, setOrgsLoading] = useState(false)
   const [orgQ, setOrgQ] = useState('')
@@ -88,7 +89,8 @@ export function Admin() {
   const loadOrgs = useCallback(async () => {
     setOrgsLoading(true)
     try {
-      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined })
+      await backfillAdminOrganizations().catch(() => {})
+      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
       setOrgs(data.organizations || [])
     } catch (e) {
       toast.error(e.response?.data?.message || 'Não foi possível carregar empresas.')
@@ -101,6 +103,12 @@ export function Admin() {
   useEffect(() => {
     if (tab === 'organizations') loadOrgs()
   }, [tab, loadOrgs])
+
+  useEffect(() => {
+    if (tab === 'organizations') {
+      load()
+    }
+  }, [tab, load])
 
   async function onRoleChange(userId, role) {
     setSavingId(userId)
@@ -311,7 +319,7 @@ export function Admin() {
           </div>
           <div>
             <h1 className="text-lg font-semibold text-stone-50">Administração</h1>
-            <p className="text-sm text-stone-500">Usuários, empresas, planos e acessos</p>
+            <p className="text-sm text-stone-500">Cada cliente é uma empresa — gerencie acessos dentro dela</p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -348,15 +356,6 @@ export function Admin() {
       <div className="flex gap-2 border-b border-brand-800 pb-1">
         <button
           type="button"
-          onClick={() => setTab('users')}
-          className={`rounded-t-lg px-4 py-2 text-sm font-medium transition ${
-            tab === 'users' ? 'bg-brand-900 text-accent-400 border border-brand-800 border-b-brand-900' : 'text-stone-500 hover:text-stone-200'
-          }`}
-        >
-          Usuários
-        </button>
-        <button
-          type="button"
           onClick={() => setTab('organizations')}
           className={`rounded-t-lg px-4 py-2 text-sm font-medium transition flex items-center gap-1.5 ${
             tab === 'organizations' ? 'bg-brand-900 text-accent-400 border border-brand-800 border-b-brand-900' : 'text-stone-500 hover:text-stone-200'
@@ -364,6 +363,15 @@ export function Admin() {
         >
           <Building2 className="h-4 w-4" />
           Empresas
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('users')}
+          className={`rounded-t-lg px-4 py-2 text-sm font-medium transition ${
+            tab === 'users' ? 'bg-brand-900 text-accent-400 border border-brand-800 border-b-brand-900' : 'text-stone-500 hover:text-stone-200'
+          }`}
+        >
+          Usuários
         </button>
       </div>
 
@@ -498,6 +506,10 @@ export function Admin() {
 
       {tab === 'organizations' && (
         <div className="space-y-4">
+          <div className="rounded-xl border border-brand-800/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
+            Cada linha é uma <strong className="text-stone-200">empresa</strong>. O dono é quem criou a conta. Use{' '}
+            <strong className="text-stone-200">Gerenciar acessos</strong> para adicionar vendedores dentro da empresa.
+          </div>
           <Card className="p-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="flex-1">

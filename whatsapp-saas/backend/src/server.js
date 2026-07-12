@@ -25,7 +25,7 @@ const { enqueueUserSend } = require("./lib/sendQueue")
 const { scheduleParticipantSync } = require("./lib/participantSyncQueue")
 const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
-const { ensureUserOrganization, readUserFilter } = require("./lib/orgScope")
+const { ensureUserOrganization, readUserFilter, backfillAllUserOrganizations } = require("./lib/orgScope")
 const { createOrgRouter, handleAcceptInvite } = require("./routes/org")
 const {
   createInstance,
@@ -3621,6 +3621,11 @@ async function refreshConnectedInstanceWebhooks() {
 
 httpServer.listen(port, () => {
   void ensureDefaultPlans().catch((err) => console.error("[bootstrap] ensureDefaultPlans:", err?.message || err))
+  void backfillAllUserOrganizations()
+    .then((r) => {
+      if (r.created > 0) console.log(`[bootstrap] backfill orgs: ${r.created} empresa(s) criada(s).`)
+    })
+    .catch((err) => console.error("[bootstrap] backfillAllUserOrganizations:", err?.message || err))
   void syncLegacyCadenceStatus().catch((err) => console.error("[bootstrap] syncLegacyCadenceStatus:", err?.message || err))
   void migrateStoredX1Templates(prisma).catch((err) => console.error("[bootstrap] migrateStoredX1Templates:", err?.message || err))
   void refreshConnectedInstanceWebhooks().catch((err) =>

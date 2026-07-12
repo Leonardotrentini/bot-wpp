@@ -29,6 +29,25 @@ async function ensureUserOrganization(userId) {
   return member
 }
 
+/** Cada usuário USER sem empresa vira dono da própria organização (nome = nome do usuário). */
+async function backfillAllUserOrganizations() {
+  const users = await prisma.user.findMany({
+    where: {
+      role: "USER",
+      organizationMember: { is: null },
+    },
+    select: { id: true, name: true },
+  })
+
+  let created = 0
+  for (const user of users) {
+    await ensureUserOrganization(user.id)
+    created += 1
+  }
+
+  return { scanned: users.length, created }
+}
+
 async function getOrgMemberIds(organizationId) {
   const rows = await prisma.organizationMember.findMany({
     where: { organizationId },
@@ -113,6 +132,7 @@ async function loadAuthContext(userId) {
 
 module.exports = {
   ensureUserOrganization,
+  backfillAllUserOrganizations,
   getOrgMemberIds,
   resolveDataScope,
   readUserFilter,

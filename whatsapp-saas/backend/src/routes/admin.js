@@ -5,7 +5,7 @@ const { prisma } = require("../lib/prisma")
 const { authMiddleware, signToken } = require("../lib/auth")
 const { requireAdmin } = require("../lib/adminAuth")
 const { ensureDefaultPlans } = require("../lib/ensureBillingDefaults")
-const { ensureUserOrganization } = require("../lib/orgScope")
+const { ensureUserOrganization, backfillAllUserOrganizations } = require("../lib/orgScope")
 
 const router = express.Router()
 
@@ -231,6 +231,11 @@ router.get("/organizations", authMiddleware, requireAdmin, async (req, res) => {
     page,
     pageSize,
   })
+})
+
+router.post("/organizations/backfill", authMiddleware, requireAdmin, async (_req, res) => {
+  const result = await backfillAllUserOrganizations()
+  res.json(result)
 })
 
 router.patch("/organizations/:id", authMiddleware, requireAdmin, async (req, res) => {
