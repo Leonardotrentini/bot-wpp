@@ -17,6 +17,7 @@ const { parseFacebookPageId, resolveCtwaClid, resolveFbc } = require("./metaMess
 
 const GRAPH_API_VERSION = "v22.0"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
+const VESTO_EVENT_SOURCE_URL = "https://vesto.group/dashboard/chat"
 const META_MESSAGING_CHANNEL = "whatsapp"
 const CRM_EVENT_SOURCE = "Vesto"
 
@@ -24,6 +25,14 @@ const CONVERSATION_STARTED_EVENT = "ConversationStarted"
 const LEAD_QUALIFIED_EVENT = "LeadQualified"
 const QUOTE_EVENT = "Quote"
 const PURCHASE_EVENT = "Purchase"
+
+/** Valores fixos de content_category — usados nas conversões personalizadas da Meta. */
+const CONTENT_CATEGORY = {
+  CONVERSATION_STARTED: "conversation_started",
+  QUALIFIED_LEAD: "qualified_lead",
+  QUOTE: "quote",
+  PURCHASE: "purchase",
+}
 
 function hashMetaValue(value) {
   if (value == null || value === "") return null
@@ -148,11 +157,17 @@ function buildFunnelEvent({
 }) {
   const eventSource = eventSourceForMode(mode)
 
+  const base = {
+    event_name: eventName,
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: eventId,
+    event_source_url: VESTO_EVENT_SOURCE_URL,
+    custom_data: { ...customData, event_source: eventSource },
+  }
+
   if (mode.mode === "ctwa") {
     return {
-      event_name: eventName,
-      event_time: Math.floor(Date.now() / 1000),
-      event_id: eventId,
+      ...base,
       action_source: "business_messaging",
       messaging_channel: META_MESSAGING_CHANNEL,
       user_data: buildCtwaUserData(contact, {
@@ -160,17 +175,13 @@ function buildFunnelEvent({
         facebookPageId: integration.facebookPageId,
         ctwaClid: mode.ctwaClid,
       }),
-      custom_data: { ...customData, event_source: eventSource },
     }
   }
 
   return {
-    event_name: eventName,
-    event_time: Math.floor(Date.now() / 1000),
-    event_id: eventId,
+    ...base,
     action_source: "system_generated",
     user_data: buildCrmUserData(contact, { userId }),
-    custom_data: { ...customData, event_source: eventSource },
   }
 }
 
@@ -183,7 +194,7 @@ function buildConversationStartedEvent({ contact, eventId, userId, integration, 
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: "conversation_started",
+      contentCategory: CONTENT_CATEGORY.CONVERSATION_STARTED,
       eventSource: eventSourceForMode(mode),
     }),
   })
@@ -198,7 +209,7 @@ function buildLeadQualifiedEvent({ contact, eventId, userId, integration, mode }
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: "qualified_lead",
+      contentCategory: CONTENT_CATEGORY.QUALIFIED_LEAD,
       eventSource: eventSourceForMode(mode),
     }),
   })
@@ -214,7 +225,7 @@ function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: "quote",
+      contentCategory: CONTENT_CATEGORY.QUOTE,
       eventSource,
       amount,
       contentName: mode.mode === "ctwa" ? contactDisplayName(contact) : "Orçamento WhatsApp",
@@ -232,7 +243,7 @@ function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integrat
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: "purchase",
+      contentCategory: CONTENT_CATEGORY.PURCHASE,
       eventSource,
       amount,
       contentName: mode.mode === "ctwa" ? contactDisplayName(contact) : "Compra WhatsApp",
@@ -666,6 +677,8 @@ module.exports = {
   LEAD_QUALIFIED_EVENT,
   QUOTE_EVENT,
   PURCHASE_EVENT,
+  CONTENT_CATEGORY,
+  VESTO_EVENT_SOURCE_URL,
   formatIntegrationRow,
   getMetaIntegration,
   upsertMetaIntegration,

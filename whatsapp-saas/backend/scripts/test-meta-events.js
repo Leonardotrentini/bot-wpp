@@ -9,6 +9,8 @@ const {
   LEAD_QUALIFIED_EVENT,
   QUOTE_EVENT,
   PURCHASE_EVENT,
+  CONTENT_CATEGORY,
+  VESTO_EVENT_SOURCE_URL,
   resolveTrackingMode,
   buildConversationStartedEvent,
   buildLeadQualifiedEvent,
@@ -54,7 +56,11 @@ function testPayloads() {
   })
   assert(conversationStarted.event_name === CONVERSATION_STARTED_EVENT, "ConversationStarted event_name")
   assert(conversationStarted.action_source === "system_generated", "ConversationStarted CRM action_source")
-  assert(conversationStarted.custom_data.content_category === "conversation_started", "conversation_started category")
+  assert(
+    conversationStarted.custom_data.content_category === CONTENT_CATEGORY.CONVERSATION_STARTED,
+    "conversation_started category",
+  )
+  assert(conversationStarted.event_source_url === VESTO_EVENT_SOURCE_URL, "ConversationStarted event_source_url")
   assert(conversationStarted.user_data.fbc, "CRM should include fbc when fbclid stored")
 
   const leadQualified = buildLeadQualifiedEvent({
@@ -65,7 +71,8 @@ function testPayloads() {
     mode: crmMode,
   })
   assert(leadQualified.event_name === LEAD_QUALIFIED_EVENT, "LeadQualified event_name")
-  assert(leadQualified.custom_data.content_category === "qualified_lead", "qualified_lead category")
+  assert(leadQualified.custom_data.content_category === CONTENT_CATEGORY.QUALIFIED_LEAD, "qualified_lead category")
+  assert(leadQualified.event_source_url === VESTO_EVENT_SOURCE_URL, "LeadQualified event_source_url")
 
   const quote = buildQuoteEvent({
     contact: mockContactCrm,
@@ -78,7 +85,9 @@ function testPayloads() {
   assert(quote.event_name === QUOTE_EVENT, "Quote event_name")
   assert(quote.action_source === "system_generated", "Quote CRM action_source")
   assert(quote.custom_data.event_source === "crm", "Quote CRM event_source")
+  assert(quote.custom_data.content_category === CONTENT_CATEGORY.QUOTE, "Quote content_category")
   assert(quote.custom_data.lead_event_source === "Vesto", "Quote lead_event_source")
+  assert(quote.event_source_url === VESTO_EVENT_SOURCE_URL, "Quote event_source_url")
   assert(!quote.messaging_channel, "CRM should not have messaging_channel")
 
   const ctwaMode = resolveTrackingMode(mockContactCtwa)
@@ -98,6 +107,8 @@ function testPayloads() {
   assert(ctwaQuote.user_data.page_id === 61586091841500, "CTWA page_id")
   assert(ctwaQuote.user_data.ctwa_clid, "CTWA ctwa_clid")
   assert(ctwaQuote.custom_data.event_source === "ctwa", "CTWA event_source")
+  assert(ctwaQuote.custom_data.content_category === CONTENT_CATEGORY.QUOTE, "CTWA Quote content_category")
+  assert(ctwaQuote.event_source_url === VESTO_EVENT_SOURCE_URL, "CTWA Quote event_source_url")
 
   const crmPurchase = buildPurchaseEvent({
     contact: mockContactCrm,
@@ -110,6 +121,8 @@ function testPayloads() {
   })
   assert(crmPurchase.event_name === PURCHASE_EVENT, "CRM purchase event")
   assert(crmPurchase.action_source === "system_generated", "CRM purchase action_source")
+  assert(crmPurchase.custom_data.content_category === CONTENT_CATEGORY.PURCHASE, "Purchase content_category")
+  assert(crmPurchase.event_source_url === VESTO_EVENT_SOURCE_URL, "Purchase event_source_url")
 
   console.log("✓ Payload tests passed (CRM + CTWA custom funnel)")
 }

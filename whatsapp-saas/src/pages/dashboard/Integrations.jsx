@@ -187,8 +187,10 @@ export function Integrations() {
             onChange={(e) => setForm((f) => ({ ...f, testEventCode: e.target.value }))}
           />
           <p className="-mt-2 text-xs text-stone-500">
-            Usado apenas no botão &quot;Enviar evento de teste&quot;. Orçamentos e compras reais vão para produção
-            (sem código de teste). Abra o Gerenciador de Eventos → aba <strong className="text-stone-400">Testar eventos</strong>.
+            Só para o botão &quot;Enviar eventos de teste&quot;. Ações reais vão para produção (sem código). No Events
+            Manager → <strong className="text-stone-400">Testar eventos</strong> → canal{' '}
+            <strong className="text-stone-400">Offline</strong> → use o <strong className="text-stone-400">mesmo</strong>{' '}
+            código. Contagens do funil: aba <strong className="text-stone-400">Visão geral</strong>.
           </p>
 
           <div className="space-y-3 rounded-xl border border-brand-800 bg-brand-950/40 p-4">
@@ -240,8 +242,24 @@ export function Integrations() {
                 <strong className="text-stone-400">Purchase</strong> — compra confirmada (se toggle ativo)
               </li>
             </ul>
+            <p className="mt-3 font-medium text-stone-400">Padrão de cada payload (sempre igual)</p>
+            <ul className="mt-1 list-inside list-disc space-y-1">
+              <li>
+                <code className="text-stone-400">lead_event_source</code>: Vesto ·{' '}
+                <code className="text-stone-400">event_source</code>: crm ou ctwa
+              </li>
+              <li>
+                <code className="text-stone-400">content_category</code>: conversation_started · qualified_lead ·
+                quote · purchase
+              </li>
+              <li>
+                <code className="text-stone-400">event_source_url</code>: https://vesto.group/dashboard/chat
+              </li>
+              <li>Telefone hasheado + external_id · CTWA: ctwa_clid + page_id</li>
+            </ul>
             <p className="mt-2">
-              Na LP, use <strong className="text-stone-400">Contact</strong> no clique do WhatsApp — não Lead.
+              Na LP: <strong className="text-stone-400">Contact</strong> no clique — não Lead. Detalhes e conversões
+              personalizadas no guia abaixo.
             </p>
           </div>
 
