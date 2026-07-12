@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -132,7 +133,10 @@ export function Members() {
 
   const tagCatalog = useMemo(() => {
     const s = new Set(catalogExtras.map(normalizeTag).filter(Boolean))
-    members.forEach((m) => (m.tags || []).forEach((t) => s.add(normalizeTag(t))))
+    members.forEach((m) => {
+      ;(m.tags || []).forEach((t) => s.add(normalizeTag(t)))
+      ;(m.crmTags || []).forEach((t) => s.add(normalizeTag(t)))
+    })
     return [...s].sort()
   }, [members, catalogExtras])
 
@@ -152,7 +156,12 @@ export function Members() {
 
   const displayedMembers = useMemo(() => {
     if (!tagFilter) return members
-    return members.filter((m) => (m.tags || []).map(normalizeTag).includes(normalizeTag(tagFilter)))
+    const norm = normalizeTag(tagFilter)
+    return members.filter((m) => {
+      const local = (m.tags || []).map(normalizeTag)
+      const crm = (m.crmTags || []).map(normalizeTag)
+      return local.includes(norm) || crm.includes(norm)
+    })
   }, [members, tagFilter])
 
   const allVisibleSelected =
@@ -362,8 +371,9 @@ export function Members() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-        Tags de membros são salvas neste navegador (localStorage) e não sincronizam com o CRM. Use tags do CRM na aba Conversas para leads individuais.
+      <div className="rounded-xl border border-brand-800/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
+        Lista unificada: participantes dos grupos + leads do WhatsApp direto (1:1). Duplicatas são mescladas por telefone quando
+        possível. Tags coloridas do CRM vêm do chat; tags editáveis aqui ficam só neste navegador.
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setTagsModal(true)}>
@@ -466,7 +476,15 @@ export function Members() {
         </div>
       </div>
 
-      {meta && meta.groupsTotal > 0 && meta.groupsWithParticipants === 0 && (
+      {meta && (meta.crmLeadsX1Only > 0 || meta.crmLeadsTotal > 0) && (
+        <p className="rounded-xl border border-accent-500/20 bg-accent-500/5 px-4 py-3 text-sm text-stone-300">
+          <strong className="text-accent-200">{meta.crmLeadsTotal ?? 0}</strong> lead(s) no CRM —{' '}
+          <strong className="text-accent-200">{meta.crmLeadsX1Only ?? 0}</strong> só WhatsApp direto
+          {meta.crmLeadsMerged > 0 ? ` · ${meta.crmLeadsMerged} mesclado(s) com grupo` : ''}.
+        </p>
+      )}
+
+      {meta && meta.groupsTotal > 0 && meta.groupsWithParticipants === 0 && meta.crmLeadsTotal === 0 && (
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
           Ainda não há participantes importados. Clique em <strong>Sincronizar participantes</strong> ou abra cada grupo em{' '}
           <strong>Grupos</strong> para carregar a lista do WhatsApp.
@@ -515,8 +533,9 @@ export function Members() {
           <p className="px-5 py-8 text-sm text-stone-500">Carregando membros…</p>
         ) : displayedMembers.length === 0 ? (
           <p className="px-5 py-8 text-sm text-stone-500">
-            Nenhum membro encontrado com os filtros atuais.
-            {groups.length === 0 && ' Sincronize seus grupos em Conectar WhatsApp → Grupos.'}
+            Nenhuma pessoa encontrada com os filtros atuais.
+            {groups.length === 0 && meta?.crmLeadsTotal === 0 && ' Sincronize seus grupos em Conectar WhatsApp → Grupos.'}
+            {meta?.crmLeadsTotal > 0 && ' Leads do WhatsApp direto aparecem aqui assim que chegam no CRM.'}
           </p>
         ) : (
           <div className="overflow-x-auto -mx-5">
@@ -533,7 +552,7 @@ export function Members() {
                       aria-label="Selecionar todos"
                     />
                   </th>
-                  <th className="px-5 py-3">Membro</th>
+                  <th className="px-5 py-3">Pessoa</th>
                   <th className="px-5 py-3">Telefone</th>
                   <th className="px-5 py-3">Grupos</th>
                   <th className="px-5 py-3">Tags</th>
@@ -556,7 +575,24 @@ export function Members() {
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
                         <img src={m.avatar} alt="" className="h-9 w-9 rounded-full border border-brand-700" />
-                        <span className="text-stone-100 font-medium">{m.name}</span>
+                        <div className="min-w-0">
+                          {m.conversationId ? (
+                            <Link
+                              to={`/dashboard/chat?c=${encodeURIComponent(m.conversationId)}`}
+                              className="font-medium text-stone-100 hover:text-accent-300 hover:underline"
+                            >
+                              {m.name}
+                            </Link>
+                          ) : (
+                            <span className="font-medium text-stone-100">{m.name}</span>
+                          )}
+                          {m.hasX1 && (
+                            <span className="mt-0.5 flex items-center gap-1 text-[10px] text-accent-400/90">
+                              <MessageCircle className="h-3 w-3" />
+                              Lead 1:1
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-5 py-3 text-stone-400">{m.phone}</td>
@@ -565,6 +601,11 @@ export function Members() {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex flex-wrap gap-1">
+                        {(m.crmTags || []).map((t) => (
+                          <Badge key={`${m.id}-crm-${t}`} variant="success" title="Tag do CRM (chat)">
+                            {displayTag(normalizeTag(t))}
+                          </Badge>
+                        ))}
                         {(m.tags || []).length ? (
                           m.tags.map((t) => {
                             const norm = normalizeTag(t)
@@ -592,9 +633,9 @@ export function Members() {
                               </span>
                             )
                           })
-                        ) : (
+                        ) : !(m.crmTags || []).length ? (
                           <span className="text-stone-600">—</span>
-                        )}
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-5 py-3">

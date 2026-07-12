@@ -112,6 +112,7 @@ const { maybeReplyWithAi } = require("./lib/crmAiAgent")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
 const { processDueContactReminders } = require("./lib/crmContactReminders")
 const { trackConversationStartedEvent } = require("./lib/metaConversions")
+const { mergeCrmContactsIntoMembers } = require("./lib/membersDirectory")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -1862,6 +1863,18 @@ app.get("/api/members", authMiddleware, async (req, res) => {
       }
     }
 
+    const crmContacts = await prisma.crmContact.findMany({
+      where: { userId: req.user.sub },
+      include: {
+        conversation: { select: { id: true, lastMessageAt: true } },
+        tags: { include: { tag: { select: { name: true } } } },
+      },
+      orderBy: { updatedAt: "desc" },
+    })
+    const crmMerge = mergeCrmContactsIntoMembers(map, crmContacts, {
+      fallbackAvatar: (seed) => fallbackGroupImage(seed),
+    })
+
     let members = [...map.values()]
 
     if (activeGroupsOnly) {
@@ -1879,7 +1892,7 @@ app.get("/api/members", authMiddleware, async (req, res) => {
             groups: pairs.map((p) => p.name),
           }
         })
-        .filter((m) => m.groupIds.length > 0)
+        .filter((m) => m.groupIds.length > 0 || m.hasX1 || m.isCrmLead)
     }
 
     if (groupId) {
@@ -1896,9 +1909,17 @@ app.get("/api/members", authMiddleware, async (req, res) => {
       })
     }
     if (q) {
-      members = members.filter(
-        (m) => m.name.toLowerCase().includes(q) || String(m.phone).toLowerCase().includes(q),
-      )
+      members = members.filter((m) => {
+        const hay = [
+          m.name,
+          m.phone,
+          ...(m.groups || []),
+          ...(m.crmTags || []),
+        ]
+          .join(" ")
+          .toLowerCase()
+        return hay.includes(q)
+      })
     }
 
     members.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
@@ -1915,6 +1936,9 @@ app.get("/api/members", authMiddleware, async (req, res) => {
       meta: {
         groupsTotal: groups.length,
         groupsWithParticipants,
+        crmLeadsTotal: crmContacts.length,
+        crmLeadsMerged: crmMerge.merged,
+        crmLeadsX1Only: crmMerge.added,
       },
     })
   } catch (err) {
