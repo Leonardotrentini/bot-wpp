@@ -15,6 +15,7 @@ const {
   buildCrmSalesByDay,
 } = require("./crmFunnelMetrics")
 const { buildAttributionSummary } = require("./attributionMetrics")
+const { buildUnifiedLeadsMetrics } = require("./reportLeadsMetrics")
 
 function reportPeriodToRange(period, startDate, endDate) {
   const now = new Date()
@@ -112,11 +113,26 @@ async function buildReportDashboard(userId, options = {}) {
     return { total: 0, bySource: [], byCampaign: [] }
   })
 
-  const [groupsRaw, crmRaw, metaRaw, attribution] = await Promise.all([
+  const leadsPromise = buildUnifiedLeadsMetrics(userId, start, end, { groupJids }).catch((err) => {
+    partialErrors.push({ source: "leads", message: err?.message || "Falha ao contar leads." })
+    return {
+      total: 0,
+      fromCrm: 0,
+      fromGroups: 0,
+      crmOnly: 0,
+      groupOnly: 0,
+      both: 0,
+      conversationsStarted: 0,
+      newGroupMembers: 0,
+    }
+  })
+
+  const [groupsRaw, crmRaw, metaRaw, attribution, leads] = await Promise.all([
     groupsPromise,
     crmPromise,
     metaPromise,
     attrPromise,
+    leadsPromise,
   ])
 
   let crm = null
@@ -204,6 +220,7 @@ async function buildReportDashboard(userId, options = {}) {
     crm,
     meta,
     attribution,
+    leads,
     meta_info: {
       groupsRetentionDays: MESSAGE_RETENTION_DAYS,
       crmRangeNote: "CRM usa o período completo selecionado.",

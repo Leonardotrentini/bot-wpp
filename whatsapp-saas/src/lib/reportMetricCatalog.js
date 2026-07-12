@@ -130,8 +130,8 @@ export const REPORT_METRIC_CATALOG = [
   // CRM — KPIs
   {
     id: 'crm.conversations_started',
-    label: 'Conversas iniciadas',
-    description: 'Primeira mensagem do lead no CRM no período',
+    label: 'Novos leads',
+    description: 'Leads únicos no período: WhatsApp direto + grupos (sem duplicar)',
     category: 'crm',
     chartType: 'kpi',
     format: 'number',
@@ -395,11 +395,19 @@ export function resolveMetricData(metricId, data) {
       return { value: g?.connectedGroupsCount ?? 0, hint: g?.connectedGroupsLabel }
     case 'groups.new_leads':
       return { value: g?.newLeads ?? 0, hint: 'Novos membros nos grupos (não é CRM)' }
-    case 'crm.conversations_started':
-      return {
-        value: c?.overview?.conversationsStarted ?? c?.conversions?.conversationStarted ?? 0,
-        hint: 'Primeira mensagem do lead no período',
+    case 'crm.conversations_started': {
+      const l = data.leads
+      const hintParts = []
+      if (l) {
+        if (l.fromCrm) hintParts.push(`${l.fromCrm} WhatsApp direto`)
+        if (l.groupOnly) hintParts.push(`${l.groupOnly} só grupo`)
+        if (l.both) hintParts.push(`${l.both} nos dois`)
       }
+      return {
+        value: l?.total ?? c?.overview?.conversationsStarted ?? 0,
+        hint: hintParts.length ? hintParts.join(' · ') : 'CRM + grupos, deduplicado por telefone',
+      }
+    }
     case 'groups.exits':
       return { value: g?.exits ?? 0, hint: 'Saídas detectadas' }
     case 'groups.active_pct':
@@ -465,9 +473,11 @@ export function resolveMetricData(metricId, data) {
     case 'crm.roas': {
       const revenue = c?.sales?.summary?.totalAmount ?? 0
       const spend = m?.summary?.spend ?? 0
+      const leadTotal = data.leads?.total ?? c?.overview?.conversationsStarted ?? 0
       return {
         value: spend > 0 ? Math.round((revenue / spend) * 100) / 100 : null,
         hint: spend > 0 ? `R$ ${revenue} / R$ ${spend}` : 'Requer investimento Meta',
+        leadTotal,
       }
     }
     case 'crm.funnel_stages':
@@ -549,6 +559,9 @@ export function resolveMetricData(metricId, data) {
 
 export function getMetricSourceNote(metricId, data) {
   const retention = data?.meta_info?.groupsRetentionDays ?? 2
+  if (metricId === 'crm.conversations_started') {
+    return 'Conta CRM (1ª msg) + novos membros em grupos; mesma pessoa não duplica quando o telefone coincide.'
+  }
   if (metricId.startsWith('groups.')) {
     return `Mensagens de grupo: janela de ${retention} dias.`
   }
