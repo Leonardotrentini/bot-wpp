@@ -126,6 +126,7 @@ router.patch("/users/:id", authMiddleware, requireAdmin, async (req, res) => {
     role: z.enum(["USER", "ADMIN"]).optional(),
     name: z.string().min(2).optional(),
     email: z.string().trim().email().optional(),
+    password: z.string().min(6).max(128).optional(),
   })
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
@@ -148,6 +149,9 @@ router.patch("/users/:id", authMiddleware, requireAdmin, async (req, res) => {
   if (parsed.data.role !== undefined) data.role = parsed.data.role
   if (parsed.data.name !== undefined) data.name = parsed.data.name
   if (parsed.data.email !== undefined) data.email = parsed.data.email
+  if (parsed.data.password) {
+    data.passwordHash = await bcrypt.hash(parsed.data.password, 10)
+  }
 
   if (Object.keys(data).length === 0) {
     return res.status(400).json({ error: "EMPTY_UPDATE", message: "Nada para atualizar." })

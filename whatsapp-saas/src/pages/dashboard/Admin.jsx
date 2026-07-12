@@ -61,6 +61,74 @@ export function Admin() {
   const [creatingOrg, setCreatingOrg] = useState(false)
   const [memberForm, setMemberForm] = useState({ name: '', email: '', password: '', role: 'SELLER' })
   const [addingMember, setAddingMember] = useState(false)
+  const [memberEdits, setMemberEdits] = useState({})
+  const [savingMemberId, setSavingMemberId] = useState(null)
+
+  function openManageOrg(org) {
+    setManageOrg(org)
+    setMemberEdits(
+      Object.fromEntries(
+        (org.members || []).map((m) => [
+          m.userId,
+          { name: m.name || '', email: m.email || '', password: '', role: m.role },
+        ]),
+      ),
+    )
+  }
+
+  function updateMemberEdit(userId, patch) {
+    setMemberEdits((prev) => ({
+      ...prev,
+      [userId]: { ...prev[userId], ...patch },
+    }))
+  }
+
+  async function refreshManageOrg(orgId) {
+    const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
+    const list = data.organizations || []
+    setOrgs(list)
+    const updated = list.find((o) => o.id === orgId)
+    if (updated) {
+      setManageOrg(updated)
+      setMemberEdits(
+        Object.fromEntries(
+          (updated.members || []).map((m) => [
+            m.userId,
+            { name: m.name || '', email: m.email || '', password: '', role: m.role },
+          ]),
+        ),
+      )
+    }
+    await load()
+  }
+
+  async function onSaveOrgMember(userId) {
+    const draft = memberEdits[userId]
+    if (!draft || !manageOrg) return
+
+    const name = draft.name.trim()
+    const email = draft.email.trim().toLowerCase()
+    if (name.length < 2) return toast.error('Nome deve ter pelo menos 2 caracteres.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error('E-mail inválido.')
+
+    const original = manageOrg.members?.find((m) => m.userId === userId)
+    const payload = { name, email }
+    if (draft.password.trim().length >= 6) payload.password = draft.password.trim()
+
+    setSavingMemberId(userId)
+    try {
+      await patchAdminUser(userId, payload)
+      if (original && original.role !== draft.role) {
+        await patchAdminOrgMember(manageOrg.id, userId, { role: draft.role })
+      }
+      toast.success('Acesso atualizado.')
+      await refreshManageOrg(manageOrg.id)
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Falha ao salvar.')
+    } finally {
+      setSavingMemberId(null)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -265,11 +333,7 @@ export function Admin() {
       })
       toast.success('Membro adicionado à empresa.')
       setMemberForm({ name: '', email: '', password: '', role: 'SELLER' })
-      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined })
-      const updated = (data.organizations || []).find((o) => o.id === manageOrg.id)
-      if (updated) setManageOrg(updated)
-      setOrgs(data.organizations || [])
-      await load()
+      await refreshManageOrg(manageOrg.id)
     } catch (e) {
       toast.error(e.response?.data?.message || 'Falha ao adicionar membro.')
     } finally {
@@ -278,19 +342,7 @@ export function Admin() {
   }
 
   async function onOrgMemberRoleChange(orgId, userId, role) {
-    try {
-      await patchAdminOrgMember(orgId, userId, { role })
-      toast.success('Papel atualizado.')
-      await loadOrgs()
-      if (manageOrg?.id === orgId) {
-        const { data } = await getAdminOrganizations()
-        const updated = (data.organizations || []).find((o) => o.id === orgId)
-        if (updated) setManageOrg(updated)
-      }
-      await load()
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Erro ao atualizar papel.')
-    }
+    updateMemberEdit(userId, { role })
   }
 
   async function onRemoveOrgMember(orgId, userId, name) {
@@ -298,13 +350,7 @@ export function Admin() {
     try {
       await deleteAdminOrgMember(orgId, userId)
       toast.success('Membro removido.')
-      await loadOrgs()
-      if (manageOrg?.id === orgId) {
-        const { data } = await getAdminOrganizations()
-        const updated = (data.organizations || []).find((o) => o.id === orgId)
-        if (updated) setManageOrg(updated)
-      }
-      await load()
+      await refreshManageOrg(orgId)
     } catch (e) {
       toast.error(e.response?.data?.message || 'Falha ao remover membro.')
     }
@@ -561,7 +607,7 @@ export function Admin() {
                         </td>
                         <td className="px-4 py-3 text-stone-400">{org.memberCount}</td>
                         <td className="px-4 py-3 text-right">
-                          <Button size="sm" variant="secondary" type="button" onClick={() => setManageOrg(org)}>
+                          <Button size="sm" variant="secondary" type="button" onClick={() => openManageOrg(org)}>
                             Gerenciar acessos
                           </Button>
                         </td>
@@ -578,50 +624,101 @@ export function Admin() {
 
       <Modal
         isOpen={!!manageOrg}
-        onClose={() => !addingMember && setManageOrg(null)}
+        onClose={() => !addingMember && !savingMemberId && setManageOrg(null)}
         title={manageOrg ? `Acessos — ${manageOrg.name}` : 'Empresa'}
         footer={
-          <Button variant="ghost" type="button" disabled={addingMember} onClick={() => setManageOrg(null)}>
+          <Button
+            variant="ghost"
+            type="button"
+            disabled={addingMember || savingMemberId}
+            onClick={() => setManageOrg(null)}
+          >
             Fechar
           </Button>
         }
       >
         {manageOrg && (
-          <div className="space-y-6">
+          <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-1 vg-scrollbar">
             <div>
-              <h4 className="mb-2 text-sm font-medium text-stone-300">Membros</h4>
-              <ul className="divide-y divide-brand-800 rounded-xl border border-brand-800">
-                {manageOrg.members?.map((m) => (
-                  <li key={m.userId} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
-                    <div>
-                      <p className="font-medium text-stone-100">{m.name}</p>
-                      <p className="text-stone-500">{m.email}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={m.role}
-                        onChange={(e) => onOrgMemberRoleChange(manageOrg.id, m.userId, e.target.value)}
-                        className="rounded-lg border border-brand-700 bg-brand-950 px-2 py-1 text-xs text-stone-200"
-                      >
-                        <option value="OWNER">Dono</option>
-                        <option value="SELLER">Vendedor</option>
-                      </select>
-                      {m.role === 'SELLER' && (
-                        <button
+              <h4 className="mb-3 text-sm font-medium text-stone-300">Membros com acesso</h4>
+              <div className="space-y-3">
+                {manageOrg.members?.map((m) => {
+                  const draft = memberEdits[m.userId] || {
+                    name: m.name,
+                    email: m.email,
+                    password: '',
+                    role: m.role,
+                  }
+                  return (
+                    <div
+                      key={m.userId}
+                      className="rounded-xl border border-brand-800 bg-brand-950/40 p-3 space-y-3"
+                    >
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Input
+                          label="Nome"
+                          value={draft.name}
+                          onChange={(e) => updateMemberEdit(m.userId, { name: e.target.value })}
+                        />
+                        <div>
+                          <label className="mb-1.5 block text-sm font-medium text-stone-300">Papel</label>
+                          <select
+                            value={draft.role}
+                            onChange={(e) => onOrgMemberRoleChange(manageOrg.id, m.userId, e.target.value)}
+                            className="w-full rounded-xl border border-brand-700 bg-brand-900/50 px-4 py-2.5 text-sm text-stone-50 outline-none focus:border-accent-500/60"
+                          >
+                            <option value="OWNER">Dono</option>
+                            <option value="SELLER">Vendedor</option>
+                          </select>
+                        </div>
+                        <Input
+                          label="E-mail (login)"
+                          type="email"
+                          value={draft.email}
+                          onChange={(e) => updateMemberEdit(m.userId, { email: e.target.value })}
+                        />
+                        <Input
+                          label="Senha"
+                          type="text"
+                          autoComplete="off"
+                          value={draft.password}
+                          placeholder="Digite nova senha ou deixe vazio"
+                          onChange={(e) => updateMemberEdit(m.userId, { password: e.target.value })}
+                        />
+                      </div>
+                      <p className="text-xs text-stone-500">
+                        A senha atual não pode ser exibida (segurança). Preencha o campo acima apenas para definir uma
+                        nova senha.
+                      </p>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {draft.role === 'SELLER' && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="text-red-400 hover:text-red-300"
+                            onClick={() => onRemoveOrgMember(manageOrg.id, m.userId, draft.name)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Remover
+                          </Button>
+                        )}
+                        <Button
                           type="button"
-                          className="rounded p-1.5 text-red-400 hover:bg-red-500/10"
-                          onClick={() => onRemoveOrgMember(manageOrg.id, m.userId, m.name)}
+                          size="sm"
+                          disabled={savingMemberId === m.userId}
+                          onClick={() => onSaveOrgMember(m.userId)}
                         >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
+                          {savingMemberId === m.userId ? 'Salvando…' : 'Salvar'}
+                        </Button>
+                      </div>
                     </div>
-                  </li>
-                ))}
+                  )
+                })}
                 {!manageOrg.members?.length && (
-                  <li className="px-3 py-4 text-center text-stone-500">Nenhum membro.</li>
+                  <p className="py-4 text-center text-sm text-stone-500">Nenhum membro.</p>
                 )}
-              </ul>
+              </div>
             </div>
             <div className="border-t border-brand-800 pt-4">
               <h4 className="mb-3 text-sm font-medium text-stone-300">Adicionar vendedor</h4>
@@ -632,14 +729,15 @@ export function Admin() {
                   onChange={(e) => setMemberForm((f) => ({ ...f, name: e.target.value }))}
                 />
                 <Input
-                  label="E-mail"
+                  label="E-mail (login)"
                   type="email"
                   value={memberForm.email}
                   onChange={(e) => setMemberForm((f) => ({ ...f, email: e.target.value }))}
                 />
                 <Input
                   label="Senha"
-                  type="password"
+                  type="text"
+                  autoComplete="off"
                   value={memberForm.password}
                   onChange={(e) => setMemberForm((f) => ({ ...f, password: e.target.value }))}
                 />
