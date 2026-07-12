@@ -74,6 +74,22 @@ function parseMetricNumber(value) {
   return Number.isFinite(n) ? n : null
 }
 
+function mapAdCreatives(ads) {
+  return ads.map((ad) => {
+    const creativeRaw = ad.creative?.data || ad.creative || {}
+    return {
+      id: ad.id,
+      name: ad.name || creativeRaw.name || "—",
+      status: ad.effective_status || ad.status || "—",
+      campaignName: ad.campaign?.name || "—",
+      thumbnailUrl: creativeRaw.thumbnail_url || creativeRaw.image_url || null,
+      body: creativeRaw.body ? String(creativeRaw.body).slice(0, 140) : null,
+      title: creativeRaw.title || null,
+      callToAction: null,
+    }
+  })
+}
+
 async function graphGet(path, accessToken, params = {}) {
   const url = new URL(`https://graph.facebook.com/${GRAPH_API_VERSION}/${path}`)
   url.searchParams.set("access_token", accessToken)
@@ -131,11 +147,17 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
       limit: 25,
     })
 
-    const ads = await graphGet(`${adAccountId}/ads`, token, {
-      fields:
-        "id,name,status,effective_status,campaign{id,name},adcreatives{id,name,thumbnail_url,body,title,image_url,call_to_action_type}",
-      limit: 20,
-    })
+    let creatives = []
+    try {
+      const ads = await graphGet(`${adAccountId}/ads`, token, {
+        fields:
+          "id,name,status,effective_status,campaign{id,name},creative{id,name,thumbnail_url,body,title,image_url}",
+        limit: 20,
+      })
+      creatives = mapAdCreatives(ads.data || [])
+    } catch (creativeErr) {
+      console.warn("[metaAds] creatives fetch failed:", creativeErr.message)
+    }
 
     const campaigns = (campaignInsights.data || [])
       .map((row) => ({
@@ -148,20 +170,6 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
         ctr: parseMetricNumber(row.ctr),
       }))
       .sort((a, b) => b.spend - a.spend)
-
-    const creatives = (ads.data || []).map((ad) => {
-      const creativeRaw = ad.adcreatives?.data?.[0] || ad.adcreatives || {}
-      return {
-        id: ad.id,
-        name: ad.name || creativeRaw.name || "—",
-        status: ad.effective_status || ad.status || "—",
-        campaignName: ad.campaign?.name || "—",
-        thumbnailUrl: creativeRaw.thumbnail_url || creativeRaw.image_url || null,
-        body: creativeRaw.body ? String(creativeRaw.body).slice(0, 140) : null,
-        title: creativeRaw.title || null,
-        callToAction: creativeRaw.call_to_action_type || null,
-      }
-    })
 
     await recordAdsSyncResult(prisma, userId, {})
 

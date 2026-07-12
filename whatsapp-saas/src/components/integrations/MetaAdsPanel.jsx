@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   BarChart3,
   Loader2,
@@ -58,26 +58,20 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
 
   const canFetch = Boolean(meta?.adsConnected || (form.adAccountId?.trim() && meta?.hasAccessToken))
 
-  const loadDashboard = useCallback(async () => {
+  const loadDashboard = useCallback(async (overridePeriod) => {
     if (!meta?.adsEnabled) return
+    const activePeriod = overridePeriod || period
     setLoading(true)
     try {
-      const { data } = await getMetaAdsDashboard(period)
+      const { data } = await getMetaAdsDashboard(activePeriod)
       setDashboard(data)
-      onSaved?.()
     } catch (err) {
       setDashboard(null)
       toast.error(err?.response?.data?.message || 'Falha ao carregar dados de anúncios.')
     } finally {
       setLoading(false)
     }
-  }, [meta?.adsEnabled, onSaved, period, toast])
-
-  useEffect(() => {
-    if (meta?.adsEnabled && meta?.adsConnected) {
-      loadDashboard()
-    }
-  }, [loadDashboard, meta?.adsConnected, meta?.adsEnabled])
+  }, [meta?.adsEnabled, period, toast])
 
   const handleTest = async () => {
     setTesting(true)
@@ -198,7 +192,10 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => setPeriod(p.id)}
+                  onClick={() => {
+                    setPeriod(p.id)
+                    if (dashboard) loadDashboard(p.id)
+                  }}
                   className={`rounded-lg px-2.5 py-1 text-xs transition ${
                     period === p.id
                       ? 'bg-accent-500/20 text-accent-300'

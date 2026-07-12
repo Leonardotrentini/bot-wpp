@@ -77,39 +77,55 @@ function createIntegrationsRouter() {
   })
 
   router.get("/meta/ads", async (req, res) => {
-    const period = String(req.query.period || "7d")
-    const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
-    if (!integration?.adsEnabled) {
-      return res.status(400).json({
-        error: "NOT_ENABLED",
-        message: "Ative a leitura de anúncios e salve a integração.",
+    try {
+      const period = String(req.query.period || "7d")
+      const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
+      if (!integration?.adsEnabled) {
+        return res.status(400).json({
+          error: "NOT_ENABLED",
+          message: "Ative a leitura de anúncios e salve a integração.",
+        })
+      }
+
+      const result = await fetchMetaAdsDashboard(prisma, req.user.sub, integration, { period })
+      if (result.error === "NOT_CONFIGURED") {
+        return res.status(400).json({ error: result.error, message: result.message })
+      }
+      if (result.error) {
+        return res.status(502).json({ error: result.error, message: result.message })
+      }
+      return res.json(result)
+    } catch (err) {
+      console.error("[integrations/meta/ads]", err)
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: err?.message || "Falha ao carregar dados de anúncios.",
       })
     }
-
-    const result = await fetchMetaAdsDashboard(prisma, req.user.sub, integration, { period })
-    if (result.error === "NOT_CONFIGURED") {
-      return res.status(400).json({ error: result.error, message: result.message })
-    }
-    if (result.error) {
-      return res.status(502).json({ error: result.error, message: result.message })
-    }
-    return res.json(result)
   })
 
   router.post("/meta/ads/test", async (req, res) => {
-    const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
-    if (!integration) {
-      return res.status(400).json({ error: "NOT_CONFIGURED", message: "Salve a integração Meta antes de testar." })
-    }
+    try {
+      const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
+      if (!integration) {
+        return res.status(400).json({ error: "NOT_CONFIGURED", message: "Salve a integração Meta antes de testar." })
+      }
 
-    const result = await testMetaAdsConnection(prisma, req.user.sub, integration)
-    if (result.error === "NOT_CONFIGURED") {
-      return res.status(400).json({ error: result.error, message: result.message })
+      const result = await testMetaAdsConnection(prisma, req.user.sub, integration)
+      if (result.error === "NOT_CONFIGURED") {
+        return res.status(400).json({ error: result.error, message: result.message })
+      }
+      if (result.error) {
+        return res.status(502).json({ error: result.error, message: result.message })
+      }
+      return res.json(result)
+    } catch (err) {
+      console.error("[integrations/meta/ads/test]", err)
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: err?.message || "Falha ao testar conta de anúncios.",
+      })
     }
-    if (result.error) {
-      return res.status(502).json({ error: result.error, message: result.message })
-    }
-    return res.json(result)
   })
 
   return router
