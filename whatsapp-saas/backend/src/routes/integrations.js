@@ -20,6 +20,16 @@ function createIntegrationsRouter() {
   const router = express.Router()
   router.use(authMiddleware)
 
+  router.use((req, res, next) => {
+    if (req.dataScope?.orgRole === "SELLER") {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "Integrações estão disponíveis apenas para o dono da empresa.",
+      })
+    }
+    return next()
+  })
+
   router.get("/", async (req, res) => {
     const meta = await getMetaIntegration(prisma, req.user.sub)
     const gtm = await getGtmIntegration(prisma, req.user.sub)

@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { getReportDashboard, refreshOverview } from '../services/api.js'
 
-export function useReportDashboard({ filters, groupIds, onRefreshDone }) {
+export function useReportDashboard({ filters, groupIds, sellerUserId, onRefreshDone }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -14,11 +14,12 @@ export function useReportDashboard({ filters, groupIds, onRefreshDone }) {
       endDate: filters.endDate,
       groupIds,
       metaPeriod: filters.metaPeriod,
+      sellerUserId: sellerUserId || undefined,
     })
     setData(res.data)
     setLastUpdatedAt(new Date())
     return res.data
-  }, [filters.period, filters.startDate, filters.endDate, filters.metaPeriod, groupIds])
+  }, [filters.period, filters.startDate, filters.endDate, filters.metaPeriod, groupIds, sellerUserId])
 
   const load = useCallback(async () => {
     setLoading(true)

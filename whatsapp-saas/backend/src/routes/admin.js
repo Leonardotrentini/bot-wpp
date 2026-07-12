@@ -85,7 +85,11 @@ router.post("/users/:id/impersonate", authMiddleware, requireAdmin, async (req, 
   }
 
   const sub = target.subscriptions[0]
-  const token = signToken(target)
+  const token = await signToken(target)
+  const orgMember = await prisma.organizationMember.findUnique({
+    where: { userId: target.id },
+    include: { organization: { select: { id: true, name: true } } },
+  })
   return res.json({
     token,
     user: {
@@ -95,6 +99,9 @@ router.post("/users/:id/impersonate", authMiddleware, requireAdmin, async (req, 
       phone: target.phone || "",
       avatar: target.avatarUrl || null,
       role: target.role,
+      orgId: orgMember?.organizationId || null,
+      orgRole: orgMember?.role || null,
+      orgName: orgMember?.organization?.name || null,
       plan: sub?.plan
         ? { id: sub.plan.id, name: sub.plan.name, slug: sub.plan.slug, maxGroups: sub.plan.maxGroups }
         : null,

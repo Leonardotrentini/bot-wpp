@@ -4,6 +4,12 @@
 
 const { prisma } = require("./prisma")
 const { phoneDigitsFromJid, phoneDigitsFromValue } = require("./participantIdentity")
+const { readUserFilter } = require("./orgScope")
+
+function uFilter(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
+  return readUserFilter({ userIds: ids })
+}
 
 function isInRange(date, start, end) {
   if (!date) return false
@@ -84,9 +90,9 @@ class LeadRegistry {
   }
 }
 
-async function loadGroupsScope(userId, groupJids) {
+async function loadGroupsScope(userIds, groupJids) {
   const allGroups = await prisma.whatsAppGroup.findMany({
-    where: { userId },
+    where: uFilter(userIds),
     include: {
       participants: {
         select: {
@@ -104,10 +110,10 @@ async function loadGroupsScope(userId, groupJids) {
   return connected.filter((g) => set.has(g.groupJid))
 }
 
-async function collectCrmLeadsInPeriod(userId, start, end) {
+async function collectCrmLeadsInPeriod(userIds, start, end) {
   const grouped = await prisma.crmMessage.groupBy({
     by: ["conversationId"],
-    where: { userId, fromMe: false },
+    where: { ...uFilter(userIds), fromMe: false },
     _min: { timestamp: true },
   })
 
@@ -158,10 +164,10 @@ function collectGroupLeadsInPeriod(groups, start, end) {
 /**
  * Total de novos leads no período (CRM + grupos), deduplicado por telefone/JID.
  */
-async function buildUnifiedLeadsMetrics(userId, start, end, { groupJids = null } = {}) {
+async function buildUnifiedLeadsMetrics(userIds, start, end, { groupJids = null } = {}) {
   const [crmLeads, groups] = await Promise.all([
-    collectCrmLeadsInPeriod(userId, start, end),
-    loadGroupsScope(userId, groupJids),
+    collectCrmLeadsInPeriod(userIds, start, end),
+    loadGroupsScope(userIds, groupJids),
   ])
 
   const groupLeads = collectGroupLeadsInPeriod(groups, start, end)

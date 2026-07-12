@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Button } from '../common/Button.jsx'
 import { DateRangeCalendar } from '../common/DateRangeCalendar.jsx'
 import { GroupFilterBar } from './GroupFilterBar.jsx'
+import { Select } from '../common/Select.jsx'
 
 const PERIOD_OPTIONS = [
   { id: 'hoje', label: 'Hoje' },
@@ -33,6 +34,9 @@ export function ReportToolbar({
   groups,
   selectedGroupIds,
   onGroupsChange,
+  sellers = [],
+  sellerUserId = '',
+  onSellerChange,
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   const retention = metaInfo?.groupsRetentionDays ?? 2
@@ -134,6 +138,23 @@ export function ReportToolbar({
             )}
             {filtersOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </button>
+
+          {sellers.length > 0 && onSellerChange && (
+            <div className="min-w-[180px]">
+              <Select
+                value={sellerUserId}
+                onChange={(e) => onSellerChange(e.target.value)}
+                aria-label="Filtrar por vendedor"
+              >
+                <option value="">Vendedor: Todos</option>
+                {sellers.map((s) => (
+                  <option key={s.userId} value={s.userId}>
+                    {s.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          )}
         </div>
 
         {filters.period === 'custom' && (

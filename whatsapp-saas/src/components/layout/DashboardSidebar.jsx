@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Users,
   UserCircle2,
+  UserCog,
   Zap,
   Settings,
   ChevronLeft,
@@ -14,6 +15,7 @@ import {
   Plug,
   Receipt,
 } from 'lucide-react'
+import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { BrandLogo } from '../common/BrandLogo.jsx'
@@ -24,13 +26,19 @@ const navSections = [
     items: [
       { to: '/dashboard', label: 'Visão geral', icon: LayoutDashboard, end: true },
       { to: '/dashboard/connect', label: 'Conectar WhatsApp', icon: Smartphone },
+      { to: '/dashboard/team', label: 'Equipe', icon: UserCog, ownerOnly: true },
     ],
   },
   {
     label: 'Grupos',
     items: [
       { to: '/dashboard/groups', label: 'Grupos', icon: Users },
-      { to: '/dashboard/members', label: 'Membros', icon: UserCircle2 },
+      {
+        to: '/dashboard/members',
+        label: 'Membros de grupos',
+        icon: UserCircle2,
+        title: 'Participantes dos grupos WhatsApp (leads), não a equipe de vendas',
+      },
       { to: '/dashboard/automations', label: 'Automações', icon: Zap, beta: true },
     ],
   },
@@ -48,13 +56,24 @@ const navSections = [
   },
   {
     label: 'Integrações',
+    ownerOnly: true,
     items: [{ to: '/dashboard/integrations', label: 'Meta / Facebook', icon: Plug, beta: true }],
   },
 ]
 
 export function DashboardSidebar() {
   const { collapsed, setCollapsed } = useSidebar()
-  const { isAdmin } = useAuth()
+  const { isAdmin, isOrgOwner, isOrgSeller } = useAuth()
+
+  const visibleSections = useMemo(() => {
+    return navSections
+      .filter((section) => !section.ownerOnly || isOrgOwner)
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) => !item.ownerOnly || isOrgOwner),
+      }))
+      .filter((section) => section.items.length > 0)
+  }, [isOrgOwner])
 
   return (
     <aside
@@ -74,8 +93,13 @@ export function DashboardSidebar() {
           </NavLink>
         )}
       </div>
+      {isOrgSeller && !collapsed && (
+        <div className="mx-2 mt-2 rounded-lg border border-brand-800 bg-brand-950/50 px-2 py-1.5 text-[10px] text-stone-500">
+          Conta de vendedor — você vê apenas seus dados.
+        </div>
+      )}
       <nav className="flex-1 space-y-3 overflow-y-auto p-2">
-        {navSections.map((section) => (
+        {visibleSections.map((section) => (
           <div key={section.label}>
             {!collapsed && (
               <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-stone-600">
@@ -88,7 +112,7 @@ export function DashboardSidebar() {
                   key={item.to}
                   to={item.to}
                   end={item.end}
-                  title={item.beta ? `${item.label} (BETA)` : item.label}
+                  title={item.title || (item.beta ? `${item.label} (BETA)` : item.label)}
                   className={({ isActive }) =>
                     `relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
                       isActive

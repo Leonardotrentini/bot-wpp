@@ -3,6 +3,12 @@
  */
 
 const { formatContactRow } = require("./crmCore")
+const { readUserFilter } = require("./orgScope")
+
+function uFilter(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
+  return readUserFilter({ userIds: ids })
+}
 
 function parsePayloadAmount(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null
@@ -30,9 +36,9 @@ function formatSaleRow(row) {
   }
 }
 
-function buildSalesWhere(userId, { from, to, q }) {
+function buildSalesWhere(userIds, { from, to, q }) {
   const where = {
-    userId,
+    ...uFilter(userIds),
     type: "purchase_confirmed",
   }
 
@@ -64,11 +70,11 @@ function buildSalesWhere(userId, { from, to, q }) {
   return where
 }
 
-async function listCrmSales(prisma, userId, { from, to, q, page = 1, limit = 50 } = {}) {
+async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50 } = {}) {
   const safePage = Math.max(1, Number(page) || 1)
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 50))
   const skip = (safePage - 1) * safeLimit
-  const where = buildSalesWhere(userId, { from, to, q })
+  const where = buildSalesWhere(userIds, { from, to, q })
 
   const [rows, total, amountRows] = await Promise.all([
     prisma.crmContactActivity.findMany({

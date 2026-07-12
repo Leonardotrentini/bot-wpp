@@ -4,8 +4,14 @@
 
 const { prisma } = require("./prisma")
 const { dayKeyInSp } = require("./messageMetrics")
+const { readUserFilter } = require("./orgScope")
 
 const FUNNEL_ACTIVITY_TYPES = ["lead_created", "quote_saved", "purchase_confirmed", "stage_changed"]
+
+function uFilter(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
+  return readUserFilter({ userIds: ids })
+}
 
 function parsePayloadAmount(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null
@@ -13,11 +19,10 @@ function parsePayloadAmount(payload) {
   return Number.isFinite(amount) ? amount : null
 }
 
-async function buildCrmConversationsStarted(userId, start, end) {
-  /** Primeira mensagem recebida do lead define quando a conversa começou (ignora data do sync). */
+async function buildCrmConversationsStarted(userIds, start, end) {
   const rows = await prisma.crmMessage.groupBy({
     by: ["conversationId"],
-    where: { userId, fromMe: false },
+    where: { ...uFilter(userIds), fromMe: false },
     _min: { timestamp: true },
   })
 
@@ -29,21 +34,23 @@ async function buildCrmConversationsStarted(userId, start, end) {
   return count
 }
 
-async function buildCrmOverview(userId, start, end) {
+async function buildCrmOverview(userIds, start, end) {
+  const uf = uFilter(userIds)
   const [open, pending, resolved, unread, contacts, conversationsStarted] = await Promise.all([
-    prisma.crmConversation.count({ where: { userId, status: "open" } }),
-    prisma.crmConversation.count({ where: { userId, status: "pending" } }),
-    prisma.crmConversation.count({ where: { userId, status: "resolved" } }),
-    prisma.crmConversation.count({ where: { userId, unreadCount: { gt: 0 } } }),
-    prisma.crmContact.count({ where: { userId } }),
-    buildCrmConversationsStarted(userId, start, end),
+    prisma.crmConversation.count({ where: { ...uf, status: "open" } }),
+    prisma.crmConversation.count({ where: { ...uf, status: "pending" } }),
+    prisma.crmConversation.count({ where: { ...uf, status: "resolved" } }),
+    prisma.crmConversation.count({ where: { ...uf, unreadCount: { gt: 0 } } }),
+    prisma.crmContact.count({ where: uf }),
+    buildCrmConversationsStarted(userIds, start, end),
   ])
   return { open, pending, resolved, unread, contacts, conversationsStarted }
 }
 
-async function buildCrmFunnelByStage(userId) {
+async function buildCrmFunnelByStage(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
   const stages = await prisma.crmKanbanStage.findMany({
-    where: { userId },
+    where: uFilter(userIds),
     orderBy: { sortOrder: "asc" },
     select: { id: true, name: true, color: true, sortOrder: true },
   })
@@ -51,23 +58,43 @@ async function buildCrmFunnelByStage(userId) {
 
   const counts = await prisma.crmConversation.groupBy({
     by: ["kanbanStageId"],
-    where: { userId },
+    where: uFilter(userIds),
     _count: { id: true },
   })
   const countMap = new Map(counts.map((c) => [c.kanbanStageId, c._count.id]))
 
-  return stages.map((s) => ({
-    stageId: s.id,
-    stageName: s.name,
-    color: s.color || "#22c55e",
-    count: countMap.get(s.id) || 0,
-  }))
+  if (ids.length === 1) {
+    return stages.map((s) => ({
+      stageId: s.id,
+      stageName: s.name,
+      color: s.color || "#22c55e",
+      count: countMap.get(s.id) || 0,
+    }))
+  }
+
+  const byName = new Map()
+  for (const s of stages) {
+    const key = s.name
+    if (!byName.has(key)) {
+      byName.set(key, {
+        stageId: s.id,
+        stageName: s.name,
+        color: s.color || "#22c55e",
+        sortOrder: s.sortOrder,
+        count: 0,
+      })
+    }
+    const bucket = byName.get(key)
+    bucket.count += countMap.get(s.id) || 0
+  }
+
+  return [...byName.values()].sort((a, b) => a.sortOrder - b.sortOrder)
 }
 
-async function buildCrmActivitySeries(userId, start, end) {
+async function buildCrmActivitySeries(userIds, start, end) {
   const rows = await prisma.crmContactActivity.findMany({
     where: {
-      userId,
+      ...uFilter(userIds),
       type: { in: FUNNEL_ACTIVITY_TYPES },
       createdAt: { gte: start, lte: end },
     },
@@ -96,31 +123,32 @@ async function buildCrmActivitySeries(userId, start, end) {
   return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date))
 }
 
-async function buildCrmConversionCounts(userId, start, end) {
+async function buildCrmConversionCounts(userIds, start, end) {
+  const uf = uFilter(userIds)
   const range = { gte: start, lte: end }
   const [conversationStarted, leadQualified, quote, purchase, metaConversationStarted] = await Promise.all([
-    buildCrmConversationsStarted(userId, start, end),
+    buildCrmConversationsStarted(userIds, start, end),
     prisma.crmContact.count({
-      where: { userId, qualifiedEventSentAt: range },
+      where: { ...uf, qualifiedEventSentAt: range },
     }),
     prisma.crmContact.count({
-      where: { userId, quoteEventSentAt: range },
+      where: { ...uf, quoteEventSentAt: range },
     }),
     prisma.crmContactActivity.count({
-      where: { userId, type: "purchase_confirmed", createdAt: range },
+      where: { ...uf, type: "purchase_confirmed", createdAt: range },
     }),
     prisma.crmContact.count({
-      where: { userId, conversationStartedEventSentAt: range },
+      where: { ...uf, conversationStartedEventSentAt: range },
     }),
   ])
 
   return { conversationStarted, leadQualified, quote, purchase, metaConversationStarted }
 }
 
-async function buildCrmQuotesSummary(userId, start, end) {
+async function buildCrmQuotesSummary(userIds, start, end) {
   const rows = await prisma.crmContactActivity.findMany({
     where: {
-      userId,
+      ...uFilter(userIds),
       type: "quote_saved",
       createdAt: { gte: start, lte: end },
     },
@@ -144,10 +172,10 @@ async function buildCrmQuotesSummary(userId, start, end) {
   }
 }
 
-async function buildCrmSalesByDay(userId, start, end) {
+async function buildCrmSalesByDay(userIds, start, end) {
   const rows = await prisma.crmContactActivity.findMany({
     where: {
-      userId,
+      ...uFilter(userIds),
       type: "purchase_confirmed",
       createdAt: { gte: start, lte: end },
     },

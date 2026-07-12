@@ -525,10 +525,18 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   return { message, conversation: updatedConversation, created, isNewConversation }
 }
 
-/** Emite eventos socket para o usuário dono da conversa. */
+/** Emite eventos socket para o usuário dono da conversa e para a sala da empresa. */
 function emitCrmEvent(io, userId, event, payload) {
   if (!io) return
   io.to(`user:${userId}`).emit(event, payload)
+  void prisma.organizationMember
+    .findUnique({ where: { userId }, select: { organizationId: true } })
+    .then((member) => {
+      if (member?.organizationId) {
+        io.to(`org:${member.organizationId}`).emit(event, payload)
+      }
+    })
+    .catch(() => {})
 }
 
 module.exports = {

@@ -12,6 +12,11 @@ enum UserRole {
   ADMIN
 }
 
+enum OrgMemberRole {
+  OWNER
+  SELLER
+}
+
 enum SubscriptionStatus {
   ACTIVE
   CANCELLED
@@ -34,6 +39,45 @@ model User {
   whatsappGroups     WhatsAppGroup[]
   metaIntegration    MetaIntegration?
   gtmIntegration     GtmIntegration?
+  organizationMember OrganizationMember?
+}
+
+model Organization {
+  id        String               @id @default(cuid())
+  name      String
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  members   OrganizationMember[]
+  invites   OrgInvite[]
+}
+
+model OrganizationMember {
+  id             String        @id @default(cuid())
+  organizationId String
+  userId         String        @unique
+  role           OrgMemberRole
+  invitedAt      DateTime?
+  joinedAt       DateTime      @default(now())
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, role])
+}
+
+model OrgInvite {
+  id             String        @id @default(cuid())
+  organizationId String
+  email          String
+  name           String
+  token          String        @unique
+  role           OrgMemberRole @default(SELLER)
+  expiresAt      DateTime
+  createdAt      DateTime      @default(now())
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
 }
 
 model Plan {

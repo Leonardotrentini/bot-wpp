@@ -7,6 +7,7 @@ const express = require("express")
 const { z } = require("zod")
 const { prisma } = require("../lib/prisma")
 const { authMiddleware } = require("../lib/auth")
+const { readUserFilter } = require("../lib/orgScope")
 const {
   sendText,
   sendMedia,
@@ -167,6 +168,27 @@ function createCrmRouter({ io }) {
   const router = express.Router()
   router.use(authMiddleware)
 
+  function scopeWhere(req, extra = {}) {
+    return { ...readUserFilter(req.dataScope), ...extra }
+  }
+
+  async function findScopedConversation(req, conversationId) {
+    return prisma.crmConversation.findFirst({
+      where: { id: conversationId, ...readUserFilter(req.dataScope) },
+      include: CONVERSATION_INCLUDE,
+    })
+  }
+
+  async function findScopedContact(req, contactId) {
+    return prisma.crmContact.findFirst({
+      where: { id: contactId, ...readUserFilter(req.dataScope) },
+    })
+  }
+
+  function canMutateAsActor(req, resourceUserId) {
+    return resourceUserId === req.user.sub
+  }
+
   const syncDeps = { prisma, io, findChats, findContacts, fetchChatMessages, fetchProfile, fetchProfilePictureUrl }
 
   // ------------------------- Conversas -------------------------
@@ -179,7 +201,7 @@ function createCrmRouter({ io }) {
     const offset = Math.max(0, parseInt(req.query.offset || "0", 10) || 0)
     const { status, stageId, tagId, q } = req.query
 
-    const where = { userId }
+    const where = scopeWhere(req)
     if (status && ["open", "pending", "resolved", "archived"].includes(status)) where.status = status
     if (stageId === "none") where.kanbanStageId = null
     else if (stageId) where.kanbanStageId = String(stageId)
@@ -223,10 +245,7 @@ function createCrmRouter({ io }) {
   })
 
   router.get("/conversations/:id/messages", async (req, res) => {
-    const userId = req.user.sub
-    const convo = await prisma.crmConversation.findFirst({
-      where: { id: req.params.id, userId },
-    })
+    const convo = await findScopedConversation(req, req.params.id)
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
 
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10) || 50))
@@ -249,9 +268,8 @@ function createCrmRouter({ io }) {
   })
 
   router.get("/messages/:messageId/media", async (req, res) => {
-    const userId = req.user.sub
     const msg = await prisma.crmMessage.findFirst({
-      where: { id: req.params.messageId, userId },
+      where: { id: req.params.messageId, ...readUserFilter(req.dataScope) },
     })
     if (!msg) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
 
@@ -269,7 +287,7 @@ function createCrmRouter({ io }) {
       })
     }
 
-    const conn = await ensureWhatsAppConnected(prisma, userId)
+    const conn = await ensureWhatsAppConnected(prisma, msg.userId)
     if (!conn) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
     }
@@ -302,7 +320,6 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/conversations/:id/send", async (req, res) => {
-    const userId = req.user.sub
     const schema = z.object({
       body: z.string().max(4096).optional().default(""),
       mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional().default("none"),
@@ -317,12 +334,16 @@ function createCrmRouter({ io }) {
     const mediaError = validateMediaContentSize(content)
     if (mediaError) return res.status(400).json({ error: "MEDIA_INVALID", message: mediaError })
 
-    const convo = await prisma.crmConversation.findFirst({
-      where: { id: req.params.id, userId },
-      include: CONVERSATION_INCLUDE,
-    })
+    const convo = await findScopedConversation(req, req.params.id)
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+    if (!canMutateAsActor(req, convo.userId)) {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "Somente o vendedor responsável pode responder nesta conversa.",
+      })
+    }
 
+    const userId = convo.userId
     const conn = await ensureWhatsAppConnected(prisma, userId)
     if (!conn) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
@@ -409,20 +430,18 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/conversations/:id/read", async (req, res) => {
-    const userId = req.user.sub
-    const convo = await prisma.crmConversation.findFirst({ where: { id: req.params.id, userId } })
+    const convo = await findScopedConversation(req, req.params.id)
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
     const updated = await prisma.crmConversation.update({
       where: { id: convo.id },
       data: { unreadCount: 0 },
       include: CONVERSATION_INCLUDE,
     })
-    emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(updated) })
+    emitCrmEvent(io, convo.userId, "crm:conversation", { conversation: formatConversationRow(updated) })
     return res.json({ conversation: formatConversationRow(updated) })
   })
 
   router.patch("/conversations/:id", async (req, res) => {
-    const userId = req.user.sub
     const schema = z.object({
       status: z.enum(["open", "pending", "resolved", "archived"]).optional(),
       kanbanStageId: z.string().nullable().optional(),
@@ -434,9 +453,16 @@ function createCrmRouter({ io }) {
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
 
-    const convo = await prisma.crmConversation.findFirst({ where: { id: req.params.id, userId } })
+    const convo = await findScopedConversation(req, req.params.id)
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+    if (!canMutateAsActor(req, convo.userId)) {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "Somente o vendedor responsável pode alterar esta conversa.",
+      })
+    }
 
+    const userId = convo.userId
     const data = { ...parsed.data }
     if (data.kanbanStageId) {
       const stage = await prisma.crmKanbanStage.findFirst({ where: { id: data.kanbanStageId, userId } })
@@ -478,7 +504,6 @@ function createCrmRouter({ io }) {
   // ------------------------- Contatos -------------------------
 
   router.patch("/contacts/:id", async (req, res) => {
-    const userId = req.user.sub
     const schema = z.object({
       name: z.string().max(120).nullable().optional(),
       notes: z.string().max(4000).nullable().optional(),
@@ -486,8 +511,13 @@ function createCrmRouter({ io }) {
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
 
-    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    const contact = await findScopedContact(req, req.params.id)
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode editar este contato." })
+    }
+
+    const userId = contact.userId
 
     const data = { ...parsed.data }
     if (data.name !== undefined) data.name = data.name ? String(data.name).trim() : null
@@ -530,9 +560,13 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/contacts/:id/refresh-avatar", async (req, res) => {
-    const userId = req.user.sub
-    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    const contact = await findScopedContact(req, req.params.id)
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode atualizar este contato." })
+    }
+
+    const userId = contact.userId
 
     const conn = await ensureWhatsAppConnected(prisma, userId)
     if (!conn) {
@@ -598,7 +632,6 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/contacts/:id/save", async (req, res) => {
-    const userId = req.user.sub
     const schema = z.object({
       name: z.string().min(1).max(120),
       saveOnWhatsapp: z.boolean().optional().default(false),
@@ -606,8 +639,13 @@ function createCrmRouter({ io }) {
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um nome válido." })
 
-    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    const contact = await findScopedContact(req, req.params.id)
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode salvar este contato." })
+    }
+
+    const userId = contact.userId
 
     const savedName = parsed.data.name.trim()
     const phone = contact.phone || contact.remoteJid.split("@")[0].replace(/\D/g, "")
@@ -669,13 +707,15 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/contacts/:id/tags", async (req, res) => {
-    const userId = req.user.sub
     const tagId = String(req.body?.tagId || "")
-    const [contact, tag] = await Promise.all([
-      prisma.crmContact.findFirst({ where: { id: req.params.id, userId } }),
-      prisma.crmTag.findFirst({ where: { id: tagId, userId } }),
-    ])
-    if (!contact || !tag) return res.status(404).json({ error: "NOT_FOUND", message: "Contato ou tag não encontrados." })
+    const contact = await findScopedContact(req, req.params.id)
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode alterar tags deste contato." })
+    }
+    const userId = contact.userId
+    const tag = await prisma.crmTag.findFirst({ where: { id: tagId, userId } })
+    if (!tag) return res.status(404).json({ error: "NOT_FOUND", message: "Contato ou tag não encontrados." })
 
     await prisma.crmContactTag.upsert({
       where: { contactId_tagId: { contactId: contact.id, tagId: tag.id } },
@@ -711,9 +751,12 @@ function createCrmRouter({ io }) {
   })
 
   router.delete("/contacts/:id/tags/:tagId", async (req, res) => {
-    const userId = req.user.sub
-    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    const contact = await findScopedContact(req, req.params.id)
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode alterar tags deste contato." })
+    }
+    const userId = contact.userId
     const tag = await prisma.crmTag.findFirst({ where: { id: req.params.tagId, userId } })
     await prisma.crmContactTag
       .delete({ where: { contactId_tagId: { contactId: contact.id, tagId: req.params.tagId } } })
@@ -734,12 +777,11 @@ function createCrmRouter({ io }) {
   })
 
   router.get("/contacts/:id/activity", async (req, res) => {
-    const userId = req.user.sub
-    const contact = await prisma.crmContact.findFirst({ where: { id: req.params.id, userId } })
+    const contact = await findScopedContact(req, req.params.id)
     if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
-    const activities = await getContactActivityTimeline(prisma, userId, contact.id)
+    const activities = await getContactActivityTimeline(prisma, contact.userId, contact.id)
     const refreshed = await prisma.crmContact.findFirst({
-      where: { id: contact.id, userId },
+      where: { id: contact.id },
       include: {
         tags: { include: { tag: true } },
         reminders: { where: { status: "pending" }, orderBy: { scheduledAt: "asc" } },
@@ -752,7 +794,6 @@ function createCrmRouter({ io }) {
   })
 
   router.get("/sales", async (req, res) => {
-    const userId = req.user.sub
     const schema = z.object({
       from: z.string().optional().nullable(),
       to: z.string().optional().nullable(),
@@ -764,7 +805,7 @@ function createCrmRouter({ io }) {
     if (!parsed.success) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Parâmetros inválidos." })
     }
-    const result = await listCrmSales(prisma, userId, parsed.data)
+    const result = await listCrmSales(prisma, req.dataScope.userIds, parsed.data)
     return res.json(result)
   })
 
@@ -781,14 +822,18 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/contacts/:id/quote", async (req, res) => {
-    const userId = req.user.sub
+    const contact = await findScopedContact(req, req.params.id)
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode registrar orçamento." })
+    }
     const schema = z.object({ amount: z.coerce.number().positive() })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um valor de orçamento válido." })
     }
     const result = await saveContactQuote(prisma, io, {
-      userId,
+      userId: contact.userId,
       contactId: req.params.id,
       amount: parsed.data.amount,
     })
@@ -802,7 +847,11 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/contacts/:id/purchase/confirm", async (req, res) => {
-    const userId = req.user.sub
+    const contact = await findScopedContact(req, req.params.id)
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode confirmar venda." })
+    }
     const schema = z.object({
       amount: z.coerce.number().positive(),
       ticket: z.string().max(120).optional().nullable(),
@@ -813,7 +862,7 @@ function createCrmRouter({ io }) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um valor de compra válido." })
     }
     const result = await confirmContactPurchase(prisma, io, {
-      userId,
+      userId: contact.userId,
       contactId: req.params.id,
       amount: parsed.data.amount,
       ticket: parsed.data.ticket,
@@ -1456,13 +1505,13 @@ function createCrmRouter({ io }) {
   // ------------------------- Visão geral (contadores) -------------------------
 
   router.get("/overview", async (req, res) => {
-    const userId = req.user.sub
+    const uf = readUserFilter(req.dataScope)
     const [open, pending, resolved, unread, contacts] = await prisma.$transaction([
-      prisma.crmConversation.count({ where: { userId, status: "open" } }),
-      prisma.crmConversation.count({ where: { userId, status: "pending" } }),
-      prisma.crmConversation.count({ where: { userId, status: "resolved" } }),
-      prisma.crmConversation.count({ where: { userId, unreadCount: { gt: 0 } } }),
-      prisma.crmContact.count({ where: { userId } }),
+      prisma.crmConversation.count({ where: { ...uf, status: "open" } }),
+      prisma.crmConversation.count({ where: { ...uf, status: "pending" } }),
+      prisma.crmConversation.count({ where: { ...uf, status: "resolved" } }),
+      prisma.crmConversation.count({ where: { ...uf, unreadCount: { gt: 0 } } }),
+      prisma.crmContact.count({ where: uf }),
     ])
     return res.json({ open, pending, resolved, unread, contacts, aiConfigured: aiConfigured() })
   })

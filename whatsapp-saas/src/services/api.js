@@ -552,6 +552,7 @@ export async function getReportDashboard({
   endDate,
   groupIds = [],
   metaPeriod,
+  sellerUserId,
 } = {}) {
   if (resolveUseRealApi()) {
     const params = { period }
@@ -559,6 +560,7 @@ export async function getReportDashboard({
     if (endDate) params.endDate = endDate
     if (metaPeriod) params.metaPeriod = metaPeriod
     if (groupIds?.length) params.groupIds = groupIds.join(',')
+    if (sellerUserId) params.sellerUserId = sellerUserId
     return apiClient.get('/reports/dashboard', { params })
   }
   await delay()
@@ -1053,4 +1055,34 @@ export async function refreshCrmProfiles() {
 export async function getCrmOverview() {
   if (resolveUseRealApi()) return apiClient.get('/crm/overview')
   return mockResponse({ open: 0, pending: 0, resolved: 0, unread: 0, contacts: 0, aiConfigured: false })
+}
+
+export async function fetchOrg() {
+  if (resolveUseRealApi()) return (await apiClient.get('/org')).data
+  return { organization: { id: 'mock-org', name: 'Minha empresa' }, role: 'OWNER', isOwner: true }
+}
+
+export async function fetchOrgMembers() {
+  if (resolveUseRealApi()) return (await apiClient.get('/org/members')).data
+  return { members: [], pendingInvites: [] }
+}
+
+export async function fetchOrgSellers() {
+  if (resolveUseRealApi()) return (await apiClient.get('/org/sellers')).data
+  return { sellers: [] }
+}
+
+export async function inviteOrgMember({ name, email }) {
+  if (resolveUseRealApi()) return (await apiClient.post('/org/members/invite', { name, email })).data
+  return { invite: { inviteUrl: 'https://example.com/accept-invite?token=mock' } }
+}
+
+export async function removeOrgMember(userId) {
+  if (resolveUseRealApi()) return (await apiClient.delete(`/org/members/${userId}`)).data
+  return { ok: true }
+}
+
+export async function acceptOrgInvite({ token, password }) {
+  if (resolveUseRealApi()) return (await apiClient.post('/auth/accept-invite', { token, password })).data
+  return { user: mockUser, token: 'mock-jwt-token' }
 }

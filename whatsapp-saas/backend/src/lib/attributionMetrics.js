@@ -3,6 +3,12 @@
  */
 
 const { prisma } = require("./prisma")
+const { readUserFilter } = require("./orgScope")
+
+function uFilter(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
+  return readUserFilter({ userIds: ids })
+}
 
 function aggregateByField(rows, field, fallback = "—") {
   const map = new Map()
@@ -16,10 +22,10 @@ function aggregateByField(rows, field, fallback = "—") {
     .slice(0, 15)
 }
 
-async function buildAttributionSummary(userId, start, end) {
+async function buildAttributionSummary(userIds, start, end) {
   const rows = await prisma.metaAttributionLead.findMany({
     where: {
-      userId,
+      ...uFilter(userIds),
       OR: [
         { clickAt: { gte: start, lte: end } },
         { clickAt: null, createdAt: { gte: start, lte: end } },

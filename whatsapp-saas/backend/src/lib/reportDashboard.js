@@ -7,6 +7,7 @@ const { buildOverview } = require("./analytics")
 const { listCrmSales } = require("./crmSales")
 const { fetchMetaAdsDashboard, formatAdsFields } = require("./metaAds")
 const { MESSAGE_RETENTION_DAYS, todayStartInSp } = require("./messageMetrics")
+const { assertUserInScope } = require("./orgScope")
 const {
   buildCrmOverview,
   buildCrmFunnelByStage,
@@ -59,8 +60,12 @@ function parseReportQuery(req) {
   const endDate = typeof req.query?.endDate === "string" ? req.query.endDate : undefined
   const metaPeriod =
     typeof req.query?.metaPeriod === "string" ? req.query.metaPeriod : mapPeriodToMetaPeriod(period)
+  const sellerUserId =
+    typeof req.query?.sellerUserId === "string" && req.query.sellerUserId.trim()
+      ? req.query.sellerUserId.trim()
+      : undefined
 
-  return { groupJids, period, startDate, endDate, metaPeriod }
+  return { groupJids, period, startDate, endDate, metaPeriod, sellerUserId }
 }
 
 function costPerMetric(spend, count) {
@@ -68,12 +73,21 @@ function costPerMetric(spend, count) {
   return Math.round((spend / count) * 100) / 100
 }
 
-async function buildReportDashboard(userId, options = {}) {
-  const { groupJids, period, startDate, endDate, metaPeriod } = options
+async function buildReportDashboard(scopeUserIds, options = {}) {
+  let userIds = Array.isArray(scopeUserIds) ? [...scopeUserIds] : [scopeUserIds]
+  const { groupJids, period, startDate, endDate, metaPeriod, sellerUserId, metaOwnerUserId } = options
+
+  if (sellerUserId) {
+    if (!assertUserInScope({ userIds }, sellerUserId)) {
+      throw new Error("Vendedor fora do escopo da empresa.")
+    }
+    userIds = [sellerUserId]
+  }
+
   const { start, end } = reportPeriodToRange(period, startDate, endDate)
   const partialErrors = []
 
-  const groupsPromise = buildOverview(userId, {
+  const groupsPromise = buildOverview(userIds, {
     groupJids,
     period,
     startDate,
@@ -84,13 +98,13 @@ async function buildReportDashboard(userId, options = {}) {
   })
 
   const crmPromise = Promise.all([
-    buildCrmOverview(userId, start, end),
-    buildCrmFunnelByStage(userId),
-    buildCrmActivitySeries(userId, start, end),
-    buildCrmConversionCounts(userId, start, end),
-    buildCrmQuotesSummary(userId, start, end),
-    buildCrmSalesByDay(userId, start, end),
-    listCrmSales(prisma, userId, {
+    buildCrmOverview(userIds, start, end),
+    buildCrmFunnelByStage(userIds),
+    buildCrmActivitySeries(userIds, start, end),
+    buildCrmConversionCounts(userIds, start, end),
+    buildCrmQuotesSummary(userIds, start, end),
+    buildCrmSalesByDay(userIds, start, end),
+    listCrmSales(prisma, userIds, {
       from: start.toISOString(),
       to: end.toISOString(),
       page: 1,
@@ -101,12 +115,13 @@ async function buildReportDashboard(userId, options = {}) {
     return null
   })
 
-  const metaIntegration = await prisma.metaIntegration.findUnique({ where: { userId } }).catch(() => null)
+  const metaUserId = metaOwnerUserId || userIds[0]
+  const metaIntegration = await prisma.metaIntegration.findUnique({ where: { userId: metaUserId } }).catch(() => null)
   const adsFields = formatAdsFields(metaIntegration)
 
   const metaPromise =
     metaIntegration && adsFields.adsConnected
-      ? fetchMetaAdsDashboard(prisma, userId, metaIntegration, { period: metaPeriod }).catch((err) => {
+      ? fetchMetaAdsDashboard(prisma, metaUserId, metaIntegration, { period: metaPeriod }).catch((err) => {
           partialErrors.push({ source: "meta", message: err?.message || "Falha ao carregar Meta Ads." })
           return { error: "META_FETCH_FAILED", message: err?.message }
         })
@@ -115,12 +130,12 @@ async function buildReportDashboard(userId, options = {}) {
           message: metaIntegration ? "Meta Ads não configurado ou desativado." : "Integração Meta não configurada.",
         })
 
-  const attrPromise = buildAttributionSummary(userId, start, end).catch((err) => {
+  const attrPromise = buildAttributionSummary(userIds, start, end).catch((err) => {
     partialErrors.push({ source: "attribution", message: err?.message || "Falha ao carregar atribuição." })
     return { total: 0, bySource: [], byCampaign: [] }
   })
 
-  const leadsPromise = buildUnifiedLeadsMetrics(userId, start, end, { groupJids }).catch((err) => {
+  const leadsPromise = buildUnifiedLeadsMetrics(userIds, start, end, { groupJids }).catch((err) => {
     partialErrors.push({ source: "leads", message: err?.message || "Falha ao contar leads." })
     return {
       total: 0,

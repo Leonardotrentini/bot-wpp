@@ -25,6 +25,8 @@ const { enqueueUserSend } = require("./lib/sendQueue")
 const { scheduleParticipantSync } = require("./lib/participantSyncQueue")
 const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
+const { ensureUserOrganization, readUserFilter } = require("./lib/orgScope")
+const { createOrgRouter, handleAcceptInvite } = require("./routes/org")
 const {
   createInstance,
   setInstanceWebhook,
@@ -148,13 +150,14 @@ const io = new Server(httpServer, {
   },
 })
 
-// Autentica o socket via JWT e entra na sala do usuário (eventos privados do CRM).
+// Autentica o socket via JWT e entra na sala do usuário e da empresa.
 io.on("connection", (socket) => {
   const token = socket.handshake?.auth?.token || null
   if (!token) return
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET)
     if (payload?.sub) socket.join(`user:${payload.sub}`)
+    if (payload?.orgId) socket.join(`org:${payload.orgId}`)
   } catch {
     /* socket sem sala privada */
   }
@@ -188,6 +191,7 @@ app.use((req, res, next) => {
 })
 
 app.use("/api/admin", adminRoutes)
+app.use("/api/org", createOrgRouter())
 app.use("/api/crm", createCrmRouter({ io }))
 app.use("/api/reports", createReportsRouter())
 app.use("/api/integrations", createIntegrationsRouter())
@@ -246,7 +250,13 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     return u
   })
 
-  const token = signToken(user)
+  await ensureUserOrganization(user.id)
+
+  const token = await signToken(user)
+  const orgMember = await prisma.organizationMember.findUnique({
+    where: { userId: user.id },
+    include: { organization: { select: { id: true, name: true } } },
+  })
   return res.status(201).json({
     user: {
       id: user.id,
@@ -255,6 +265,9 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      orgId: orgMember?.organizationId || null,
+      orgRole: orgMember?.role || null,
+      orgName: orgMember?.organization?.name || null,
     },
     token,
   })
@@ -275,7 +288,12 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
   const ok = await bcrypt.compare(password, user.passwordHash)
   if (!ok) return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "E-mail ou senha inválidos." })
 
-  const token = signToken(user)
+  await ensureUserOrganization(user.id)
+  const token = await signToken(user)
+  const orgMember = await prisma.organizationMember.findUnique({
+    where: { userId: user.id },
+    include: { organization: { select: { id: true, name: true } } },
+  })
   return res.json({
     user: {
       id: user.id,
@@ -284,10 +302,15 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      orgId: orgMember?.organizationId || null,
+      orgRole: orgMember?.role || null,
+      orgName: orgMember?.organization?.name || null,
     },
     token,
   })
 })
+
+app.post("/api/auth/accept-invite", authRateLimit, handleAcceptInvite)
 
 app.get("/api/auth/me", authMiddleware, async (req, res) => {
   const user = await prisma.user.findUnique({
@@ -303,6 +326,12 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
   })
   if (!user) return res.status(404).json({ error: "NOT_FOUND", message: "Usuário não encontrado." })
 
+  await ensureUserOrganization(user.id)
+  const orgMember = await prisma.organizationMember.findUnique({
+    where: { userId: user.id },
+    include: { organization: { select: { id: true, name: true } } },
+  })
+
   const sub = user.subscriptions[0]
   return res.json({
     user: {
@@ -312,6 +341,9 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      orgId: orgMember?.organizationId || null,
+      orgRole: orgMember?.role || null,
+      orgName: orgMember?.organization?.name || null,
       plan: sub ? { id: sub.plan.id, name: sub.plan.name, slug: sub.plan.slug, maxGroups: sub.plan.maxGroups } : null,
     },
   })
@@ -789,6 +821,23 @@ async function readCachedGroups(userId) {
     orderBy: [{ status: "asc" }, { name: "asc" }],
   })
   return rows.filter((row) => row.monitoringEnabled || isPlausibleWhatsAppGroup(row)).map(getGroupApiPayload)
+}
+
+async function readCachedGroupsScoped(dataScope) {
+  const rows = await prisma.whatsAppGroup.findMany({
+    where: readUserFilter(dataScope),
+    orderBy: [{ status: "asc" }, { name: "asc" }],
+    include: dataScope.isOwner
+      ? { user: { select: { id: true, name: true, email: true } } }
+      : undefined,
+  })
+  return rows
+    .filter((row) => row.monitoringEnabled || isPlausibleWhatsAppGroup(row))
+    .map((row) => ({
+      ...getGroupApiPayload(row),
+      ownerUserId: row.userId,
+      ownerName: row.user?.name || null,
+    }))
 }
 
 async function updateConnectionSync(userId, data) {
@@ -1306,9 +1355,16 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
 
 app.get("/api/groups", authMiddleware, async (req, res) => {
   try {
-    const conn = await getUserWhatsAppConnection(req.user.sub)
-    await cleanupGhostGroups(prisma, req.user.sub)
-    const cachedGroups = await readCachedGroups(req.user.sub)
+    const scope = req.dataScope
+    const cachedGroups = await readCachedGroupsScoped(scope)
+    let conn = null
+    try {
+      conn = await getUserWhatsAppConnection(req.user.sub)
+      await cleanupGhostGroups(prisma, req.user.sub)
+    } catch (err) {
+      if (!scope.isOwner || err?.code !== "WHATSAPP_NOT_CONNECTED") throw err
+      conn = await prisma.whatsAppConnection.findUnique({ where: { userId: req.user.sub } })
+    }
     const limits = await getGroupLimitsPayload(req.user.sub)
     res.json({
       groups: cachedGroups,
@@ -1847,7 +1903,7 @@ app.get("/api/members", authMiddleware, async (req, res) => {
     const inactiveDays = req.query.inactiveDays ? Number(req.query.inactiveDays) : 0
     const activeGroupsOnly = req.query.activeGroupsOnly === "true" || req.query.activeGroupsOnly === "1"
 
-    const groupWhere = { userId: req.user.sub }
+    const groupWhere = { ...readUserFilter(req.dataScope) }
     if (groupId) groupWhere.groupJid = groupId
 
     const groupRows = await prisma.whatsAppGroup.findMany({
@@ -1866,7 +1922,7 @@ app.get("/api/members", authMiddleware, async (req, res) => {
     }
 
     const crmContacts = await prisma.crmContact.findMany({
-      where: { userId: req.user.sub },
+      where: readUserFilter(req.dataScope),
       include: {
         conversation: { select: { id: true, lastMessageAt: true } },
         tags: { include: { tag: { select: { name: true } } } },
@@ -1881,7 +1937,7 @@ app.get("/api/members", authMiddleware, async (req, res) => {
 
     if (activeGroupsOnly) {
       const activeIds = new Set(
-        (await prisma.whatsAppGroup.findMany({ where: { userId: req.user.sub, status: "ativo" }, select: { groupJid: true } })).map(
+        (await prisma.whatsAppGroup.findMany({ where: { ...readUserFilter(req.dataScope), status: "ativo" }, select: { groupJid: true } })).map(
           (g) => g.groupJid,
         ),
       )
@@ -2047,7 +2103,7 @@ app.get("/api/analytics", authMiddleware, async (req, res) => {
     const period = typeof req.query.period === "string" ? req.query.period : "2d"
     const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined
     const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined
-    const data = await buildAnalytics(req.user.sub, period, startDate, endDate)
+    const data = await buildAnalytics(req.dataScope.userIds, period, startDate, endDate)
     res.json(data)
   } catch (err) {
     console.error("[analytics]", err)
@@ -2069,7 +2125,7 @@ function parseOverviewQuery(req) {
 async function handleOverview(req, res) {
   try {
     const { groupJids, period } = parseOverviewQuery(req)
-    const data = await buildOverview(req.user.sub, { groupJids, period })
+    const data = await buildOverview(req.dataScope.userIds, { groupJids, period })
     res.json(data)
   } catch (err) {
     console.error("[overview]", err)

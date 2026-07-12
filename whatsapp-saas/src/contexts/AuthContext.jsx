@@ -51,6 +51,10 @@ export function AuthProvider({ children }) {
       })
   }, [])
 
+  const orgRole = user?.orgRole || null
+  const isOrgOwner = orgRole === 'OWNER' && !impersonation
+  const isOrgSeller = orgRole === 'SELLER' && !impersonation
+
   const value = useMemo(
     () => ({
       user,
@@ -63,8 +67,12 @@ export function AuthProvider({ children }) {
       isImpersonating: Boolean(impersonation),
       isAuthenticated: !!user,
       isAdmin: user?.role === 'ADMIN' && !impersonation,
+      org: user?.orgId ? { id: user.orgId, name: user.orgName || '' } : null,
+      orgRole,
+      isOrgOwner,
+      isOrgSeller,
     }),
-    [user, impersonation, exitImpersonation, refreshImpersonation],
+    [user, impersonation, exitImpersonation, refreshImpersonation, orgRole, isOrgOwner, isOrgSeller],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

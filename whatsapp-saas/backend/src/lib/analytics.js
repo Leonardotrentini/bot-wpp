@@ -1,4 +1,5 @@
 const { prisma } = require("./prisma")
+const { readUserFilter } = require("./orgScope")
 const {
   MESSAGE_RETENTION_DAYS,
   loadUnifiedMessages,
@@ -10,6 +11,11 @@ const {
   topGroupsByMessageCount,
   retentionRange,
 } = require("./messageMetrics")
+
+function uFilter(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
+  return readUserFilter({ userIds: ids })
+}
 
 function timeAgoPt(iso) {
   const diff = Date.now() - new Date(iso).getTime()
@@ -144,7 +150,7 @@ function truncateBody(text, max = 72) {
   return t.length > max ? `${t.slice(0, max)}…` : t
 }
 
-async function loadReactionsMap(userId, messages) {
+async function loadReactionsMap(userIds, messages) {
   const keys = new Map()
   for (const m of messages) {
     if (!m.messageId) continue
@@ -154,7 +160,7 @@ async function loadReactionsMap(userId, messages) {
   const groupIds = [...new Set([...keys.values()].map((k) => k.groupId))]
   const messageIds = [...new Set([...keys.values()].map((k) => k.messageId))]
   const rows = await prisma.messageEngagement.findMany({
-    where: { userId, groupId: { in: groupIds }, messageId: { in: messageIds } },
+    where: { ...uFilter(userIds), groupId: { in: groupIds }, messageId: { in: messageIds } },
     select: { groupId: true, messageId: true, reactionsCount: true },
   })
   return new Map(rows.map((r) => [`${r.groupId}:${r.messageId}`, r.reactionsCount]))
@@ -166,8 +172,8 @@ function readCountForMessage(m) {
   return 0
 }
 
-async function buildTopEngagedMessages(userId, messages, groupIdToName, limit = 12) {
-  const reactionMap = await loadReactionsMap(userId, messages)
+async function buildTopEngagedMessages(userIds, messages, groupIdToName, limit = 12) {
+  const reactionMap = await loadReactionsMap(userIds, messages)
   const normalized = messages.map((m) => ({
     ...m,
     timestamp: new Date(m.timestamp).getTime(),
@@ -235,13 +241,13 @@ async function buildTopEngagedMessages(userId, messages, groupIdToName, limit = 
   })
 }
 
-async function buildAnalytics(userId, period = "2d", startDate, endDate, groupsIn = null) {
+async function buildAnalytics(userIds, period = "2d", startDate, endDate, groupsIn = null) {
   const { start, end, retentionDays } = periodToRange(period, startDate, endDate)
 
   const groups =
     groupsIn ||
     (await prisma.whatsAppGroup.findMany({
-      where: { userId, status: "ativo" },
+      where: { ...uFilter(userIds), status: "ativo" },
       include: {
         participants: { select: { status: true, participantJid: true, name: true, createdAt: true } },
       },
@@ -252,7 +258,7 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate, groupsI
     return emptyAnalytics(period)
   }
 
-  const { messages, importedCount, outboundCount } = await loadUnifiedMessages(userId, groups, start, end)
+  const { messages, importedCount, outboundCount } = await loadUnifiedMessages(userIds, groups, start, end)
 
   const totalMessages = messages.length
   const inbound = messages.filter((m) => !m.fromMe)
@@ -326,7 +332,7 @@ async function buildAnalytics(userId, period = "2d", startDate, endDate, groupsI
     }))
 
   const groupIdToName = new Map(groups.map((g) => [g.id, g.name]))
-  const topMessages = await buildTopEngagedMessages(userId, messages, groupIdToName, 12)
+  const topMessages = await buildTopEngagedMessages(userIds, messages, groupIdToName, 12)
 
   return {
     period,
@@ -373,11 +379,11 @@ function emptyAnalytics(period) {
   }
 }
 
-async function buildDashboard(userId, groupsIn = null) {
+async function buildDashboard(userIds, groupsIn = null) {
   const groups =
     groupsIn ||
     (await prisma.whatsAppGroup.findMany({
-      where: { userId, status: "ativo" },
+      where: { ...uFilter(userIds), status: "ativo" },
       include: { participants: { select: { participantJid: true, status: true } } },
       orderBy: { name: "asc" },
     }))
@@ -385,7 +391,7 @@ async function buildDashboard(userId, groupsIn = null) {
   const now = new Date()
   const { start, end, retentionDays } = retentionRange(now)
 
-  const { messages, importedCount, outboundCount } = await loadUnifiedMessages(userId, groups, start, end)
+  const { messages, importedCount, outboundCount } = await loadUnifiedMessages(userIds, groups, start, end)
 
   const uniqueMembers = new Set()
   let activeCount = 0
@@ -406,13 +412,13 @@ async function buildDashboard(userId, groupsIn = null) {
 
   const [recentOutbound, recentAutomations, recentInbound] = await Promise.all([
     prisma.outboundMessage.findMany({
-      where: { userId },
+      where: uFilter(userIds),
       orderBy: { sentAt: "desc" },
       take: 4,
       select: { id: true, groupName: true, body: true, sentAt: true, status: true },
     }),
     prisma.automation.findMany({
-      where: { userId },
+      where: uFilter(userIds),
       orderBy: { updatedAt: "desc" },
       take: 3,
       select: { id: true, name: true, status: true, updatedAt: true },
@@ -484,9 +490,9 @@ async function buildDashboard(userId, groupsIn = null) {
 }
 
 /** Visão geral unificada (Dashboard + Analytics enxuto). */
-async function buildOverview(userId, { groupJids = null, period = "2d", startDate, endDate } = {}) {
+async function buildOverview(userIds, { groupJids = null, period = "2d", startDate, endDate } = {}) {
   const allGroups = await prisma.whatsAppGroup.findMany({
-    where: { userId },
+    where: uFilter(userIds),
     include: {
       participants: {
         select: {
@@ -512,8 +518,8 @@ async function buildOverview(userId, { groupJids = null, period = "2d", startDat
   const { start, end, retentionDays } = periodToRange(period, startDate, endDate)
   const leadMetrics = computeLeadMetrics(scope, start, end)
 
-  const dashboard = await buildDashboard(userId, scope)
-  const analytics = await buildAnalytics(userId, period, startDate, endDate, scope)
+  const dashboard = await buildDashboard(userIds, scope)
+  const analytics = await buildAnalytics(userIds, period, startDate, endDate, scope)
 
   const connectedGroupsList = (selected?.length ? scope : connected).map((g) => ({
     id: g.groupJid,

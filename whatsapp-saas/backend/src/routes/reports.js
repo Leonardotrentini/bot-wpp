@@ -8,9 +8,12 @@ function createReportsRouter() {
 
   router.get("/dashboard", async (req, res) => {
     try {
-      const userId = req.user.sub
+      const scope = req.dataScope
       const query = parseReportQuery(req)
-      const data = await buildReportDashboard(userId, query)
+      const data = await buildReportDashboard(scope.userIds, {
+        ...query,
+        metaOwnerUserId: scope.isOwner ? scope.actorId : req.user.sub,
+      })
       return res.json(data)
     } catch (err) {
       console.error("[reports/dashboard]", err)

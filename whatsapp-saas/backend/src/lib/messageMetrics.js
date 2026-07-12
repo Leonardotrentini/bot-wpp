@@ -1,5 +1,6 @@
 const { prisma } = require("./prisma")
 const { MESSAGE_RETENTION_DAYS, clampRangeToRetention, getRetentionCutoffDate } = require("./messageRetention")
+const { readUserFilter } = require("./orgScope")
 
 const PT_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
 const OUTBOUND_OK_STATUSES = ["enviado", "entregue", "lido"]
@@ -27,10 +28,16 @@ function retentionRange(now = new Date()) {
   )
 }
 
-async function loadUnifiedMessages(userId, groups, start, end) {
+function uFilter(userIds) {
+  const ids = Array.isArray(userIds) ? userIds : [userIds]
+  return readUserFilter({ userIds: ids })
+}
+
+async function loadUnifiedMessages(userIdOrIds, groups, start, end) {
   const groupDbIds = groups.map((g) => g.id)
   const groupJids = groups.map((g) => g.groupJid)
   const jidToDbId = new Map(groups.map((g) => [g.groupJid, g.id]))
+  const userWhere = uFilter(userIdOrIds)
 
   if (!groupDbIds.length) {
     return { messages: [], importedCount: 0, outboundCount: 0, inboundCount: 0 }
@@ -39,7 +46,7 @@ async function loadUnifiedMessages(userId, groups, start, end) {
   const [imported, outbound] = await Promise.all([
     prisma.whatsAppMessage.findMany({
       where: {
-        userId,
+        ...userWhere,
         groupId: { in: groupDbIds },
         timestamp: { gte: start, lte: end },
       },
@@ -58,7 +65,7 @@ async function loadUnifiedMessages(userId, groups, start, end) {
     groupJids.length
       ? prisma.outboundMessage.findMany({
           where: {
-            userId,
+            ...userWhere,
             groupJid: { in: groupJids },
             sentAt: { gte: start, lte: end },
             status: { in: OUTBOUND_OK_STATUSES },

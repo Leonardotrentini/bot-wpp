@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
-import { getGroups } from '../../services/api.js'
+import { getGroups, fetchOrgSellers } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useReportLayout } from '../../hooks/useReportLayout.js'
@@ -26,9 +26,11 @@ function DataBanner({ meta }) {
 
 export function Dashboard() {
   const toast = useToast()
-  const { user } = useAuth()
+  const { user, isOrgOwner } = useAuth()
   const [groups, setGroups] = useState([])
   const [selectedIds, setSelectedIds] = useState([])
+  const [sellerUserId, setSellerUserId] = useState('')
+  const [sellers, setSellers] = useState([])
   const [pickerOpen, setPickerOpen] = useState(false)
 
   const {
@@ -45,6 +47,7 @@ export function Dashboard() {
   const { data, loading, refreshing, load, refresh, lastUpdatedAt } = useReportDashboard({
     filters: layout.filters,
     groupIds: selectedIds,
+    sellerUserId: sellerUserId || undefined,
   })
 
   useEffect(() => {
@@ -60,11 +63,24 @@ export function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (!isOrgOwner) return
+    let ok = true
+    fetchOrgSellers()
+      .then((res) => {
+        if (ok) setSellers(res.sellers || [])
+      })
+      .catch(() => {})
+    return () => {
+      ok = false
+    }
+  }, [isOrgOwner])
+
+  useEffect(() => {
     if (layout.filters.period === 'custom' && (!layout.filters.startDate || !layout.filters.endDate)) {
       return
     }
     load()
-  }, [load, layout.filters.period, layout.filters.startDate, layout.filters.endDate, selectedIds])
+  }, [load, layout.filters.period, layout.filters.startDate, layout.filters.endDate, selectedIds, sellerUserId])
 
   const handleFiltersChange = useCallback(
     (patch) => {
@@ -133,6 +149,9 @@ export function Dashboard() {
         groups={groups}
         selectedGroupIds={selectedIds}
         onGroupsChange={setSelectedIds}
+        sellers={isOrgOwner ? sellers : []}
+        sellerUserId={sellerUserId}
+        onSellerChange={setSellerUserId}
       />
 
       {!hasConnected && (
