@@ -17,7 +17,6 @@ import { Integrations } from './pages/dashboard/Integrations.jsx'
 import { Sales } from './pages/dashboard/Sales.jsx'
 import { Settings } from './pages/dashboard/Settings.jsx'
 import { Admin } from './pages/dashboard/Admin.jsx'
-import { Team } from './pages/dashboard/Team.jsx'
 import { AcceptInvite } from './pages/AcceptInvite.jsx'
 
 function ProtectedRoute({ children }) {
@@ -30,13 +29,6 @@ function AdminRoute({ children }) {
   const { user } = useAuth()
   if (!user) return <Navigate to="/login" replace />
   if (user.role !== 'ADMIN') return <Navigate to="/dashboard" replace />
-  return children
-}
-
-function OwnerRoute({ children }) {
-  const { user, isOrgOwner } = useAuth()
-  if (!user) return <Navigate to="/login" replace />
-  if (!isOrgOwner) return <Navigate to="/dashboard" replace />
   return children
 }
 
@@ -75,14 +67,6 @@ export default function App() {
         <Route path="automations/cadences" element={<Messages defaultTab="cadencia" />} />
         <Route path="messages" element={<Navigate to="/dashboard/automations/library" replace />} />
         <Route path="members" element={<Members />} />
-        <Route
-          path="team"
-          element={
-            <OwnerRoute>
-              <Team />
-            </OwnerRoute>
-          }
-        />
         <Route path="analytics" element={<Navigate to="/dashboard" replace />} />
         <Route path="integrations" element={<Integrations />} />
         <Route path="settings" element={<Settings />} />

@@ -145,6 +145,39 @@ export async function getAdminPlans() {
   return apiClient.get('/admin/plans')
 }
 
+export async function getAdminOrganizations(params = {}) {
+  if (!resolveUseRealApi()) {
+    await delay()
+    return { data: { organizations: [], total: 0, page: 1, pageSize: 20 } }
+  }
+  return apiClient.get('/admin/organizations', { params })
+}
+
+export async function createAdminOrganization(body) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.post('/admin/organizations', body)
+}
+
+export async function patchAdminOrganization(orgId, body) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.patch(`/admin/organizations/${orgId}`, body)
+}
+
+export async function createAdminOrgMember(orgId, body) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.post(`/admin/organizations/${orgId}/members/create`, body)
+}
+
+export async function patchAdminOrgMember(orgId, userId, body) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.patch(`/admin/organizations/${orgId}/members/${userId}`, body)
+}
+
+export async function deleteAdminOrgMember(orgId, userId) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.delete(`/admin/organizations/${orgId}/members/${userId}`)
+}
+
 export async function patchAdminUser(userId, body) {
   if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
   return apiClient.patch(`/admin/users/${encodeURIComponent(userId)}`, body)

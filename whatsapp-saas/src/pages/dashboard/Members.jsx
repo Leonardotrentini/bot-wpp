@@ -373,8 +373,7 @@ export function Members() {
     <div className="space-y-6">
       <div className="rounded-xl border border-brand-800/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
         <strong className="text-stone-300">Membros de grupos</strong> — participantes dos seus grupos WhatsApp e leads do
-        chat 1:1 (não confundir com a{' '}
-        <strong className="text-stone-300">Equipe de vendas</strong> em Conta → Equipe). Lista unificada com duplicatas
+        chat 1:1 (não confundir com vendedores da empresa, gerenciados em Administração). Lista unificada com duplicatas
         mescladas por telefone quando possível.
       </div>
       <div className="flex flex-wrap items-center gap-2">

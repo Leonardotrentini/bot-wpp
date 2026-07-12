@@ -19,7 +19,6 @@ const titles = {
   '/dashboard/messages': 'Mensagens',
   '/dashboard/automations': 'Automações',
   '/dashboard/members': 'Membros de grupos',
-  '/dashboard/team': 'Equipe',
   '/dashboard/integrations': 'Integrações',
   '/dashboard/settings': 'Configurações',
   '/dashboard/admin': 'Administração',

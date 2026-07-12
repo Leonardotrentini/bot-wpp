@@ -3,7 +3,6 @@ import {
   LayoutDashboard,
   Users,
   UserCircle2,
-  UserCog,
   Zap,
   Settings,
   ChevronLeft,
@@ -26,7 +25,6 @@ const navSections = [
     items: [
       { to: '/dashboard', label: 'Visão geral', icon: LayoutDashboard, end: true },
       { to: '/dashboard/connect', label: 'Conectar WhatsApp', icon: Smartphone },
-      { to: '/dashboard/team', label: 'Equipe', icon: UserCog, ownerOnly: true },
     ],
   },
   {
