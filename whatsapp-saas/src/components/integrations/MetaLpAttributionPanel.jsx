@@ -3,7 +3,7 @@ import { Copy, Check, Sparkles, CheckCircle2, Plus, Trash2, X } from 'lucide-rea
 import { Button } from '../common/Button.jsx'
 import { Textarea } from '../common/Textarea.jsx'
 import { Select } from '../common/Select.jsx'
-import { resolveApiBaseURL } from '../../lib/runtimeEnv.js'
+import { resolveBackendOrigin } from '../../lib/runtimeEnv.js'
 import { buildMetaLpPrompt, buildVestoRotatorSnippet } from '../../lib/buildMetaLpPrompt.js'
 import {
   normalizeBrazilPhone,
@@ -11,11 +11,6 @@ import {
   formatPhoneExample,
   sellersToPayload,
 } from '../../lib/lpSellers.js'
-
-function backendOriginFromApi() {
-  const api = resolveApiBaseURL().replace(/\/+$/, '')
-  return api.replace(/\/api\/?$/i, '') || api
-}
 
 function parseDomains(text) {
   return String(text || '')
@@ -43,57 +38,37 @@ function phoneFieldStatus(phone, showErrors) {
 export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors = false, onSaveLp, savingLp = false }) {
   const [copied, setCopied] = useState(null)
 
-  const backendOrigin = backendOriginFromApi()
+  const backendOrigin = resolveBackendOrigin()
   const publicKey = meta?.vestoPublicKey || ''
   const pixelId = meta?.pixelId || form.pixelId || ''
   const savedDomains = meta?.allowedOrigins || []
-  const draftDomains = parseDomains(form.allowedOriginsText)
   const domainCount = savedDomains.length
 
-  const sellersNormalized = useMemo(() => {
-    const draft = sellersToPayload(form.lpSellers || [])
-    if (draft.length) return draft
-    return Array.isArray(meta?.lpSellers) ? meta.lpSellers : []
-  }, [form.lpSellers, meta?.lpSellers])
+  const savedSellers = useMemo(() => {
+    const fromMeta = Array.isArray(meta?.lpSellers) ? meta.lpSellers : []
+    return fromMeta.filter((s) => s?.phone)
+  }, [meta?.lpSellers])
 
-  const message =
-    form.lpWhatsappMsg?.trim() ||
-    meta?.lpWhatsappMsg ||
-    'Olá! Vim pelo site e quero mais informações.'
-
-  const rotatorMode = form.lpRotatorMode || meta?.lpRotatorMode || 'sequential'
+  const savedMessage = meta?.lpWhatsappMsg || 'Olá! Vim pelo site e quero mais informações.'
+  const rotatorMode = meta?.lpRotatorMode || form.lpRotatorMode || 'sequential'
 
   const lpPrompt = useMemo(() => {
     return buildMetaLpPrompt({
       publicKey,
       backendOrigin,
       pixelId,
-      domains: draftDomains.length ? draftDomains : savedDomains,
-      sellers: sellersNormalized,
-      message,
+      domains: savedDomains,
+      sellers: savedSellers,
+      message: savedMessage,
       rotatorMode,
     })
-  }, [
-    backendOrigin,
-    draftDomains,
-    message,
-    pixelId,
-    publicKey,
-    rotatorMode,
-    savedDomains,
-    sellersNormalized,
-  ])
+  }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers])
 
   const embedCode = useMemo(() => {
-    return buildVestoRotatorSnippet({
-      backendOrigin,
-      publicKey,
-      sellers: sellersNormalized.length
-        ? sellersNormalized
-        : [{ label: 'Vendedor 1', phone: '5547996747378' }],
-      message,
-    })
-  }, [backendOrigin, message, publicKey, sellersNormalized])
+    return buildVestoRotatorSnippet({ backendOrigin, publicKey })
+  }, [backendOrigin, publicKey])
+
+  const promptReady = Boolean(publicKey && domainCount > 0 && savedSellers.length > 0)
 
   const copy = async (text, id) => {
     try {
@@ -126,27 +101,21 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
     })
   }
 
-  const savedSellers = Array.isArray(meta?.lpSellers) ? meta.lpSellers : []
-  const savedSellerCount = savedSellers.length
-
-  const ready = Boolean(publicKey && domainCount > 0 && sellersNormalized.length > 0)
-
   return (
     <div className="space-y-4 rounded-xl border border-brand-800 bg-brand-950/20 p-4">
       <div>
         <h4 className="text-sm font-semibold text-stone-100">Landing Page → WhatsApp</h4>
         <p className="mt-1 text-xs text-stone-500">
-          Preencha domínio, vendedores e mensagem → salve → copie o prompt e cole no projeto da LP. Rotacionador
-          sequencial e CORS ativam automaticamente.
+          Salve domínios e vendedores → copie o prompt → cole no Codex/Cursor do projeto da LP.
         </p>
       </div>
 
-      {savedSellerCount > 0 ? (
+      {savedSellers.length > 0 ? (
         <div className="flex items-start gap-2 rounded-lg border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200/90">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <p>
-            <strong>{savedSellerCount} vendedor(es) salvo(s)</strong> — edite os números abaixo e clique em{' '}
-            <strong>Salvar vendedores e domínios</strong> para atualizar.
+            <strong>{savedSellers.length} vendedor(es) salvo(s)</strong> — edite abaixo e salve de novo para atualizar o
+            prompt.
           </p>
         </div>
       ) : null}
@@ -155,8 +124,7 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
         <div className="flex items-start gap-2 rounded-lg border border-emerald-900/50 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200/90">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <p>
-            <strong>{domainCount} domínio(s) ativo(s)</strong> — servidor liberado. Salve de novo se alterar domínios ou
-            vendedores.
+            <strong>{domainCount} domínio(s) ativo(s)</strong> no servidor.
           </p>
         </div>
       ) : null}
@@ -177,8 +145,7 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
           <div>
             <p className="text-sm font-medium text-stone-300">Vendedores (WhatsApp)</p>
             <p className="text-xs text-stone-500">
-              Formato: DDI+DDD+número — ex: <code className="text-stone-400">5547996747378</code> ou{' '}
-              <code className="text-stone-400">(47) 99674-7378</code>
+              Formato: DDI+DDD+número — ex: <code className="text-stone-400">5547996747378</code>
             </p>
           </div>
           <Button variant="secondary" type="button" onClick={addSeller}>
@@ -270,9 +237,6 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
       >
         <option value="sequential">Sequencial — distribui cliques igual entre todos</option>
       </Select>
-      <p className="-mt-2 text-xs text-stone-500">
-        Mesma quantidade de cliques para cada vendedor ao longo do tempo (round-robin).
-      </p>
 
       <Textarea
         label="Mensagem padrão do WhatsApp"
@@ -286,49 +250,53 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
         <Button variant="primary" type="button" onClick={onSaveLp} disabled={savingLp || !onSaveLp}>
           {savingLp ? <span className="text-sm">Salvando…</span> : 'Salvar vendedores e domínios'}
         </Button>
-        <p className="text-xs text-stone-500">Salva números, domínios e mensagem — pode editar e salvar de novo quando quiser.</p>
+        <p className="text-xs text-stone-500">Salve antes de copiar o prompt — ele usa os dados gravados no servidor.</p>
       </div>
 
       {publicKey ? (
         <div className="rounded-lg border border-brand-800 bg-brand-950/40 p-3 text-xs">
-          <p className="text-stone-500">Chave pública</p>
+          <p className="text-stone-500">Chave pública · Backend LP</p>
           <code className="mt-1 block break-all text-stone-300">{publicKey}</code>
+          <code className="mt-1 block break-all text-stone-500">{backendOrigin}/vesto-attribution.js</code>
         </div>
-      ) : (
-        <p className="text-xs text-amber-500/90">Salve a integração Meta para gerar a chave.</p>
-      )}
+      ) : null}
 
       <div className="rounded-lg border border-accent-500/30 bg-accent-500/5 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-accent-400" />
-            <p className="text-sm font-medium text-stone-200">Prompt para colar na LP</p>
+            <p className="text-sm font-medium text-stone-200">Prompt para IA (Codex / Cursor)</p>
           </div>
-          <Button variant="primary" type="button" disabled={!publicKey} onClick={() => copy(lpPrompt, 'prompt')}>
+          <Button
+            variant="primary"
+            type="button"
+            disabled={!promptReady}
+            onClick={() => copy(lpPrompt, 'prompt')}
+          >
             {copied === 'prompt' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             Copiar prompt
           </Button>
         </div>
         <p className="mb-2 text-xs text-stone-500">
-          {ready
-            ? 'Salvo e pronto — cole no Cursor/ChatGPT do projeto da LP.'
-            : 'Preencha domínios + vendedores, clique em Salvar integração, depois copie.'}
+          {promptReady
+            ? 'Pronto — cole no chat da LP. Inclui domínios, vendedores, rotacionador e instruções de atribuição Meta.'
+            : 'Salve domínios + vendedores primeiro. O prompt só usa dados já gravados.'}
         </p>
-        <pre className="max-h-80 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] leading-relaxed text-stone-400 whitespace-pre-wrap">
+        <pre className="max-h-96 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] leading-relaxed text-stone-400 whitespace-pre-wrap">
           {lpPrompt}
         </pre>
       </div>
 
-      {publicKey ? (
+      {promptReady ? (
         <div>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-stone-500">Código HTML pronto (com rotacionador)</p>
+            <p className="text-xs font-medium text-stone-500">HTML mínimo (referência rápida)</p>
             <Button variant="secondary" type="button" onClick={() => copy(embedCode, 'embed')}>
               {copied === 'embed' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              Copiar código
+              Copiar HTML
             </Button>
           </div>
-          <pre className="max-h-48 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] text-stone-500 whitespace-pre-wrap">
+          <pre className="max-h-32 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] text-stone-500 whitespace-pre-wrap">
             {embedCode}
           </pre>
         </div>
