@@ -7,7 +7,6 @@ import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useReportLayout } from '../../hooks/useReportLayout.js'
 import { useReportDashboard } from '../../hooks/useReportDashboard.js'
 import { mapPeriodToMetaPeriod } from '../../lib/reportPeriod.js'
-import { GroupFilterBar } from '../../components/reports/GroupFilterBar.jsx'
 import { ReportToolbar } from '../../components/reports/ReportToolbar.jsx'
 import { ReportGrid } from '../../components/reports/ReportGrid.jsx'
 import { MetricPickerModal } from '../../components/reports/MetricPickerModal.jsx'
@@ -16,10 +15,10 @@ function DataBanner({ meta }) {
   if (!meta) return null
   if (!meta.hasActivity) {
     return (
-      <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
+      <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-sm text-amber-100/90">
         Ainda não há mensagens desde que o grupo foi ativado. Novas mensagens entram automaticamente; use{' '}
         <strong>Atualizar</strong> para sincronizar entradas e saídas de membros.
-      </p>
+      </div>
     )
   }
   return null
@@ -43,14 +42,9 @@ export function Dashboard() {
     restoreDefault,
   } = useReportLayout(user?.id)
 
-  const onRefreshDone = useCallback(() => {
-    toast.success('Dados sincronizados e painel atualizado.')
-  }, [toast])
-
-  const { data, loading, refreshing, load, refresh } = useReportDashboard({
+  const { data, loading, refreshing, load, refresh, lastUpdatedAt } = useReportDashboard({
     filters: layout.filters,
     groupIds: selectedIds,
-    onRefreshDone,
   })
 
   useEffect(() => {
@@ -85,9 +79,17 @@ export function Dashboard() {
 
   const handleRefresh = useCallback(async () => {
     try {
-      await refresh()
+      const result = await refresh()
+      const note = result?.syncNote
+      if (note === 'whatsapp_offline') {
+        toast.success('Painel atualizado. WhatsApp desconectado — métricas de CRM e Meta foram recarregadas.')
+      } else if (note === 'sync_failed') {
+        toast.success('Painel atualizado. Sincronização de grupos parcial — demais métricas recarregadas.')
+      } else {
+        toast.success('Dados sincronizados e painel atualizado.')
+      }
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao atualizar.')
+      toast.error(err?.response?.data?.message || 'Falha ao carregar o painel.')
     }
   }, [refresh, toast])
 
@@ -97,30 +99,24 @@ export function Dashboard() {
 
   if (loading && !data) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-16" />
-        <Skeleton className="h-24" />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="space-y-6 max-w-[1400px]">
+        <Skeleton className="h-24 rounded-2xl" />
+        <Skeleton className="h-16 rounded-2xl" />
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-28" />
+            <Skeleton key={i} className="h-32 rounded-2xl" />
           ))}
         </div>
-        <Skeleton className="h-72" />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Skeleton className="h-72 rounded-2xl" />
+          <Skeleton className="h-72 rounded-2xl" />
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-stone-500">
-          Painel editável · layout salvo neste navegador ·{' '}
-          <Link to="/dashboard/groups" className="text-accent-400 hover:underline">
-            Gerenciar grupos
-          </Link>
-        </span>
-      </div>
-
+    <div className="space-y-6 max-w-[1400px]">
       <ReportToolbar
         filters={layout.filters}
         onFiltersChange={handleFiltersChange}
@@ -133,30 +129,39 @@ export function Dashboard() {
         loading={loading}
         partialErrors={partialErrors}
         metaInfo={data?.meta_info}
+        lastUpdatedAt={lastUpdatedAt}
+        groups={groups}
+        selectedGroupIds={selectedIds}
+        onGroupsChange={setSelectedIds}
       />
 
-      <GroupFilterBar groups={groups} selectedIds={selectedIds} onChange={setSelectedIds} />
-
       {!hasConnected && (
-        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-8 text-sm text-amber-200/90">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-4 text-sm text-amber-100/90">
           Conecte o WhatsApp e ative grupos em{' '}
-          <Link to="/dashboard/connect" className="text-accent-400 underline">
+          <Link to="/dashboard/connect" className="text-accent-400 underline hover:text-accent-300">
             Conectar
           </Link>{' '}
           e{' '}
-          <Link to="/dashboard/groups" className="text-accent-400 underline">
+          <Link to="/dashboard/groups" className="text-accent-400 underline hover:text-accent-300">
             Grupos
           </Link>{' '}
           para ver métricas de grupos. CRM e Meta funcionam independentemente.
-        </p>
+        </div>
       )}
 
       {data?.groups?.meta && <DataBanner meta={data.groups.meta} />}
 
       {!data && !loading && (
-        <p className="rounded-xl border border-brand-800 bg-brand-900/40 px-4 py-8 text-sm text-stone-400">
-          Não foi possível carregar o painel. Tente novamente em instantes.
-        </p>
+        <div className="rounded-2xl border border-brand-800/60 bg-brand-900/30 px-6 py-12 text-center">
+          <p className="text-sm text-stone-400">Não foi possível carregar o painel.</p>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            className="mt-3 text-sm text-accent-400 hover:text-accent-300 underline"
+          >
+            Tentar novamente
+          </button>
+        </div>
       )}
 
       {data && (
@@ -167,6 +172,15 @@ export function Dashboard() {
           onRemove={removeWidget}
           onMove={moveWidget}
         />
+      )}
+
+      {editing && (
+        <p className="text-center text-xs text-stone-600 pb-4">
+          Layout salvo neste navegador ·{' '}
+          <Link to="/dashboard/groups" className="text-stone-500 hover:text-accent-400">
+            Gerenciar grupos
+          </Link>
+        </p>
       )}
 
       <MetricPickerModal

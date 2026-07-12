@@ -47,7 +47,11 @@ export function TableWidget({ payload }) {
 }
 
 export function ListWidget({ payload }) {
-  const { items = [] } = payload || {}
+  const { items = [], unavailable } = payload || {}
+
+  if (unavailable) {
+    return <p className="text-sm text-stone-500 py-4">Meta Ads não conectado ou indisponível.</p>
+  }
 
   if (!items.length) {
     return <p className="text-sm text-stone-500">Sem dados no período.</p>
@@ -58,7 +62,17 @@ export function ListWidget({ payload }) {
       {items.map((item) => (
         <li key={item.id || item.label} className="flex items-start justify-between gap-2 text-sm">
           <div className="min-w-0">
-            {item.id && item.label?.includes('msg') ? (
+            {item.href ? (
+              <a
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-stone-300 hover:text-accent-400 transition block leading-snug"
+              >
+                {item.label}
+                <span className="ml-1 text-xs text-stone-600">↗</span>
+              </a>
+            ) : item.id && item.label?.includes('msg') ? (
               <Link
                 to={`/dashboard/groups/${encodeURIComponent(item.id)}`}
                 className="truncate text-stone-300 hover:text-accent-400 transition block"

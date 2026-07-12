@@ -5,15 +5,42 @@ import {
   getMetricDef,
 } from './reportMetricCatalog.js'
 
-const STORAGE_VERSION = 2
+const STORAGE_VERSION = 3
+
+const LEGACY_DEFAULT_METRIC_IDS = [
+  'groups.active',
+  'crm.conversations_started',
+  'crm.sales_revenue',
+  'meta.spend',
+  'groups.messages_series',
+  'crm.funnel_stages',
+  'groups.top_groups',
+  'crm.sales_series',
+  'groups.comparison_table',
+  'meta.campaigns_table',
+  'meta.conversions',
+]
+
+function isLegacyDefaultLayout(widgets) {
+  if (!Array.isArray(widgets) || widgets.length !== LEGACY_DEFAULT_METRIC_IDS.length) return false
+  const ids = widgets.map((w) => w.metricId).sort()
+  const legacy = [...LEGACY_DEFAULT_METRIC_IDS].sort()
+  return ids.every((id, i) => id === legacy[i])
+}
 
 function migrateLayout(parsed) {
   if (!parsed?.widgets) return parsed
-  const widgets = parsed.widgets.map((w) =>
+
+  let widgets = parsed.widgets.map((w) =>
     w.id === 'w2' && w.metricId === 'groups.new_leads'
       ? { ...w, metricId: 'crm.conversations_started' }
       : w,
   )
+
+  if (parsed.version === 2 && isLegacyDefaultLayout(widgets)) {
+    widgets = DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w }))
+  }
+
   return { ...parsed, widgets, version: STORAGE_VERSION }
 }
 
@@ -33,7 +60,8 @@ export function loadReportLayout(userId) {
     }
     const parsed = JSON.parse(raw)
     if (!parsed || parsed.version !== STORAGE_VERSION) {
-      const migrated = parsed?.version === 1 ? migrateLayout(parsed) : null
+      const migrated =
+        parsed?.version === 1 || parsed?.version === 2 ? migrateLayout(parsed) : null
       if (migrated) {
         saveReportLayout(userId, migrated)
         return migrated

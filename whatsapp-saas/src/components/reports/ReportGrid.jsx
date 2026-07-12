@@ -1,33 +1,99 @@
+import { useCallback, useMemo } from 'react'
+import { getMetricDef } from '../../lib/reportMetricCatalog.js'
 import { ReportWidget } from './ReportWidget.jsx'
 
+function WidgetSlot({ widget, data, editing, onRemove, onMove, index, total }) {
+  const def = getMetricDef(widget.metricId)
+  const isKpi = def?.chartType === 'kpi'
+  const wide = !isKpi && widget.colSpan >= 2
+
+  return (
+    <div className={wide ? 'sm:col-span-2' : ''}>
+      <ReportWidget
+        widget={widget}
+        data={data}
+        editing={editing}
+        variant={isKpi ? 'kpi' : 'chart'}
+        onRemove={() => onRemove(widget.id)}
+        onMoveUp={() => onMove(widget.id, 'up')}
+        onMoveDown={() => onMove(widget.id, 'down')}
+        isFirst={index === 0}
+        isLast={index === total - 1}
+      />
+    </div>
+  )
+}
+
 export function ReportGrid({ widgets, data, editing, onRemove, onMove }) {
+  const { kpis, charts } = useMemo(() => {
+    const kpiList = []
+    const chartList = []
+    for (const w of widgets) {
+      const def = getMetricDef(w.metricId)
+      if (def?.chartType === 'kpi') kpiList.push(w)
+      else chartList.push(w)
+    }
+    return { kpis: kpiList, charts: chartList }
+  }, [widgets])
+
   if (!widgets.length) {
     return (
-      <p className="rounded-xl border border-brand-800 bg-brand-900/40 px-4 py-8 text-sm text-stone-400 text-center">
-        Nenhum widget no painel. Clique em <strong>Personalizar</strong> e adicione métricas.
-      </p>
+      <div className="rounded-2xl border border-dashed border-brand-700/60 bg-brand-900/20 px-6 py-16 text-center">
+        <p className="text-stone-400 text-sm">
+          Nenhum widget no painel.
+        </p>
+        <p className="mt-2 text-stone-500 text-sm">
+          Clique em <strong className="text-stone-300">Personalizar</strong> para adicionar métricas.
+        </p>
+      </div>
     )
   }
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {widgets.map((widget, index) => (
-        <div
-          key={widget.id}
-          className={widget.colSpan >= 2 ? 'sm:col-span-2 lg:col-span-2' : ''}
-        >
-          <ReportWidget
-            widget={widget}
-            data={data}
-            editing={editing}
-            onRemove={() => onRemove(widget.id)}
-            onMoveUp={() => onMove(widget.id, 'up')}
-            onMoveDown={() => onMove(widget.id, 'down')}
-            isFirst={index === 0}
-            isLast={index === widgets.length - 1}
-          />
-        </div>
-      ))}
+    <div className="space-y-8">
+      {kpis.length > 0 && (
+        <section>
+          <h3 className="mb-4 text-xs font-semibold uppercase tracking-widest text-stone-500">
+            Resumo executivo
+          </h3>
+          <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            {kpis.map((widget, index) => (
+              <WidgetSlot
+                key={widget.id}
+                widget={widget}
+                data={data}
+                editing={editing}
+                onRemove={onRemove}
+                onMove={onMove}
+                index={index}
+                total={kpis.length}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {charts.length > 0 && (
+        <section>
+          <h3 className="mb-4 text-xs font-semibold uppercase tracking-widest text-stone-500">
+            Análises e detalhes
+          </h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {charts.map((widget, index) => (
+              <WidgetSlot
+                key={widget.id}
+                widget={widget}
+                data={data}
+                editing={editing}
+                onRemove={onRemove}
+                onMove={onMove}
+                index={index}
+                total={charts.length}
+              />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

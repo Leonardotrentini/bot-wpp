@@ -177,6 +177,34 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
       }))
       .sort((a, b) => b.spend - a.spend)
 
+    let topAdsByClicks = []
+    try {
+      const adInsights = await graphGet(`${adAccountId}/insights`, token, {
+        fields: "ad_id,ad_name,campaign_name,clicks,spend,ctr,impressions",
+        level: "ad",
+        date_preset: datePreset,
+        limit: 100,
+      })
+      const accountDigits = adAccountId.replace(/^act_/, "")
+      topAdsByClicks = (adInsights.data || [])
+        .map((row) => ({
+          id: row.ad_id,
+          name: row.ad_name || "—",
+          campaignName: row.campaign_name || "—",
+          clicks: parseInt(row.clicks || 0, 10) || 0,
+          spend: parseMetricNumber(row.spend) || 0,
+          ctr: parseMetricNumber(row.ctr),
+          impressions: parseInt(row.impressions || 0, 10) || 0,
+          adsManagerUrl: row.ad_id
+            ? `https://www.facebook.com/adsmanager/manage/ads?act=${accountDigits}&selected_ad_ids=${row.ad_id}`
+            : null,
+        }))
+        .sort((a, b) => b.clicks - a.clicks)
+        .slice(0, 5)
+    } catch (adErr) {
+      console.warn("[metaAds] ad-level insights failed:", adErr.message)
+    }
+
     await recordAdsSyncResult(prisma, userId, {})
 
     return {
@@ -200,6 +228,7 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
         ctr: parseMetricNumber(insightRow.ctr),
       },
       campaigns,
+      topAdsByClicks,
       creatives,
       syncedAt: new Date().toISOString(),
     }

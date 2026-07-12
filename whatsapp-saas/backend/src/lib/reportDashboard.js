@@ -12,6 +12,7 @@ const {
   buildCrmFunnelByStage,
   buildCrmActivitySeries,
   buildCrmConversionCounts,
+  buildCrmQuotesSummary,
   buildCrmSalesByDay,
 } = require("./crmFunnelMetrics")
 const { buildAttributionSummary } = require("./attributionMetrics")
@@ -62,6 +63,11 @@ function parseReportQuery(req) {
   return { groupJids, period, startDate, endDate, metaPeriod }
 }
 
+function costPerMetric(spend, count) {
+  if (!spend || spend <= 0 || !count || count <= 0) return null
+  return Math.round((spend / count) * 100) / 100
+}
+
 async function buildReportDashboard(userId, options = {}) {
   const { groupJids, period, startDate, endDate, metaPeriod } = options
   const { start, end } = reportPeriodToRange(period, startDate, endDate)
@@ -82,6 +88,7 @@ async function buildReportDashboard(userId, options = {}) {
     buildCrmFunnelByStage(userId),
     buildCrmActivitySeries(userId, start, end),
     buildCrmConversionCounts(userId, start, end),
+    buildCrmQuotesSummary(userId, start, end),
     buildCrmSalesByDay(userId, start, end),
     listCrmSales(prisma, userId, {
       from: start.toISOString(),
@@ -137,12 +144,13 @@ async function buildReportDashboard(userId, options = {}) {
 
   let crm = null
   if (crmRaw) {
-    const [overview, funnel, funnelEvents, conversions, salesByDay, salesList] = crmRaw
+    const [overview, funnel, funnelEvents, conversions, quotes, salesByDay, salesList] = crmRaw
     crm = {
       overview,
       funnel,
       funnelEvents,
       conversions,
+      quotes,
       sales: {
         summary: salesList.summary,
         byDay: salesByDay,
@@ -164,6 +172,7 @@ async function buildReportDashboard(userId, options = {}) {
       purchase: 0,
     },
     campaigns: [],
+    topAdsByClicks: [],
     error: metaRaw?.error || null,
     message: metaRaw?.message || null,
     lastSyncAt: adsFields.lastAdsSyncAt,
@@ -174,6 +183,7 @@ async function buildReportDashboard(userId, options = {}) {
       ...meta,
       summary: metaRaw.summary,
       campaigns: metaRaw.campaigns || [],
+      topAdsByClicks: metaRaw.topAdsByClicks || [],
       account: metaRaw.account || null,
       syncedAt: metaRaw.syncedAt || null,
       error: null,
@@ -208,6 +218,19 @@ async function buildReportDashboard(userId, options = {}) {
       }
     : null
 
+  const spend = meta?.summary?.spend ?? 0
+  const leadTotal = leads?.total ?? crm?.overview?.conversationsStarted ?? 0
+  const qualified = crm?.conversions?.leadQualified ?? 0
+  const purchases = crm?.sales?.summary?.count ?? 0
+  const revenue = crm?.sales?.summary?.totalAmount ?? 0
+
+  const computed = {
+    costPerLead: costPerMetric(spend, leadTotal),
+    costPerQualifiedLead: costPerMetric(spend, qualified),
+    costPerSale: costPerMetric(spend, purchases),
+    roas: spend > 0 && revenue > 0 ? Math.round((revenue / spend) * 100) / 100 : null,
+  }
+
   return {
     filters: {
       period,
@@ -221,6 +244,7 @@ async function buildReportDashboard(userId, options = {}) {
     meta,
     attribution,
     leads,
+    computed,
     meta_info: {
       groupsRetentionDays: MESSAGE_RETENTION_DAYS,
       crmRangeNote: "CRM usa o período completo selecionado.",

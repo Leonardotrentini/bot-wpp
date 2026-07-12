@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom'
 import { Check } from 'lucide-react'
 import { useMemo } from 'react'
 
-export function GroupFilterBar({ groups, selectedIds, onChange }) {
+export function GroupFilterBar({ groups, selectedIds, onChange, embedded = false }) {
   const connected = useMemo(
     () => groups.filter((g) => g.status === 'ativo' && g.monitoringEnabled),
     [groups],
@@ -28,21 +28,27 @@ export function GroupFilterBar({ groups, selectedIds, onChange }) {
     )
   }
 
+  const wrapperClass = embedded
+    ? ''
+    : 'rounded-2xl border border-brand-800/80 bg-brand-950/40 p-4'
+
   return (
-    <div className="rounded-2xl border border-brand-800/80 bg-brand-950/40 p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-stone-500 mb-3">Filtrar por grupo</p>
+    <div className={wrapperClass}>
+      {!embedded && (
+        <p className="text-xs font-medium uppercase tracking-wide text-stone-500 mb-3">Filtrar por grupo</p>
+      )}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => onChange([])}
           className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm transition ${
             allSelected
-              ? 'border-accent-500/60 bg-accent-500/15 text-accent-300'
-              : 'border-brand-700 bg-black/40 text-stone-300 hover:border-brand-600 hover:text-stone-100'
+              ? 'border-accent-500/50 bg-accent-500/15 text-accent-300'
+              : 'border-brand-700/80 bg-brand-950/50 text-stone-400 hover:border-brand-600 hover:text-stone-200'
           }`}
         >
           {allSelected && <Check className="h-3.5 w-3.5" />}
-          Todos os conectados
+          Todos
         </button>
         {connected.map((g) => {
           const active = selectedIds.includes(g.id)
@@ -51,10 +57,10 @@ export function GroupFilterBar({ groups, selectedIds, onChange }) {
               key={g.id}
               type="button"
               onClick={() => toggle(g.id)}
-              className={`inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm transition truncate ${
+              className={`inline-flex max-w-[200px] items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm transition truncate ${
                 active
-                  ? 'border-accent-500/60 bg-accent-500/15 text-accent-300'
-                  : 'border-brand-700 bg-black/40 text-stone-300 hover:border-brand-600 hover:text-stone-100'
+                  ? 'border-accent-500/50 bg-accent-500/15 text-accent-300'
+                  : 'border-brand-700/80 bg-brand-950/50 text-stone-400 hover:border-brand-600 hover:text-stone-200'
               }`}
               title={g.name}
             >

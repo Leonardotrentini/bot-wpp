@@ -117,6 +117,33 @@ async function buildCrmConversionCounts(userId, start, end) {
   return { conversationStarted, leadQualified, quote, purchase, metaConversationStarted }
 }
 
+async function buildCrmQuotesSummary(userId, start, end) {
+  const rows = await prisma.crmContactActivity.findMany({
+    where: {
+      userId,
+      type: "quote_saved",
+      createdAt: { gte: start, lte: end },
+    },
+    select: { payload: true },
+  })
+
+  let totalAmount = 0
+  let withAmount = 0
+  for (const row of rows) {
+    const amount = parsePayloadAmount(row.payload)
+    if (amount != null) {
+      totalAmount += amount
+      withAmount += 1
+    }
+  }
+
+  return {
+    count: rows.length,
+    totalAmount: Math.round(totalAmount * 100) / 100,
+    withAmount,
+  }
+}
+
 async function buildCrmSalesByDay(userId, start, end) {
   const rows = await prisma.crmContactActivity.findMany({
     where: {
@@ -151,5 +178,6 @@ module.exports = {
   buildCrmFunnelByStage,
   buildCrmActivitySeries,
   buildCrmConversionCounts,
+  buildCrmQuotesSummary,
   buildCrmSalesByDay,
 }
