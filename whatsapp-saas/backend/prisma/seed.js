@@ -72,6 +72,9 @@ async function main() {
     }
   }
 
+  const { ensureDefaultTags } = require("../src/lib/crmDefaults")
+  await ensureDefaultTags(admin.id)
+
   console.log("[seed] Planos criados/atualizados: free, pro")
   if (process.env.NODE_ENV === "production" && !process.env.ADMIN_SEED_PASSWORD) {
     console.warn("[seed] AVISO: ADMIN_SEED_PASSWORD não definido — admin existente mantém senha anterior.")

@@ -24,7 +24,7 @@ function createIntegrationsRouter() {
           id: "meta",
           name: "Meta (Facebook)",
           description:
-            "Envia orçamentos e vendas confirmadas no CRM para o Pixel via API de Conversões — otimize campanhas para vendas reais no WhatsApp.",
+            "Envia o funil WhatsApp (ConversationStarted, LeadQualified, Quote, Purchase) para o Pixel via API de Conversões.",
           connected: Boolean(meta?.connected),
           provider: "meta",
         },

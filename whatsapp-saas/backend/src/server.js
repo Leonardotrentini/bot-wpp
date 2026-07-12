@@ -108,6 +108,7 @@ const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
 const { maybeReplyWithAi } = require("./lib/crmAiAgent")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
 const { processDueContactReminders } = require("./lib/crmContactReminders")
+const { trackConversationStartedEvent } = require("./lib/metaConversions")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -3123,6 +3124,15 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
   if (!created) return
 
   if (!message.fromMe) {
+    if (result.isNewConversation) {
+      const contactForMeta = await prisma.crmContact.findUnique({ where: { id: conversation.contactId } })
+      if (contactForMeta) {
+        trackConversationStartedEvent(prisma, { userId, contact: contactForMeta }).catch((err) =>
+          console.error("[meta] ConversationStarted:", err?.message || err),
+        )
+      }
+    }
+
     onCrmMessage(getCrmDeps(), {
       conversation,
       message,

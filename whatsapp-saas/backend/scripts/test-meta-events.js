@@ -5,7 +5,13 @@
  */
 
 const {
+  CONVERSATION_STARTED_EVENT,
+  LEAD_QUALIFIED_EVENT,
+  QUOTE_EVENT,
+  PURCHASE_EVENT,
   resolveTrackingMode,
+  buildConversationStartedEvent,
+  buildLeadQualifiedEvent,
   buildQuoteEvent,
   buildPurchaseEvent,
 } = require("../src/lib/metaConversions")
@@ -14,7 +20,7 @@ const mockContactCrm = {
   id: "contact-crm-1",
   phone: "554796747378",
   pushName: "Lead LP",
-  customFields: {},
+  customFields: { meta: { fbclid: "IwARtestFbclid123" } },
 }
 
 const mockContactCtwa = {
@@ -39,37 +45,59 @@ function testPayloads() {
   const crmMode = resolveTrackingMode(mockContactCrm)
   assert(crmMode.mode === "crm", "CRM contact should use crm mode")
 
-  const crmLead = buildQuoteEvent({
+  const conversationStarted = buildConversationStartedEvent({
     contact: mockContactCrm,
-    amount: 500,
-    eventId: "test-lead-1",
+    eventId: "test-conversation-1",
     userId: "user-1",
     integration: mockIntegration,
     mode: crmMode,
   })
-  assert(crmLead.event_name === "Lead", "CRM lead event_name")
-  assert(crmLead.action_source === "system_generated", "CRM action_source")
-  assert(!crmLead.messaging_channel, "CRM should not have messaging_channel")
-  assert(crmLead.custom_data.event_source === "crm", "CRM custom_data.event_source")
-  assert(crmLead.custom_data.lead_event_source === "Vesto", "CRM lead_event_source")
-  assert(!crmLead.user_data.page_id, "CRM should not require page_id")
+  assert(conversationStarted.event_name === CONVERSATION_STARTED_EVENT, "ConversationStarted event_name")
+  assert(conversationStarted.action_source === "system_generated", "ConversationStarted CRM action_source")
+  assert(conversationStarted.custom_data.content_category === "conversation_started", "conversation_started category")
+  assert(conversationStarted.user_data.fbc, "CRM should include fbc when fbclid stored")
+
+  const leadQualified = buildLeadQualifiedEvent({
+    contact: mockContactCrm,
+    eventId: "test-qualified-1",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: crmMode,
+  })
+  assert(leadQualified.event_name === LEAD_QUALIFIED_EVENT, "LeadQualified event_name")
+  assert(leadQualified.custom_data.content_category === "qualified_lead", "qualified_lead category")
+
+  const quote = buildQuoteEvent({
+    contact: mockContactCrm,
+    amount: 500,
+    eventId: "test-quote-1",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: crmMode,
+  })
+  assert(quote.event_name === QUOTE_EVENT, "Quote event_name")
+  assert(quote.action_source === "system_generated", "Quote CRM action_source")
+  assert(quote.custom_data.event_source === "crm", "Quote CRM event_source")
+  assert(quote.custom_data.lead_event_source === "Vesto", "Quote lead_event_source")
+  assert(!quote.messaging_channel, "CRM should not have messaging_channel")
 
   const ctwaMode = resolveTrackingMode(mockContactCtwa)
   assert(ctwaMode.mode === "ctwa", "CTWA contact should use ctwa mode")
 
-  const ctwaLead = buildQuoteEvent({
+  const ctwaQuote = buildQuoteEvent({
     contact: mockContactCtwa,
     amount: 500,
-    eventId: "test-lead-ctwa-1",
+    eventId: "test-quote-ctwa-1",
     userId: "user-1",
     integration: mockIntegration,
     mode: ctwaMode,
   })
-  assert(ctwaLead.event_name === "LeadSubmitted", "CTWA lead event_name")
-  assert(ctwaLead.action_source === "business_messaging", "CTWA action_source")
-  assert(ctwaLead.messaging_channel === "whatsapp", "CTWA messaging_channel")
-  assert(ctwaLead.user_data.page_id === 61586091841500, "CTWA page_id")
-  assert(ctwaLead.user_data.ctwa_clid, "CTWA ctwa_clid")
+  assert(ctwaQuote.event_name === QUOTE_EVENT, "CTWA Quote event_name")
+  assert(ctwaQuote.action_source === "business_messaging", "CTWA Quote action_source")
+  assert(ctwaQuote.messaging_channel === "whatsapp", "CTWA messaging_channel")
+  assert(ctwaQuote.user_data.page_id === 61586091841500, "CTWA page_id")
+  assert(ctwaQuote.user_data.ctwa_clid, "CTWA ctwa_clid")
+  assert(ctwaQuote.custom_data.event_source === "ctwa", "CTWA event_source")
 
   const crmPurchase = buildPurchaseEvent({
     contact: mockContactCrm,
@@ -80,10 +108,10 @@ function testPayloads() {
     integration: mockIntegration,
     mode: crmMode,
   })
-  assert(crmPurchase.event_name === "Purchase", "CRM purchase event")
+  assert(crmPurchase.event_name === PURCHASE_EVENT, "CRM purchase event")
   assert(crmPurchase.action_source === "system_generated", "CRM purchase action_source")
 
-  console.log("✓ Payload tests passed (CRM + CTWA)")
+  console.log("✓ Payload tests passed (CRM + CTWA custom funnel)")
 }
 
 async function testLiveApi() {
@@ -121,7 +149,7 @@ async function testLiveApi() {
   if (!res.ok) {
     throw new Error(JSON.stringify(json))
   }
-  console.log(`✓ Live API Lead (CRM) accepted — events_received: ${json.events_received}`)
+  console.log(`✓ Live API Quote (CRM) accepted — events_received: ${json.events_received}`)
 }
 
 async function main() {

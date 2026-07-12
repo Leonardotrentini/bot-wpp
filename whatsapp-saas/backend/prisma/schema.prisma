@@ -310,6 +310,9 @@ model CrmContact {
   notes        String?
   customFields Json?
   lastSeenAt   DateTime?
+  conversationStartedEventSentAt DateTime?
+  qualifiedEventSentAt           DateTime?
+  quoteEventSentAt                 DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   tags         CrmContactTag[]

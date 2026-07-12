@@ -1,22 +1,29 @@
 /**
- * Meta Conversions API — orçamentos e vendas do CRM.
+ * Meta Conversions API — funil do CRM (Vesto).
  *
- * Dois modos (documentação Meta):
- * - CRM (LP → WhatsApp, leads orgânicos): action_source system_generated + Lead/Purchase
- * - CTWA (anúncio Click-to-WhatsApp): action_source business_messaging + ctwa_clid + page_id
+ * Eventos custom (inglês):
+ * - ConversationStarted — 1ª mensagem inbound de contato novo
+ * - LeadQualified — tag QUALIFICADO
+ * - Quote — orçamento salvo (1x por contato)
+ * - Purchase — compra confirmada
+ *
+ * Modos:
+ * - CRM (LP/orgânico): action_source system_generated + fbc quando disponível
+ * - CTWA (anúncio WhatsApp): action_source business_messaging + ctwa_clid + page_id
  */
 
 const crypto = require("crypto")
-const { parseFacebookPageId, resolveCtwaClid } = require("./metaMessaging")
+const { parseFacebookPageId, resolveCtwaClid, resolveFbc } = require("./metaMessaging")
 
 const GRAPH_API_VERSION = "v22.0"
-const DEFAULT_EVENT_SOURCE_URL = "https://vesto.group/dashboard/chat"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
 const META_MESSAGING_CHANNEL = "whatsapp"
-const CRM_LEAD_EVENT = "Lead"
-const CTWA_LEAD_EVENT = "LeadSubmitted"
-const PURCHASE_EVENT = "Purchase"
 const CRM_EVENT_SOURCE = "Vesto"
+
+const CONVERSATION_STARTED_EVENT = "ConversationStarted"
+const LEAD_QUALIFIED_EVENT = "LeadQualified"
+const QUOTE_EVENT = "Quote"
+const PURCHASE_EVENT = "Purchase"
 
 function hashMetaValue(value) {
   if (value == null || value === "") return null
@@ -91,17 +98,30 @@ function contactDisplayName(contact) {
   return contact?.name || contact?.pushName || "Lead WhatsApp"
 }
 
-function crmCustomData({ amount, ticket, contentCategory }) {
+function eventSourceForMode(mode) {
+  return mode.mode === "ctwa" ? "ctwa" : "crm"
+}
+
+function buildFunnelCustomData({ contentCategory, eventSource, amount, contentName, ticket }) {
   const custom = {
-    currency: "BRL",
-    value: amount,
     lead_event_source: CRM_EVENT_SOURCE,
-    event_source: "crm",
-    content_name: contentCategory === "quote" ? "Orçamento WhatsApp" : "Compra WhatsApp",
+    event_source: eventSource,
   }
   if (contentCategory) custom.content_category = contentCategory
+  if (contentName) custom.content_name = contentName
+  if (amount != null) {
+    custom.currency = "BRL"
+    custom.value = amount
+  }
   if (ticket) custom.order_id = String(ticket).slice(0, 120)
   return custom
+}
+
+function buildCrmUserData(contact, { userId }) {
+  const userData = ensureUserData(contact, { userId })
+  const fbc = resolveFbc(contact)
+  if (fbc) userData.fbc = fbc
+  return userData
 }
 
 function buildCtwaUserData(contact, { userId, facebookPageId, ctwaClid }) {
@@ -117,10 +137,20 @@ function buildCtwaUserData(contact, { userId, facebookPageId, ctwaClid }) {
   return userData
 }
 
-function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }) {
+function buildFunnelEvent({
+  eventName,
+  contact,
+  eventId,
+  userId,
+  integration,
+  mode,
+  customData,
+}) {
+  const eventSource = eventSourceForMode(mode)
+
   if (mode.mode === "ctwa") {
     return {
-      event_name: CTWA_LEAD_EVENT,
+      event_name: eventName,
       event_time: Math.floor(Date.now() / 1000),
       event_id: eventId,
       action_source: "business_messaging",
@@ -130,57 +160,85 @@ function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }
         facebookPageId: integration.facebookPageId,
         ctwaClid: mode.ctwaClid,
       }),
-      custom_data: {
-        currency: "BRL",
-        value: amount,
-        content_category: "quote",
-        content_name: contactDisplayName(contact),
-      },
+      custom_data: { ...customData, event_source: eventSource },
     }
   }
 
   return {
-    event_name: CRM_LEAD_EVENT,
+    event_name: eventName,
     event_time: Math.floor(Date.now() / 1000),
     event_id: eventId,
     action_source: "system_generated",
-    user_data: ensureUserData(contact, { userId }),
-    custom_data: crmCustomData({ amount, contentCategory: "quote" }),
+    user_data: buildCrmUserData(contact, { userId }),
+    custom_data: { ...customData, event_source: eventSource },
   }
 }
 
+function buildConversationStartedEvent({ contact, eventId, userId, integration, mode }) {
+  return buildFunnelEvent({
+    eventName: CONVERSATION_STARTED_EVENT,
+    contact,
+    eventId,
+    userId,
+    integration,
+    mode,
+    customData: buildFunnelCustomData({
+      contentCategory: "conversation_started",
+      eventSource: eventSourceForMode(mode),
+    }),
+  })
+}
+
+function buildLeadQualifiedEvent({ contact, eventId, userId, integration, mode }) {
+  return buildFunnelEvent({
+    eventName: LEAD_QUALIFIED_EVENT,
+    contact,
+    eventId,
+    userId,
+    integration,
+    mode,
+    customData: buildFunnelCustomData({
+      contentCategory: "qualified_lead",
+      eventSource: eventSourceForMode(mode),
+    }),
+  })
+}
+
+function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }) {
+  const eventSource = eventSourceForMode(mode)
+  return buildFunnelEvent({
+    eventName: QUOTE_EVENT,
+    contact,
+    eventId,
+    userId,
+    integration,
+    mode,
+    customData: buildFunnelCustomData({
+      contentCategory: "quote",
+      eventSource,
+      amount,
+      contentName: mode.mode === "ctwa" ? contactDisplayName(contact) : "Orçamento WhatsApp",
+    }),
+  })
+}
+
 function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode }) {
-  if (mode.mode === "ctwa") {
-    const custom = {
-      currency: "BRL",
-      value: amount,
-      content_name: contactDisplayName(contact),
-    }
-    if (ticket) custom.order_id = String(ticket).slice(0, 120)
-
-    return {
-      event_name: PURCHASE_EVENT,
-      event_time: Math.floor(Date.now() / 1000),
-      event_id: eventId,
-      action_source: "business_messaging",
-      messaging_channel: META_MESSAGING_CHANNEL,
-      user_data: buildCtwaUserData(contact, {
-        userId,
-        facebookPageId: integration.facebookPageId,
-        ctwaClid: mode.ctwaClid,
-      }),
-      custom_data: custom,
-    }
-  }
-
-  return {
-    event_name: PURCHASE_EVENT,
-    event_time: Math.floor(Date.now() / 1000),
-    event_id: eventId,
-    action_source: "system_generated",
-    user_data: ensureUserData(contact, { userId }),
-    custom_data: crmCustomData({ amount, ticket, contentCategory: "purchase" }),
-  }
+  const eventSource = eventSourceForMode(mode)
+  return buildFunnelEvent({
+    eventName: PURCHASE_EVENT,
+    contact,
+    eventId,
+    userId,
+    integration,
+    mode,
+    customData: buildFunnelCustomData({
+      contentCategory: "purchase",
+      eventSource,
+      amount,
+      contentName: mode.mode === "ctwa" ? contactDisplayName(contact) : "Compra WhatsApp",
+      ticket,
+    }),
+  })
 }
 
 function formatMetaError(json) {
@@ -305,19 +363,18 @@ async function recordIntegrationResult(prisma, userId, { eventName, error, event
     .catch(() => {})
 }
 
-async function dispatchCommerceEvent(prisma, {
+async function dispatchMetaEvent(prisma, {
   userId,
   contact,
   integration,
-  buildPayload,
-  eventNameForLog,
+  eventName,
   eventIdPrefix,
-  amount,
+  buildPayload,
+  amount = null,
   extraReturn = {},
 }) {
   const mode = resolveTrackingMode(contact)
   const eventId = `${eventIdPrefix}-${contact.id}-${Date.now()}`
-  const eventName = mode.mode === "ctwa" ? (eventNameForLog.ctwa || eventNameForLog.default) : eventNameForLog.default
 
   if (mode.mode === "ctwa" && !integration.facebookPageId) {
     const message = "Lead veio de anúncio Click-to-WhatsApp. Configure o ID da Página do Facebook em Integrações."
@@ -361,24 +418,106 @@ async function dispatchCommerceEvent(prisma, {
   }
 }
 
+async function dispatchIdempotentMetaEvent(prisma, {
+  userId,
+  contact,
+  integration,
+  eventName,
+  eventIdPrefix,
+  idempotencyField,
+  buildPayload,
+  amount = null,
+  gate = true,
+}) {
+  if (!gate) {
+    return { sent: false, skipped: true, reason: "disabled" }
+  }
+  if (!integration?.pixelId || !integration?.accessToken) {
+    return { sent: false, skipped: true, reason: "not_configured" }
+  }
+  if (contact[idempotencyField]) {
+    return { sent: false, skipped: true, reason: "already_sent", eventName }
+  }
+
+  const result = await dispatchMetaEvent(prisma, {
+    userId,
+    contact,
+    integration,
+    eventName,
+    eventIdPrefix,
+    buildPayload,
+    amount,
+  })
+
+  if (result.sent) {
+    await prisma.crmContact
+      .update({
+        where: { id: contact.id },
+        data: { [idempotencyField]: new Date() },
+      })
+      .catch(() => {})
+  }
+
+  return result
+}
+
+async function getEnabledIntegration(prisma, userId) {
+  const integration = await getMetaIntegrationCredentials(prisma, userId)
+  if (!integration?.enabled) return { integration: null, skipped: true, reason: "disabled" }
+  return { integration }
+}
+
+async function trackConversationStartedEvent(prisma, { userId, contact }) {
+  const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
+  if (skipped) return { sent: false, skipped: true, reason }
+
+  return dispatchIdempotentMetaEvent(prisma, {
+    userId,
+    contact,
+    integration,
+    eventName: CONVERSATION_STARTED_EVENT,
+    eventIdPrefix: "vesto-conversation-started",
+    idempotencyField: "conversationStartedEventSentAt",
+    buildPayload: ({ eventId, mode }) =>
+      buildConversationStartedEvent({ contact, eventId, userId, integration, mode }),
+    gate: true,
+  })
+}
+
+async function trackLeadQualifiedEvent(prisma, { userId, contact }) {
+  const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
+  if (skipped) return { sent: false, skipped: true, reason }
+
+  return dispatchIdempotentMetaEvent(prisma, {
+    userId,
+    contact,
+    integration,
+    eventName: LEAD_QUALIFIED_EVENT,
+    eventIdPrefix: "vesto-lead-qualified",
+    idempotencyField: "qualifiedEventSentAt",
+    buildPayload: ({ eventId, mode }) =>
+      buildLeadQualifiedEvent({ contact, eventId, userId, integration, mode }),
+    gate: true,
+  })
+}
+
 async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
   const integration = await getMetaIntegrationCredentials(prisma, userId)
   if (!integration?.enabled || !integration.sendQuotes) {
     return { sent: false, skipped: true, reason: "disabled" }
   }
-  if (!integration.pixelId || !integration.accessToken) {
-    return { sent: false, skipped: true, reason: "not_configured" }
-  }
 
-  return dispatchCommerceEvent(prisma, {
+  return dispatchIdempotentMetaEvent(prisma, {
     userId,
     contact,
     integration,
-    amount,
+    eventName: QUOTE_EVENT,
     eventIdPrefix: "vesto-quote",
-    eventNameForLog: { default: CRM_LEAD_EVENT, ctwa: CTWA_LEAD_EVENT },
+    idempotencyField: "quoteEventSentAt",
+    amount,
     buildPayload: ({ eventId, mode }) =>
       buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }),
+    gate: true,
   })
 }
 
@@ -391,13 +530,13 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
     return { sent: false, skipped: true, reason: "not_configured" }
   }
 
-  return dispatchCommerceEvent(prisma, {
+  return dispatchMetaEvent(prisma, {
     userId,
     contact,
     integration,
-    amount,
+    eventName: PURCHASE_EVENT,
     eventIdPrefix: "vesto-purchase",
-    eventNameForLog: { default: PURCHASE_EVENT, ctwa: PURCHASE_EVENT },
+    amount,
     buildPayload: ({ eventId, mode }) =>
       buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode }),
   })
@@ -414,76 +553,92 @@ async function testMetaIntegration(prisma, userId) {
     ? ` Código ${integration.testEventCode} — veja em Eventos de teste.`
     : ""
 
-  // 1) Conexão básica (website)
-  const testEventId = `vesto-test-${userId}-${Date.now()}`
-  const testUserData = ensureUserData(null, { userId })
-  testUserData.client_ip_address = "254.254.254.254"
-  testUserData.client_user_agent = VESTO_USER_AGENT
-
-  try {
-    const websiteResult = await sendMetaEvent(
-      integration,
-      {
-        event_name: "TestEvent",
-        event_time: Math.floor(Date.now() / 1000),
-        event_id: testEventId,
-        action_source: "website",
-        event_source_url: "https://vesto.group/dashboard/integrations",
-        user_data: testUserData,
-      },
-      { useTestCode: true },
-    )
-    results.push({ name: "TestEvent", ok: true, eventsReceived: websiteResult.events_received })
-  } catch (err) {
-    await recordIntegrationResult(prisma, userId, { eventName: "TestEvent", error: err.message })
-    return { error: "META_API_ERROR", message: `TestEvent falhou: ${err.message}` }
-  }
-
-  // 2) Orçamento CRM (modo LP → WhatsApp — system_generated)
   const mockContact = {
     id: `test-contact-${userId}`,
     phone: "5547999999999",
     pushName: "Teste Vesto",
     customFields: {},
   }
-  const crmLeadId = `vesto-test-lead-${userId}-${Date.now()}`
-  try {
-    const crmResult = await sendMetaEvent(
-      integration,
-      buildQuoteEvent({
-        contact: mockContact,
-        amount: 99.9,
-        eventId: crmLeadId,
-        userId,
-        integration,
-        mode: { mode: "crm" },
-      }),
-      { useTestCode: true },
-    )
-    results.push({ name: "Lead (CRM)", ok: true, eventsReceived: crmResult.events_received })
-  } catch (err) {
-    results.push({ name: "Lead (CRM)", ok: false, error: err.message })
+
+  const testUserData = ensureUserData(mockContact, { userId })
+  testUserData.client_ip_address = "254.254.254.254"
+  testUserData.client_user_agent = VESTO_USER_AGENT
+
+  const sendTest = async (name, payload) => {
+    try {
+      const result = await sendMetaEvent(integration, payload, { useTestCode: true })
+      results.push({ name, ok: true, eventsReceived: result.events_received })
+      return true
+    } catch (err) {
+      results.push({ name, ok: false, error: err.message })
+      return false
+    }
   }
 
-  // 3) Compra CRM
-  const purchaseId = `vesto-test-purchase-${userId}-${Date.now()}`
-  try {
-    const purchaseResult = await sendMetaEvent(
-      integration,
-      buildPurchaseEvent({
+  const ok = await sendTest("TestEvent", {
+    event_name: "TestEvent",
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: `vesto-test-${userId}-${Date.now()}`,
+    action_source: "website",
+    event_source_url: "https://vesto.group/dashboard/integrations",
+    user_data: testUserData,
+  })
+
+  if (!ok) {
+    const failed = results.find((r) => !r.ok)
+    await recordIntegrationResult(prisma, userId, { eventName: "TestEvent", error: failed?.error })
+    return { error: "META_API_ERROR", message: `TestEvent falhou: ${failed?.error}` }
+  }
+
+  const crmMode = { mode: "crm" }
+  const tests = [
+    {
+      name: CONVERSATION_STARTED_EVENT,
+      payload: buildConversationStartedEvent({
+        contact: mockContact,
+        eventId: `vesto-test-conversation-${userId}-${Date.now()}`,
+        userId,
+        integration,
+        mode: crmMode,
+      }),
+    },
+    {
+      name: LEAD_QUALIFIED_EVENT,
+      payload: buildLeadQualifiedEvent({
+        contact: mockContact,
+        eventId: `vesto-test-qualified-${userId}-${Date.now()}`,
+        userId,
+        integration,
+        mode: crmMode,
+      }),
+    },
+    {
+      name: QUOTE_EVENT,
+      payload: buildQuoteEvent({
+        contact: mockContact,
+        amount: 99.9,
+        eventId: `vesto-test-quote-${userId}-${Date.now()}`,
+        userId,
+        integration,
+        mode: crmMode,
+      }),
+    },
+    {
+      name: PURCHASE_EVENT,
+      payload: buildPurchaseEvent({
         contact: mockContact,
         amount: 199.9,
         ticket: "TEST-001",
-        eventId: purchaseId,
+        eventId: `vesto-test-purchase-${userId}-${Date.now()}`,
         userId,
         integration,
-        mode: { mode: "crm" },
+        mode: crmMode,
       }),
-      { useTestCode: true },
-    )
-    results.push({ name: "Purchase (CRM)", ok: true, eventsReceived: purchaseResult.events_received })
-  } catch (err) {
-    results.push({ name: "Purchase (CRM)", ok: false, error: err.message })
+    },
+  ]
+
+  for (const t of tests) {
+    await sendTest(t.name, t.payload)
   }
 
   const failed = results.filter((r) => !r.ok)
@@ -507,14 +662,21 @@ async function testMetaIntegration(prisma, userId) {
 }
 
 module.exports = {
+  CONVERSATION_STARTED_EVENT,
+  LEAD_QUALIFIED_EVENT,
+  QUOTE_EVENT,
+  PURCHASE_EVENT,
   formatIntegrationRow,
   getMetaIntegration,
   upsertMetaIntegration,
+  trackConversationStartedEvent,
+  trackLeadQualifiedEvent,
   trackCrmQuoteEvent,
   trackCrmPurchaseEvent,
   testMetaIntegration,
-  // exportados para testes
   resolveTrackingMode,
+  buildConversationStartedEvent,
+  buildLeadQualifiedEvent,
   buildQuoteEvent,
   buildPurchaseEvent,
 }

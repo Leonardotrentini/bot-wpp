@@ -54,22 +54,62 @@ function extractCtwaClidFromRecord(record) {
   return walk(record.message) || walk(record)
 }
 
-async function storeContactCtwaClid(prisma, contact, ctwaClid) {
-  if (!contact?.id || !ctwaClid) return contact
-  const custom = parseCustomFields(contact.customFields)
-  if (custom.meta?.ctwaClid === ctwaClid) return contact
+function resolveFbclid(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const fbclid = custom.meta?.fbclid || custom.fbclid
+  return fbclid ? String(fbclid).trim() : null
+}
 
-  custom.meta = { ...(custom.meta || {}), ctwaClid }
+/** Monta fbc para CAPI quando só fbclid está salvo no contato. */
+function resolveFbc(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const stored = custom.meta?.fbc || custom.fbc
+  if (stored) return String(stored).trim()
+
+  const fbclid = resolveFbclid(contact)
+  if (!fbclid) return null
+  return `fb.1.${Math.floor(Date.now() / 1000)}.${fbclid}`
+}
+
+async function storeContactMetaAttribution(prisma, contact, { ctwaClid, fbclid, fbc } = {}) {
+  if (!contact?.id) return contact
+
+  const custom = parseCustomFields(contact.customFields)
+  custom.meta = { ...(custom.meta || {}) }
+
+  let changed = false
+  if (ctwaClid && custom.meta.ctwaClid !== ctwaClid) {
+    custom.meta.ctwaClid = ctwaClid
+    changed = true
+  }
+  if (fbclid && custom.meta.fbclid !== fbclid) {
+    custom.meta.fbclid = fbclid
+    changed = true
+  }
+  if (fbc && custom.meta.fbc !== fbc) {
+    custom.meta.fbc = fbc
+    changed = true
+  }
+
+  if (!changed) return contact
   return prisma.crmContact.update({
     where: { id: contact.id },
     data: { customFields: custom },
   })
 }
 
+async function storeContactCtwaClid(prisma, contact, ctwaClid) {
+  if (!contact?.id || !ctwaClid) return contact
+  return storeContactMetaAttribution(prisma, contact, { ctwaClid })
+}
+
 module.exports = {
   parseFacebookPageId,
   parseCustomFields,
   resolveCtwaClid,
+  resolveFbclid,
+  resolveFbc,
   extractCtwaClidFromRecord,
   storeContactCtwaClid,
+  storeContactMetaAttribution,
 }

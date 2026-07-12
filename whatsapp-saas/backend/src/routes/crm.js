@@ -55,6 +55,8 @@ const {
   processDueContactReminders,
 } = require("../lib/crmContactReminders")
 const { listCrmSales } = require("../lib/crmSales")
+const { ensureDefaultTags, isQualifiedTagName } = require("../lib/crmDefaults")
+const { trackLeadQualifiedEvent } = require("../lib/metaConversions")
 
 const DEFAULT_STAGES = [
   { name: "Novo", color: "#38bdf8", isDefault: true },
@@ -65,10 +67,12 @@ const DEFAULT_STAGES = [
 
 async function ensureDefaultStages(userId) {
   const count = await prisma.crmKanbanStage.count({ where: { userId } })
-  if (count > 0) return
-  await prisma.crmKanbanStage.createMany({
-    data: DEFAULT_STAGES.map((s, i) => ({ userId, sortOrder: i, ...s })),
-  })
+  if (count === 0) {
+    await prisma.crmKanbanStage.createMany({
+      data: DEFAULT_STAGES.map((s, i) => ({ userId, sortOrder: i, ...s })),
+    })
+  }
+  await ensureDefaultTags(userId)
 }
 
 function formatStageRow(stage) {
@@ -684,6 +688,13 @@ function createCrmRouter({ io }) {
       where: { id: contact.id },
       include: { tags: { include: { tag: true } } },
     })
+
+    if (isQualifiedTagName(tag.name)) {
+      trackLeadQualifiedEvent(prisma, { userId, contact: updated }).catch((err) =>
+        console.error("[meta] LeadQualified:", err?.message || err),
+      )
+    }
+
     return res.json({ contact: formatContactRow(updated) })
   })
 

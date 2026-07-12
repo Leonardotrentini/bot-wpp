@@ -26,6 +26,7 @@ export function Integrations() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [testResults, setTestResults] = useState(null)
   const [form, setForm] = useState({
     pixelId: '',
     facebookPageId: '',
@@ -96,9 +97,11 @@ export function Integrations() {
 
   const handleTest = async () => {
     setTesting(true)
+    setTestResults(null)
     try {
       const { data } = await testMetaIntegration()
-      toast.success(data.message || 'Evento de teste enviado.')
+      setTestResults(data.results || [])
+      toast.success(data.message || 'Eventos de teste enviados.')
       await load()
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao testar integração.')
@@ -122,8 +125,8 @@ export function Integrations() {
       <div>
         <h2 className="text-xl font-semibold text-stone-50 font-heading">Integrações</h2>
         <p className="mt-2 text-sm text-stone-400 max-w-2xl">
-          Conecte o <strong className="text-stone-300">Meta Pixel</strong> para enviar orçamentos e vendas confirmadas no
-          CRM direto para o Facebook — otimize campanhas para conversões reais no WhatsApp.
+          Conecte o <strong className="text-stone-300">Meta Pixel</strong> para enviar cada etapa do funil WhatsApp
+          (conversa iniciada, qualificado, orçamento e compra) via API de Conversões.
         </p>
       </div>
 
@@ -136,7 +139,7 @@ export function Integrations() {
             <div>
               <h3 className="text-lg font-semibold text-stone-50">Meta (Facebook)</h3>
               <p className="mt-1 text-sm text-stone-500">
-                API de Conversões — eventos automáticos ao salvar orçamento ou confirmar compra no chat.
+                API de Conversões — funil automático: ConversationStarted, LeadQualified, Quote e Purchase.
               </p>
               <Badge variant={connected ? 'success' : 'muted'} className="mt-2">
                 {connected ? 'Conectado' : 'Não configurado'}
@@ -193,7 +196,7 @@ export function Integrations() {
             <Toggle
               checked={form.sendQuotes}
               onChange={(v) => setForm((f) => ({ ...f, sendQuotes: v }))}
-              label='Enviar evento "Lead" ao salvar orçamento (CRM / CTWA automático)'
+              label='Enviar evento "Quote" ao salvar orçamento (1x por contato)'
             />
             <Toggle
               checked={form.sendPurchases}
@@ -223,24 +226,53 @@ export function Integrations() {
             <p className="font-medium text-stone-400">Eventos enviados automaticamente</p>
             <ul className="mt-2 list-inside list-disc space-y-1">
               <li>
-                <strong className="text-stone-400">Lead</strong> — orçamento salvo no chat (LP → WhatsApp ou orgânico; CTWA usa LeadSubmitted automaticamente)
+                <strong className="text-stone-400">ConversationStarted</strong> — 1ª mensagem inbound de contato novo
+                (com integração ativa)
               </li>
               <li>
-                <strong className="text-stone-400">Purchase</strong> — quando confirma uma compra (valor + ticket opcional)
+                <strong className="text-stone-400">LeadQualified</strong> — tag QUALIFICADO aplicada (1x por contato)
+              </li>
+              <li>
+                <strong className="text-stone-400">Quote</strong> — orçamento salvo no chat (1x por contato, se toggle
+                ativo)
+              </li>
+              <li>
+                <strong className="text-stone-400">Purchase</strong> — compra confirmada (se toggle ativo)
               </li>
             </ul>
             <p className="mt-2">
-              No Ads Manager, otimize campanhas para o evento <strong className="text-stone-400">Purchase</strong> para
-              vendas reais.
+              Na LP, use <strong className="text-stone-400">Contact</strong> no clique do WhatsApp — não Lead.
             </p>
           </div>
+
+          {testResults?.length > 0 && (
+            <div className="rounded-xl border border-brand-800 bg-brand-950/40 px-4 py-3 text-xs">
+              <p className="font-medium text-stone-400">Último teste de eventos</p>
+              <ul className="mt-2 space-y-1">
+                {testResults.map((r) => (
+                  <li key={r.name} className="flex items-center gap-2 text-stone-500">
+                    {r.ok ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    ) : (
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />
+                    )}
+                    <span className={r.ok ? 'text-stone-300' : 'text-red-300'}>
+                      {r.name}
+                      {r.ok && r.eventsReceived != null ? ` (${r.eventsReceived} recebido)` : ''}
+                      {!r.ok && r.error ? ` — ${r.error}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="flex flex-wrap gap-2 pt-2">
             <Button onClick={handleSave} disabled={saving || !form.pixelId.trim()}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar integração'}
             </Button>
             <Button variant="secondary" onClick={handleTest} disabled={testing || !meta?.hasAccessToken}>
-              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Enviar evento de teste'}
+              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Enviar eventos de teste'}
             </Button>
           </div>
 
