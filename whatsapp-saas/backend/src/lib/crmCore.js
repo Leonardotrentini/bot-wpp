@@ -7,6 +7,7 @@
  */
 
 const { mapEvolutionMessage } = require("./evolutionMessages")
+const { prisma } = require("./prisma")
 const {
   displayNameFromParticipant,
   formatPhoneBr,

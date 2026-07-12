@@ -154,11 +154,14 @@ export function ChatSyncBar({ job, onStartSync, syncStarting }) {
   const handleConfirm = (days) => onStartSync(days)
 
   if (idle) {
-    const statusText =
-      job?.status === 'done'
+    const statusText = syncStarting
+      ? 'Iniciando sincronização…'
+      : job?.status === 'done'
         ? `Sync ${formatSyncTime(job.finishedAt)} · ${job.totalMessages} msgs`
         : job?.status === 'error'
-          ? 'Última sync falhou'
+          ? job.error
+            ? `Última sync falhou: ${job.error}`
+            : 'Última sync falhou'
           : 'Histórico e perfis do WhatsApp'
 
     return (
