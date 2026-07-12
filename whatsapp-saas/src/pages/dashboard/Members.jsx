@@ -362,6 +362,9 @@ export function Members() {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+        Tags de membros são salvas neste navegador (localStorage) e não sincronizam com o CRM. Use tags do CRM na aba Conversas para leads individuais.
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setTagsModal(true)}>
           <Tag className="h-4 w-4" /> Gerenciar tags

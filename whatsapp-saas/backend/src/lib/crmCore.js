@@ -287,16 +287,24 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
     where: { userId_remoteJid: { userId, remoteJid: jid } },
   })
   if (!contact) {
-    contact = await prisma.crmContact.create({
-      data: {
-        userId,
-        remoteJid: jid,
-        pushName: pushName || null,
-        avatarUrl: avatarUrl || null,
-        phone,
-        isLid: isLidJid(jid),
-      },
-    })
+    try {
+      contact = await prisma.crmContact.create({
+        data: {
+          userId,
+          remoteJid: jid,
+          pushName: pushName || null,
+          avatarUrl: avatarUrl || null,
+          phone,
+          isLid: isLidJid(jid),
+        },
+      })
+    } catch (err) {
+      if (err?.code !== "P2002") throw err
+      contact = await prisma.crmContact.findUnique({
+        where: { userId_remoteJid: { userId, remoteJid: jid } },
+      })
+      if (!contact) throw err
+    }
   } else {
     const data = {}
     if (pushName && contact.pushName !== pushName) data.pushName = pushName
@@ -319,16 +327,25 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
       where: { userId, isDefault: true },
       orderBy: { sortOrder: "asc" },
     })
-    conversation = await prisma.crmConversation.create({
-      data: {
-        userId,
-        contactId: contact.id,
-        remoteJid: jid,
-        kanbanStageId: defaultStage?.id || null,
-      },
-      include: CONVERSATION_INCLUDE,
-    })
-    conversation.__isNew = true
+    try {
+      conversation = await prisma.crmConversation.create({
+        data: {
+          userId,
+          contactId: contact.id,
+          remoteJid: jid,
+          kanbanStageId: defaultStage?.id || null,
+        },
+        include: CONVERSATION_INCLUDE,
+      })
+      conversation.__isNew = true
+    } catch (err) {
+      if (err?.code !== "P2002") throw err
+      conversation = await prisma.crmConversation.findUnique({
+        where: { userId_remoteJid: { userId, remoteJid: jid } },
+        include: CONVERSATION_INCLUDE,
+      })
+      if (!conversation) throw err
+    }
   }
 
   return { contact, conversation }

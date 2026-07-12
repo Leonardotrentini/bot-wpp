@@ -39,5 +39,5 @@ export function resolveUseRealApi() {
   if (rt && typeof rt.useRealApi === 'boolean') return rt.useRealApi
   if (import.meta.env.VITE_USE_REAL_API === 'true') return true
   if (import.meta.env.VITE_USE_REAL_API === 'false') return false
-  return false
+  return import.meta.env.PROD === true
 }

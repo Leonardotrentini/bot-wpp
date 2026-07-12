@@ -357,7 +357,7 @@ async function confirmContactPurchase(prisma, io, { userId, contactId, amount, t
 
   const tracking = await trackCrmPurchaseEvent(prisma, {
     userId,
-    contact,
+    contact: updated,
     amount: value,
     ticket: custom.purchase.ticket,
   })

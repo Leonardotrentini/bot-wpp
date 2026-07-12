@@ -34,6 +34,7 @@ const {
   fetchGroupParticipants,
   findContacts,
   fetchProfile,
+  fetchProfilePictureUrl,
   fetchGroupMessages,
   findChats,
   fetchChatMessages,
@@ -153,9 +154,14 @@ io.on("connection", (socket) => {
     const payload = jwt.verify(token, process.env.JWT_SECRET)
     if (payload?.sub) socket.join(`user:${payload.sub}`)
   } catch {
-    /* socket sem sala privada; ainda recebe eventos globais */
+    /* socket sem sala privada */
   }
 })
+
+function emitWhatsAppToUser(userId, event, payload) {
+  if (!userId) return
+  io.to(`user:${userId}`).emit(event, payload)
+}
 
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff")
@@ -2620,6 +2626,13 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
       req.user.sub,
       parsed.data.groupIds,
     )
+    if (!monitoredGroupIds.length) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione ao menos um grupo monitorado e ativo.",
+        invalidGroupIds,
+      })
+    }
 
     let cadenceId = null
     if (parsed.data.cadenceId) {
@@ -2770,7 +2783,18 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
 
     const groupNames = []
-    for (const jid of parsed.data.groupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
+    const { valid: monitoredGroupIds, invalid: invalidGroupIds } = await resolveMonitoredGroupJidsForSend(
+      req.user.sub,
+      parsed.data.groupIds,
+    )
+    if (!monitoredGroupIds.length) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione ao menos um grupo monitorado e ativo.",
+        invalidGroupIds,
+      })
+    }
+    for (const jid of monitoredGroupIds) groupNames.push(await resolveGroupName(req.user.sub, jid))
 
     const scheduledAt = parsed.data.frequency === "once" ? parseScheduledAt(parsed.data.scheduledAt) : null
     if (parsed.data.frequency === "once" && !scheduledAt) {
@@ -2792,7 +2816,7 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
       data: {
         name: parsed.data.name,
         status: parsed.data.status === "pausada" ? "pausada" : "ativa",
-        groupJids: parsed.data.groupIds,
+        groupJids: monitoredGroupIds,
         groupNames,
         templateId: parsed.data.templateId || null,
         ...content,
@@ -2940,6 +2964,17 @@ async function processDueAutomations() {
     if (schedulerLock.has(a.id)) continue
     schedulerLock.add(a.id)
     try {
+      if (a.nextRunAt && now.getTime() - new Date(a.nextRunAt).getTime() > catchupMs) {
+        console.warn("[scheduler] pulando disparo atrasado:", a.id)
+        if (a.frequency === "once") {
+          await prisma.automation.updateMany({
+            where: { id: a.id, status: "ativa" },
+            data: { status: "concluida", lastRunAt: now },
+          })
+        }
+        continue
+      }
+
       const next = a.frequency === "once" ? null : computeNextRun(a, new Date(now.getTime() + 60000))
       const newStatus = a.frequency === "once" ? "concluida" : "ativa"
       const claim = await prisma.automation.updateMany({
@@ -2947,12 +2982,6 @@ async function processDueAutomations() {
         data: { nextRunAt: next, lastRunAt: now, status: newStatus },
       })
       if (claim.count === 0) continue
-
-      // Catch-up: ignora disparos muito atrasados (ex.: servidor ficou offline)
-      if (a.nextRunAt && now.getTime() - new Date(a.nextRunAt).getTime() > catchupMs) {
-        console.warn("[scheduler] pulando disparo atrasado:", a.id)
-        continue
-      }
 
       const conn = await prisma.whatsAppConnection.findUnique({ where: { userId: a.userId } })
       if (!conn?.instanceName || !conn.connected) continue
@@ -3062,8 +3091,8 @@ async function updateConnectionFromWebhook(instanceName, body) {
     },
   })
 
-  io.emit("whatsapp:status", formatConnectionPayload(conn))
-  if (conn.qrCode) io.emit("whatsapp:qr", { qr: conn.qrCode })
+  emitWhatsAppToUser(conn.userId, "whatsapp:status", formatConnectionPayload(conn))
+  if (conn.qrCode) emitWhatsAppToUser(conn.userId, "whatsapp:qr", { qr: conn.qrCode })
   return conn
 }
 
@@ -3092,7 +3121,7 @@ async function updateGroupsFromWebhook(instanceName, body) {
       groupSyncMessage: `${visibleCount} grupo(s) visíveis${saved ? ` · ${saved} evento(s) processado(s)` : ""}${cleanedGhosts ? ` · ${cleanedGhosts} fantasma(s) ocultado(s)` : ""}. Ative manualmente os que quiser monitorar.`,
       groupSyncError: null,
     })
-    io.emit("whatsapp:status", formatConnectionPayload(updatedConn, visibleCount))
+    emitWhatsAppToUser(conn.userId, "whatsapp:status", formatConnectionPayload(updatedConn, visibleCount))
   }
 
   return saved
@@ -3130,8 +3159,6 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
     emitCrmEvent(io, userId, "crm:conversation", { conversation: formatCrmConversationRow(conversation) })
   }
 
-  if (!created) return
-
   if (!message.fromMe) {
     if (result.isNewConversation) {
       const contactForMeta = await prisma.crmContact.findUnique({ where: { id: conversation.contactId } })
@@ -3142,16 +3169,18 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
       }
     }
 
-    onCrmMessage(getCrmDeps(), {
-      conversation,
-      message,
-      isNewConversation: result.isNewConversation,
-    }).catch((err) => console.error("[crm-flow] onMessage:", err?.message || err))
+    if (created) {
+      onCrmMessage(getCrmDeps(), {
+        conversation,
+        message,
+        isNewConversation: result.isNewConversation,
+      }).catch((err) => console.error("[crm-flow] onMessage:", err?.message || err))
 
-    maybeReplyWithAi(getCrmDeps(), {
-      conversation,
-      message,
-    }).catch((err) => console.error("[crm-ai] reply:", err?.message || err))
+      maybeReplyWithAi(getCrmDeps(), {
+        conversation,
+        message,
+      }).catch((err) => console.error("[crm-ai] reply:", err?.message || err))
+    }
   }
 }
 
@@ -3178,9 +3207,7 @@ async function storeIncomingMessages(instanceName, body) {
     if (!String(groupJid).endsWith("@g.us")) {
       // Chats 1:1 (@s.whatsapp.net / @lid) alimentam o CRM em tempo real.
       if (isIndividualJid(groupJid) && !isReactionRecord(record)) {
-        await handleCrmIncomingRecord(conn.userId, record, instanceName).catch((err) =>
-          console.error("[crm] ingest webhook:", err?.message || err),
-        )
+        await handleCrmIncomingRecord(conn.userId, record, instanceName)
       }
       continue
     }
@@ -3384,7 +3411,7 @@ app.post("/api/evolution/webhook", async (req, res) => {
     return res.json({ ok: true })
   } catch (err) {
     console.error("[evolution-webhook]", err?.message || err)
-    return res.status(200).json({ ok: false })
+    return res.status(500).json({ ok: false, error: "WEBHOOK_PROCESSING_FAILED" })
   }
 })
 
@@ -3410,7 +3437,7 @@ app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
       qrData: null,
     })
 
-    io.emit("whatsapp:status", formatConnectionPayload(conn, groupsCount))
+    emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn, groupsCount))
     return res.json(formatConnectionPayload(conn, groupsCount))
   } catch (err) {
     return handleEvolutionError(res, err)
@@ -3443,8 +3470,8 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
       qrData,
     })
 
-    io.emit("whatsapp:qr", { qr: conn.qrCode })
-    io.emit("whatsapp:status", formatConnectionPayload(conn))
+    emitWhatsAppToUser(userId, "whatsapp:qr", { qr: conn.qrCode })
+    emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn))
     return res.status(201).json(formatConnectionPayload(conn))
   } catch (err) {
     return handleEvolutionError(res, err)
@@ -3479,7 +3506,7 @@ app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res) => {
       },
     })
 
-    io.emit("whatsapp:status", formatConnectionPayload(conn))
+    emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn))
     return res.json(formatConnectionPayload(conn))
   } catch (err) {
     return handleEvolutionError(res, err)

@@ -6,6 +6,7 @@ import { MetaPixelLoader } from '../integrations/MetaPixelLoader.jsx'
 import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
+import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { Button } from '../common/Button.jsx'
 import { Eye } from 'lucide-react'
 
@@ -28,6 +29,7 @@ export function DashboardLayout() {
   const navigate = useNavigate()
   const { width } = useSidebar()
   const { isImpersonating, impersonation, exitImpersonation } = useAuth()
+  const demoMode = !resolveUseRealApi()
 
   const title = useMemo(() => {
     if (pathname.startsWith('/dashboard/groups/') && pathname !== '/dashboard/groups') return 'Detalhes do grupo'
@@ -43,6 +45,13 @@ export function DashboardLayout() {
       <div className="min-h-screen bg-brand-950">
         <DashboardSidebar />
         <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
+        {demoMode && (
+          <div className="sticky top-0 z-40 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
+            <p className="text-sm text-amber-100">
+              Modo demonstração — dados simulados. Em produção o painel usa a API real automaticamente.
+            </p>
+          </div>
+        )}
         {isImpersonating && (
           <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-accent-500/30 bg-accent-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
             <p className="inline-flex items-center gap-2 text-sm text-accent-200">

@@ -617,6 +617,7 @@ export function GroupDetails() {
     if (nextStatus !== 'ativo' && nextStatus !== 'inativo') return
     const cur = members.find((x) => x.id === memberId)
     if (cur?.status === nextStatus) return
+    const prevStatus = cur?.status
     setMembers((prev) => {
       const next = prev.map((m) => (m.id === memberId ? { ...m, status: nextStatus } : m))
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'member.status', details: `${memberId} -> ${nextStatus}` }, ...auditLogRef.current].slice(0, 50)
@@ -631,10 +632,15 @@ export function GroupDetails() {
     try {
       const res = await setGroupParticipantsStatus(id, [memberId], nextStatus)
       if (!res.data?.updated) {
-        toast.error('Participante não encontrado no servidor. Sincronize o grupo e tente de novo.')
+        throw new Error('Participante não encontrado no servidor. Sincronize o grupo e tente de novo.')
       }
     } catch (e) {
-      toast.error(e?.response?.data?.message || 'Falha ao salvar status no servidor.')
+      setMembers((prev) => {
+        const next = prev.map((m) => (m.id === memberId ? { ...m, status: prevStatus || m.status } : m))
+        persistAll(next, catalogExtras, governance, routines, auditLogRef.current, snapshots)
+        return next
+      })
+      toast.error(e?.response?.data?.message || e?.message || 'Falha ao salvar status no servidor.')
     }
   }
 
@@ -645,6 +651,7 @@ export function GroupDetails() {
       return
     }
     const memberIds = [...selected]
+    const prevById = new Map(members.filter((m) => selected.has(m.id)).map((m) => [m.id, m.status]))
     setMembers((prev) => {
       const next = prev.map((m) => (selected.has(m.id) ? { ...m, status: nextStatus } : m))
       const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'member.status_bulk', details: `${selected.size} -> ${nextStatus}` }, ...auditLogRef.current].slice(0, 50)
@@ -656,20 +663,20 @@ export function GroupDetails() {
 
     if (!id) return
     void setGroupParticipantsStatus(id, memberIds, nextStatus).catch(() => {
+      setMembers((prev) => {
+        const next = prev.map((m) => {
+          if (!prevById.has(m.id)) return m
+          return { ...m, status: prevById.get(m.id) }
+        })
+        persistAll(next, catalogExtras, governance, routines, auditLogRef.current, snapshots)
+        return next
+      })
       toast.error('Falha ao salvar status no servidor.')
     })
   }
 
   const executeMoveBulk = () => {
-    if (selected.size === 0) {
-      toast.error('Selecione membros para executar ação em massa.')
-      return
-    }
-    const msg = `${selected.size} membro(s) movidos para "Comunidade VIP" (simulado).`
-    toast.success(msg)
-    const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'bulk.move', details: msg }, ...auditLogRef.current].slice(0, 50)
-    setAuditLog(nextAudit)
-    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots)
+    toast.error('Mover membros entre grupos ainda não está disponível. Use o WhatsApp para reorganizar participantes.')
   }
 
   const createSnapshot = () => {
@@ -1053,7 +1060,7 @@ export function GroupDetails() {
             <Button size="sm" variant="outline" className="gap-1" onClick={() => setBulkStatus('inativo')}>
               Marcar inativo
             </Button>
-            <Button size="sm" variant="outline" onClick={executeMoveBulk}>
+            <Button size="sm" variant="outline" onClick={executeMoveBulk} disabled title="Em breve">
               Mover de grupo
             </Button>
           </div>

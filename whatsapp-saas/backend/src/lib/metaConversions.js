@@ -607,12 +607,13 @@ async function dispatchIdempotentMetaEvent(prisma, {
   })
 
   if (result.sent) {
-    await prisma.crmContact
-      .update({
-        where: { id: contact.id },
-        data: { [idempotencyField]: new Date() },
-      })
-      .catch(() => {})
+    const claim = await prisma.crmContact.updateMany({
+      where: { id: contact.id, [idempotencyField]: null },
+      data: { [idempotencyField]: new Date() },
+    })
+    if (claim.count === 0) {
+      return { sent: false, skipped: true, reason: "already_sent", eventName, race: true }
+    }
   }
 
   return result

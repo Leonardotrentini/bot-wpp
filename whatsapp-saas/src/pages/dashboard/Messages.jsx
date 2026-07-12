@@ -403,6 +403,7 @@ export function Messages({ defaultTab = 'criar' }) {
   const [histOffset, setHistOffset] = useState(0)
   const [histFilter, setHistFilter] = useState({ status: '', group: '' })
   const [loadingInit, setLoadingInit] = useState(true)
+  const [initError, setInitError] = useState(null)
 
   const [tplModal, setTplModal] = useState(false)
   const [tplForm, setTplForm] = useState(emptyTemplateForm)
@@ -496,8 +497,10 @@ export function Messages({ defaultTab = 'criar' }) {
     [templates],
   )
 
-  useEffect(() => {
-    Promise.all([
+  const reloadInit = useCallback(() => {
+    setLoadingInit(true)
+    setInitError(null)
+    return Promise.all([
       getGroups().then((r) =>
         setGroups((r.data.groups || []).filter((g) => g.status === 'ativo' && g.monitoringEnabled)),
       ),
@@ -506,7 +509,17 @@ export function Messages({ defaultTab = 'criar' }) {
       refreshCadences(),
       refreshHistory(0),
       refreshGroupActivity(),
-    ]).finally(() => setLoadingInit(false))
+    ])
+      .catch((err) => {
+        const msg = err?.response?.data?.message || 'Falha ao carregar dados de mensagens.'
+        setInitError(msg)
+        toast.error(msg)
+      })
+      .finally(() => setLoadingInit(false))
+  }, [refreshTemplates, refreshAutomations, refreshCadences, refreshHistory, refreshGroupActivity, toast])
+
+  useEffect(() => {
+    reloadInit()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -540,8 +553,8 @@ export function Messages({ defaultTab = 'criar' }) {
             setSendJob(null)
           }, 5000)
         }
-      } catch {
-        /* ignore polling errors */
+      } catch (err) {
+        if (active) toast.error(err?.response?.data?.message || 'Falha ao acompanhar o envio.')
       }
     }
     const iv = setInterval(tick, 1500)
@@ -1056,6 +1069,15 @@ export function Messages({ defaultTab = 'criar' }) {
         active={tab}
         onChange={changeTab}
       />
+
+      {initError && !loadingInit && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {initError}
+          <button type="button" className="ml-2 underline" onClick={reloadInit}>
+            Tentar novamente
+          </button>
+        </div>
+      )}
 
       {/* Barra de progresso de envio */}
       {sendJob && (

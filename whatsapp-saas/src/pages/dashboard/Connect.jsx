@@ -10,13 +10,19 @@ export function Connect() {
   const toast = useToast()
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [actionLoading, setActionLoading] = useState(false)
 
   async function refresh() {
     setLoading(true)
+    setLoadError(null)
     try {
       const { data } = await getWhatsAppStatus()
       setStatus(data)
+    } catch (e) {
+      const msg = e?.response?.data?.message || e?.message || 'Não foi possível verificar o status do WhatsApp.'
+      setLoadError(msg)
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
@@ -95,6 +101,14 @@ export function Connect() {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <Card>
+        {loadError && !loading && (
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {loadError}
+            <button type="button" className="ml-2 underline" onClick={refresh}>
+              Tentar novamente
+            </button>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-stone-50">Status da conexão</h2>

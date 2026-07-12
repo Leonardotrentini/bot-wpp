@@ -26,6 +26,21 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401 && typeof window !== 'undefined') {
+      localStorage.removeItem('vg_auth_token')
+      localStorage.removeItem('vg_auth')
+      const path = window.location.pathname || ''
+      if (!path.startsWith('/login') && !path.startsWith('/register')) {
+        window.location.href = '/login?expired=1'
+      }
+    }
+    return Promise.reject(error)
+  },
+)
+
 /** Simula resposta JSON — substitua por apiClient.post(...) quando o backend existir */
 async function mockResponse(data) {
   await delay()
