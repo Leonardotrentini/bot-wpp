@@ -10,6 +10,7 @@
  * Modos:
  * - CRM (LP/orgânico): action_source system_generated + fbc quando disponível
  * - CTWA (anúncio WhatsApp): action_source business_messaging + ctwa_clid + page_id
+ *   (Meta só aceita event_name da allowlist — não custom; ver CTWA_META_EVENT_NAMES)
  */
 
 const crypto = require("crypto")
@@ -29,6 +30,21 @@ const CONVERSATION_STARTED_EVENT = "ConversationStarted"
 const LEAD_QUALIFIED_EVENT = "LeadQualified"
 const QUOTE_EVENT = "Quote"
 const PURCHASE_EVENT = "Purchase"
+
+/** Nomes enviados à Meta em CTWA (business_messaging). Custom events são rejeitados (2804066). */
+const CTWA_META_EVENT_NAMES = {
+  [CONVERSATION_STARTED_EVENT]: "LeadSubmitted",
+  [LEAD_QUALIFIED_EVENT]: "QualifiedLead",
+  [QUOTE_EVENT]: "InitiateCheckout",
+  [PURCHASE_EVENT]: PURCHASE_EVENT,
+}
+
+function resolveMetaPayloadEventName(internalEventName, mode) {
+  if (mode?.mode === "ctwa") {
+    return CTWA_META_EVENT_NAMES[internalEventName] || internalEventName
+  }
+  return internalEventName
+}
 
 /** Valores fixos de content_category — usados nas conversões personalizadas da Meta. */
 const CONTENT_CATEGORY = {
@@ -166,7 +182,7 @@ function buildFunnelEvent({
   const eventTimeSec = eventTime != null ? eventTime : Math.floor(Date.now() / 1000)
 
   const base = {
-    event_name: eventName,
+    event_name: resolveMetaPayloadEventName(eventName, mode),
     event_time: eventTimeSec,
     event_id: eventId,
     custom_data: { ...customData, event_source: eventSource },
@@ -895,4 +911,6 @@ module.exports = {
   buildQuoteEvent,
   buildPurchaseEvent,
   trackMetaForContactTag,
+  CTWA_META_EVENT_NAMES,
+  resolveMetaPayloadEventName,
 }

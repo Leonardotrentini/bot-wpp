@@ -101,9 +101,8 @@ function testPayloads() {
     integration: mockIntegration,
     mode: ctwaMode,
   })
-  assert(ctwaQuote.event_name === QUOTE_EVENT, "CTWA Quote event_name")
+  assert(ctwaQuote.event_name === "InitiateCheckout", "CTWA Quote uses InitiateCheckout")
   assert(ctwaQuote.action_source === "business_messaging", "CTWA Quote action_source")
-  assert(ctwaQuote.messaging_channel === "whatsapp", "CTWA messaging_channel")
   assert(ctwaQuote.user_data.page_id === 61586091841500, "CTWA page_id")
   assert(ctwaQuote.user_data.ctwa_clid, "CTWA ctwa_clid")
   assert(ctwaQuote.custom_data.event_source === "ctwa", "CTWA event_source")
@@ -117,8 +116,19 @@ function testPayloads() {
     integration: mockIntegration,
     mode: ctwaMode,
   })
+  assert(ctwaQualified.event_name === "QualifiedLead", "CTWA LeadQualified uses QualifiedLead")
   assert(ctwaQualified.action_source === "business_messaging", "CTWA LeadQualified action_source")
   assert(!ctwaQualified.event_source_url, "CTWA LeadQualified must not send event_source_url")
+  assert(ctwaQualified.custom_data.content_category === CONTENT_CATEGORY.QUALIFIED_LEAD, "CTWA qualified category")
+
+  const ctwaConversation = buildConversationStartedEvent({
+    contact: mockContactCtwa,
+    eventId: "test-conversation-ctwa-1",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: ctwaMode,
+  })
+  assert(ctwaConversation.event_name === "LeadSubmitted", "CTWA ConversationStarted uses LeadSubmitted")
 
   const crmPurchase = buildPurchaseEvent({
     contact: mockContactCrm,
