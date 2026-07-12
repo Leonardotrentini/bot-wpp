@@ -253,17 +253,30 @@ export function Integrations() {
             value={form.pixelId}
             onChange={(e) => setForm((f) => ({ ...f, pixelId: e.target.value }))}
           />
-          <Input
-            label="ID da conta WhatsApp Business (WABA)"
-            placeholder="Ex.: 123456789012345"
-            value={form.facebookPageId}
-            onChange={(e) => setForm((f) => ({ ...f, facebookPageId: e.target.value }))}
-          />
-          <p className="-mt-2 text-xs text-stone-500">
-            Obrigatório para anúncios <strong className="text-stone-400">Click-to-WhatsApp</strong> — não use o ID da
-            Página do Facebook. Encontre em Meta Business Suite → Contas do WhatsApp → Configurações → ID da conta.
-            Campanhas <strong className="text-stone-400">LP → WhatsApp</strong> não precisam deste campo.
-          </p>
+
+          <div className="space-y-3 rounded-xl border border-[#25D366]/30 bg-[#25D366]/5 p-4">
+            <div>
+              <p className="text-sm font-medium text-stone-200">Anúncios Click-to-WhatsApp (CTWA)</p>
+              <p className="mt-1 text-xs text-stone-500">
+                Obrigatório para leads que vieram de anúncio direto no WhatsApp. Campanhas LP → WhatsApp não precisam.
+              </p>
+            </div>
+            <Input
+              label="ID da conta WhatsApp Business (WABA)"
+              placeholder="Ex.: 538521692670287"
+              value={form.facebookPageId}
+              onChange={(e) => setForm((f) => ({ ...f, facebookPageId: e.target.value }))}
+            />
+            <p className="-mt-2 text-xs text-stone-500">
+              Meta Business Suite → <strong className="text-stone-400">Contas do WhatsApp</strong> → Configurações →{' '}
+              <strong className="text-stone-400">ID da conta</strong>. Não use ID da Página nem do Pixel.
+            </p>
+            {form.facebookPageId ? (
+              <p className="text-xs text-emerald-400/90">WABA configurado: {form.facebookPageId}</p>
+            ) : (
+              <p className="text-xs text-amber-400/90">Sem WABA — eventos de anúncio WhatsApp falham na Meta.</p>
+            )}
+          </div>
           <Input
             label="Token da API de Conversões"
             type="password"
