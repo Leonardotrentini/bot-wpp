@@ -585,6 +585,10 @@ export async function saveGtmIntegration(payload) {
       containerId: String(payload.containerId || '').toUpperCase(),
       enabled: payload.enabled !== false,
       connected: Boolean(payload.containerId && payload.enabled !== false),
+      conversionTags: payload.conversionTags || [],
+      linkedTagsCount: (payload.conversionTags || []).filter((t) => t.enabled).length,
+      ga4MeasurementId: payload.ga4MeasurementId || '',
+      hasGa4ApiSecret: Boolean(payload.ga4ApiSecret),
     },
   })
 }

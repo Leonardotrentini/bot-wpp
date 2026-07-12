@@ -612,13 +612,19 @@ model MetaIntegration {
 
 /** Google Tag Manager — container vinculado à LP do tenant. */
 model GtmIntegration {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  containerId String
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  containerId        String
+  enabled            Boolean  @default(true)
+  /** Mapeamento evento funil Vesto → tag/evento GTM (JSON array). */
+  conversionTags     Json     @default("[]")
+  /** GA4 Measurement ID (G-XXXX) para conversões CRM via Measurement Protocol. */
+  ga4MeasurementId   String?
+  /** Secret da API GA4 (não exposto na leitura). */
+  ga4ApiSecret       String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 /** Clique na LP (ref vst_) aguardando associação com contato WhatsApp. */

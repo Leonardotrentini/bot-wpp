@@ -21,6 +21,7 @@
   var waMsg = script.getAttribute("data-whatsapp-msg") || ""
   var sellers = []
   var rotatorMode = "sequential"
+  var gtmConversionTags = []
 
   if (!apiBase) {
     try {
@@ -137,6 +138,32 @@
     return pickRotatorPhone()
   }
 
+  function pushGtmConversion(key, extra) {
+    if (!gtmConversionTags.length) return
+    var tag = null
+    for (var i = 0; i < gtmConversionTags.length; i++) {
+      if (gtmConversionTags[i].key === key) {
+        tag = gtmConversionTags[i]
+        break
+      }
+    }
+    if (!tag || !tag.eventName) return
+    try {
+      window.dataLayer = window.dataLayer || []
+      var payload = {
+        event: tag.eventName,
+        vesto_event: key,
+        vesto_tag: tag.tagName || key,
+      }
+      if (extra && typeof extra === "object") {
+        for (var k in extra) {
+          if (Object.prototype.hasOwnProperty.call(extra, k)) payload[k] = extra[k]
+        }
+      }
+      window.dataLayer.push(payload)
+    } catch (e) {}
+  }
+
   function handleWhatsAppClick(ev, opts) {
     if (ev && ev.preventDefault) ev.preventDefault()
     if (typeof window.fbq === "function") {
@@ -145,6 +172,11 @@
       } catch (e) {}
     }
     var meta = captureMeta()
+    pushGtmConversion("contact", {
+      page_url: meta.pageUrl,
+      utm_source: meta.utm_source,
+      utm_campaign: meta.utm_campaign,
+    })
     var ref = buildRef()
     try {
       sessionStorage.setItem("vesto_ref", ref)
@@ -178,6 +210,9 @@
     if (!waMsg && cfg.whatsappMsg) waMsg = cfg.whatsappMsg
     if (Array.isArray(cfg.sellers) && cfg.sellers.length) sellers = cfg.sellers
     if (cfg.rotatorMode) rotatorMode = cfg.rotatorMode
+    if (cfg.gtm && Array.isArray(cfg.gtm.conversionTags)) {
+      gtmConversionTags = cfg.gtm.conversionTags
+    }
   }
 
   function loadConfig() {

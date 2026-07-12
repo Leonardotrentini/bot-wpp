@@ -30,6 +30,7 @@ export function buildMetaLpPrompt({
   message = '',
   rotatorMode = 'sequential',
   gtmContainerId = '',
+  gtmConversionTags = [],
 }) {
   const key = publicKey || 'vpk_SALVE_NO_VESTO'
   const origin = (backendOrigin || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, '')
@@ -54,6 +55,15 @@ export function buildMetaLpPrompt({
   const gtmId = String(gtmContainerId || '')
     .trim()
     .toUpperCase()
+  const linkedGtmTags = (gtmConversionTags || []).filter((t) => t?.enabled && t?.eventName)
+  const gtmTagsBlock = linkedGtmTags.length
+    ? linkedGtmTags
+        .map(
+          (t) =>
+            `- ${t.label || t.key}: evento personalizado "${t.eventName}"${t.tagName ? ` (tag GTM: ${t.tagName})` : ''}`,
+        )
+        .join('\n')
+    : ''
   const gtmBlock = gtmId
     ? `
 GOOGLE TAG MANAGER — container ${gtmId}
@@ -72,7 +82,9 @@ j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
 height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <!-- End Google Tag Manager (noscript) -->
 
-3. Configure tags GA4 / Google Ads / conversões DENTRO do GTM (tagmanager.google.com).
+3. No tagmanager.google.com → Adicionar tag → tipo GA4 Event / Google Ads conversão.
+   Gatilho: Evento personalizado com o MESMO nome listado abaixo (o script Vesto dispara no clique WhatsApp).
+${gtmTagsBlock ? `\nTAGS VINCULADAS NO VESTO (crie no GTM com estes gatilhos):\n${gtmTagsBlock}\n` : ''}
 4. O script Vesto (Contact no clique WhatsApp) continua obrigatório — GTM não substitui.`
     : ''
 

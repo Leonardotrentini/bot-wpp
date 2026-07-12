@@ -2,6 +2,12 @@
  * Google Tag Manager — container por tenant (LP).
  */
 
+const {
+  normalizeConversionTags,
+  normalizeGa4MeasurementId,
+  getPublicConversionTags,
+} = require("./gtmConversions")
+
 const GTM_ID_PATTERN = /^GTM-[A-Z0-9]+$/i
 
 function normalizeGtmContainerId(value) {
@@ -22,10 +28,18 @@ function isValidGtmContainerId(value) {
 function formatGtmIntegrationRow(row) {
   if (!row) return null
   const containerId = normalizeGtmContainerId(row.containerId) || ""
+  const conversionTags = normalizeConversionTags(row.conversionTags)
+  const ga4MeasurementId = normalizeGa4MeasurementId(row.ga4MeasurementId) || ""
+  const linkedTagsCount = conversionTags.filter((t) => t.enabled).length
   return {
     containerId,
     enabled: row.enabled !== false,
     connected: Boolean(containerId && row.enabled !== false),
+    conversionTags,
+    linkedTagsCount,
+    ga4MeasurementId,
+    hasGa4ApiSecret: Boolean(row.ga4ApiSecret),
+    ga4ApiSecretHint: row.ga4ApiSecret ? `••••${String(row.ga4ApiSecret).slice(-4)}` : null,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
   }
 }
@@ -66,11 +80,33 @@ async function upsertGtmIntegration(prisma, userId, data) {
   }
 
   const enabled = data.enabled !== false
+  const conversionTags = normalizeConversionTags(data.conversionTags)
+  const ga4MeasurementId = data.ga4MeasurementId != null ? normalizeGa4MeasurementId(data.ga4MeasurementId) : undefined
+
+  const existing = await prisma.gtmIntegration.findUnique({ where: { userId } })
+  const updateData = {
+    containerId,
+    enabled,
+    conversionTags,
+  }
+  if (ga4MeasurementId !== undefined) {
+    updateData.ga4MeasurementId = ga4MeasurementId
+  }
+  if (data.ga4ApiSecret != null && String(data.ga4ApiSecret).trim()) {
+    updateData.ga4ApiSecret = String(data.ga4ApiSecret).trim()
+  }
 
   const row = await prisma.gtmIntegration.upsert({
     where: { userId },
-    create: { userId, containerId, enabled },
-    update: { containerId, enabled },
+    create: {
+      userId,
+      containerId,
+      enabled,
+      conversionTags,
+      ga4MeasurementId: ga4MeasurementId || null,
+      ga4ApiSecret: data.ga4ApiSecret ? String(data.ga4ApiSecret).trim() : null,
+    },
+    update: updateData,
   })
 
   return { integration: formatGtmIntegrationRow(row) }
@@ -81,7 +117,11 @@ async function getGtmForPublicConfig(prisma, userId) {
   if (!row || row.enabled === false) return null
   const containerId = normalizeGtmContainerId(row.containerId)
   if (!containerId) return null
-  return { containerId, enabled: true }
+  return {
+    containerId,
+    enabled: true,
+    conversionTags: getPublicConversionTags(row),
+  }
 }
 
 module.exports = {

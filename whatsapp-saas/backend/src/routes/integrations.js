@@ -134,9 +134,18 @@ function createIntegrationsRouter() {
   })
 
   router.put("/gtm", async (req, res) => {
+    const conversionTagSchema = z.object({
+      key: z.string().max(40),
+      enabled: z.boolean().optional(),
+      eventName: z.string().max(40).optional(),
+      tagName: z.string().max(80).optional().nullable(),
+    })
     const schema = z.object({
       containerId: z.string().min(8).max(32),
       enabled: z.boolean().optional(),
+      conversionTags: z.array(conversionTagSchema).optional(),
+      ga4MeasurementId: z.string().max(32).optional().nullable(),
+      ga4ApiSecret: z.string().max(128).optional().nullable(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {

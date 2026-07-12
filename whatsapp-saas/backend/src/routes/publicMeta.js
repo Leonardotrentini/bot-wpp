@@ -80,7 +80,13 @@ function createPublicMetaRouter() {
         pixelId: integration.pixelId || "",
         rotatorMode: integration.lpRotatorMode || "sequential",
         sellers,
-        gtm: gtm ? { containerId: gtm.containerId, enabled: true } : null,
+        gtm: gtm
+          ? {
+              containerId: gtm.containerId,
+              enabled: true,
+              conversionTags: gtm.conversionTags || [],
+            }
+          : null,
       })
     } catch (err) {
       console.error("[public/meta/config]", err)

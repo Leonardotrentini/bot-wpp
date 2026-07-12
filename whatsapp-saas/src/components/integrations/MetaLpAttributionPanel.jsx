@@ -76,8 +76,9 @@ export function MetaLpAttributionPanel({ form, setForm, meta, gtm, showSellerErr
       message: savedMessage,
       rotatorMode,
       gtmContainerId: gtm?.enabled !== false ? gtm?.containerId || '' : '',
+      gtmConversionTags: gtm?.enabled !== false ? gtm?.conversionTags || [] : [],
     })
-  }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers, gtm?.containerId, gtm?.enabled])
+  }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers, gtm?.containerId, gtm?.enabled, gtm?.conversionTags])
 
   const promptReady = Boolean(publicKey && domainCount > 0 && savedSellers.length > 0 && pixelId)
 

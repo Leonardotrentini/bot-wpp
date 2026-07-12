@@ -19,6 +19,7 @@ const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttr
 const { parseSellersInput, normalizeBrazilPhone, isValidBrazilWhatsapp } = require("./lpSellers")
 const { parseFacebookPageId, resolveCtwaClid, resolveFbc, resolveFbp } = require("./metaMessaging")
 const { getStoredClickAt } = require("./metaAttributionLead")
+const { trackGtmForMetaEvent } = require("./gtmConversions")
 
 const GRAPH_API_VERSION = "v22.0"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
@@ -612,6 +613,9 @@ async function dispatchMetaEvent(prisma, {
     }
     const result = await sendMetaEvent(integration, payload, { eventTargetId })
     await recordIntegrationResult(prisma, userId, { eventName, eventsReceived: result.events_received })
+
+    trackGtmForMetaEvent(prisma, userId, eventName, { contact, amount }).catch(() => {})
+
     return {
       sent: true,
       eventId,

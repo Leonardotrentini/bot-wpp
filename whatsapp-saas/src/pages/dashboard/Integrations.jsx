@@ -38,7 +38,7 @@ function formatWhen(iso) {
 }
 
 export function Integrations() {
-  const toast = useToast()
+  const { success: toastSuccess, error: toastError } = useToast()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -99,11 +99,11 @@ export function Integrations() {
         }
       }
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao carregar integração.')
+      toastError(err?.response?.data?.message || 'Falha ao carregar integração.')
     } finally {
       setLoading(false)
     }
-  }, [toast])
+  }, [toastError])
 
   useEffect(() => {
     load()
@@ -137,9 +137,9 @@ export function Integrations() {
         adsAccessToken: '',
       }))
       if (integration?.pixelId) initMetaPixel(integration.pixelId)
-      toast.success('Integração Meta salva.')
+      toastSuccess('Integração Meta salva.')
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao salvar integração.')
+      toastError(err?.response?.data?.message || 'Falha ao salvar integração.')
     } finally {
       setSaving(false)
     }
@@ -148,14 +148,14 @@ export function Integrations() {
   const handleSaveLp = async () => {
     const domains = parseOriginsText(form.allowedOriginsText)
     if (!domains.length) {
-      toast.error('Informe ao menos um domínio da landing page.')
+      toastError('Informe ao menos um domínio da landing page.')
       return
     }
 
     setShowSellerErrors(true)
     const sellerErrors = validateSellers(form.lpSellers || [])
     if (sellerErrors.length) {
-      toast.error(sellerErrors[0])
+      toastError(sellerErrors[0])
       return
     }
 
@@ -179,15 +179,15 @@ export function Integrations() {
         lpWhatsappMsg: integration?.lpWhatsappMsg || f.lpWhatsappMsg,
       }))
       setShowSellerErrors(false)
-      toast.success(`${sellersPayload.length} vendedor(es) e domínios salvos.`)
+      toastSuccess(`${sellersPayload.length} vendedor(es) e domínios salvos.`)
     } catch (err) {
       const status = err?.response?.status
       const code = err?.response?.data?.error
       const msg = err?.response?.data?.message
       if (status === 400 && code === 'NOT_CONFIGURED') {
-        toast.error(msg || 'Salve o Pixel e o token da Meta antes de configurar a landing page.')
+        toastError(msg || 'Salve o Pixel e o token da Meta antes de configurar a landing page.')
       } else {
-        toast.error(msg || 'Falha ao salvar landing page.')
+        toastError(msg || 'Falha ao salvar landing page.')
       }
     } finally {
       setSavingLp(false)
@@ -199,9 +199,9 @@ export function Integrations() {
     try {
       const { data } = await saveGtmIntegration(payload)
       setGtm(data.integration)
-      toast.success('Google Tag Manager salvo.')
+      toastSuccess('Google Tag Manager salvo.')
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao salvar GTM.')
+      toastError(err?.response?.data?.message || 'Falha ao salvar GTM.')
     } finally {
       setSavingGtm(false)
     }
@@ -213,10 +213,10 @@ export function Integrations() {
     try {
       const { data } = await testMetaIntegration()
       setTestResults(data.results || [])
-      toast.success(data.message || 'Eventos de teste enviados.')
+      toastSuccess(data.message || 'Eventos de teste enviados.')
       await load()
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao testar integração.')
+      toastError(err?.response?.data?.message || 'Falha ao testar integração.')
     } finally {
       setTesting(false)
     }
