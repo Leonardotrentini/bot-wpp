@@ -163,7 +163,7 @@ export function ChatSyncBar({ job, onStartSync, syncStarting }) {
 
     return (
       <>
-        <div className="flex items-center gap-2 border-b border-brand-800 bg-brand-900/60 px-3 py-1.5">
+        <div className="flex items-center gap-2 border-b border-brand-800/80 bg-brand-950/30 px-3 py-2">
           <RefreshCw className="h-3.5 w-3.5 shrink-0 text-stone-500" aria-hidden />
           <p className="min-w-0 flex-1 truncate text-[11px] text-stone-500" title={statusText}>
             {statusText}
@@ -173,7 +173,7 @@ export function ChatSyncBar({ job, onStartSync, syncStarting }) {
             variant="secondary"
             onClick={() => setModalOpen(true)}
             disabled={syncStarting}
-            className="h-7 shrink-0 px-2.5 text-xs"
+            className="h-8 shrink-0 px-3 text-xs"
           >
             {syncStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Sincronizar

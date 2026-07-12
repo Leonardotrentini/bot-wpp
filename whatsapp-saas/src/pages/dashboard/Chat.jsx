@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
-  Search,
   Send,
   Paperclip,
   X,
@@ -13,6 +12,7 @@ import {
   Loader2,
   MessageSquare,
   ChevronDown,
+  ArrowLeft,
   User,
   UserPlus,
   Mic,
@@ -38,6 +38,7 @@ import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
 import { runBackgroundAvatarSweep } from '../../lib/crmAvatarEnqueue.js'
 import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingModal.jsx'
 import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
+import { ChatConversationFilters } from '../../components/dashboard/ChatConversationFilters.jsx'
 import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
 import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
@@ -156,8 +157,10 @@ const ConversationListItem = memo(function ConversationListItem({
       onClick={() => onOpen(c.id)}
       onMouseEnter={() => onPrefetch(c.id)}
       onFocus={() => onPrefetch(c.id)}
-      className={`flex w-full items-center gap-3 border-b border-brand-800/60 px-3 py-3 text-left transition hover:bg-white/5 ${
-        c.id === active ? 'bg-accent-500/10' : ''
+      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+        c.id === active
+          ? 'bg-accent-500/12 ring-1 ring-inset ring-accent-500/30'
+          : 'hover:bg-white/[0.04]'
       }`}
     >
       <UserAvatar
@@ -582,6 +585,11 @@ export function Chat() {
     },
     [setSearchParams, fetchMessagesPage, fetchGroupMessagesPage, markReadDebounced],
   )
+
+  const closeMobileThread = useCallback(() => {
+    setActiveId(null)
+    setSearchParams({}, { replace: true })
+  }, [setSearchParams])
 
   useEffect(() => {
     const raw = searchParams.get('c')
@@ -1115,107 +1123,82 @@ export function Chat() {
         user={user}
         onComplete={() => setShowOnboarding(false)}
       />
-      <div className="flex h-[calc(100vh-7.5rem)] min-h-[480px] overflow-hidden rounded-2xl border border-brand-800 bg-brand-900/40">
+      <div className="-mx-4 -mb-4 flex h-[calc(100dvh-7.25rem)] min-h-[420px] overflow-hidden border-y border-brand-800/80 bg-brand-900/35 lg:mx-0 lg:mb-0 lg:h-[calc(100vh-7.5rem)] lg:rounded-2xl lg:border">
       {/* Lista de conversas */}
-      <div className="flex w-full max-w-xs shrink-0 flex-col border-r border-brand-800">
+      <div
+        className={`flex w-full flex-col border-r border-brand-800/80 lg:max-w-[min(100%,360px)] lg:shrink-0 ${
+          activeId ? 'hidden lg:flex' : 'flex'
+        }`}
+      >
         <ChatSyncBar job={syncJob} onStartSync={handleStartSync} syncStarting={syncStarting} />
         {!waConnected && (
-          <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-100">
             <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
-            <span className="min-w-0 flex-1">WhatsApp desconectado — fotos e mídia não carregam até reconectar.</span>
+            <span className="min-w-0 flex-1">WhatsApp desconectado — reconecte para fotos e mídia.</span>
             <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
               Conectar
             </Link>
           </div>
         )}
-        <div className="space-y-2 border-b border-brand-800 p-3">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar conversa…"
-              className="w-full rounded-xl border border-brand-700 bg-brand-900/60 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Select className="min-w-0 flex-1" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
-              <option value="">Todas as tags</option>
-              {tags.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
-            <Select className="min-w-0 flex-1" value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
-              <option value="">Todos os kanbans</option>
-              <option value="none">Sem estágio</option>
-              {stages.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
-            <button
-              type="button"
-              onClick={() => {
-                setGroupsOnly((v) => {
-                  const next = !v
-                  if (next) setUnidentifiedOnly(false)
-                  return next
-                })
-              }}
-              className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-2 text-xs font-medium transition ${
-                groupsOnly
-                  ? 'border-sky-500/40 bg-sky-500/15 text-sky-100'
-                  : 'border-brand-700 bg-brand-900/40 text-stone-400 hover:border-sky-500/30 hover:text-stone-200'
-              }`}
-              title="Mostrar só grupos ativos"
-            >
-              <Users className="h-3.5 w-3.5" />
-              Grupos
-              {monitoredGroupCount > 0 ? ` (${monitoredGroupCount})` : ''}
-            </button>
-          </div>
-          {unidentifiedCount > 0 && !groupsOnly && (
-            <button
-              type="button"
-              onClick={() => {
-                setUnidentifiedOnly((v) => {
-                  const next = !v
-                  if (next) setGroupsOnly(false)
-                  return next
-                })
-              }}
-              className={`w-full rounded-lg border px-2.5 py-1.5 text-left text-xs transition ${
-                unidentifiedOnly
-                  ? 'border-amber-500/40 bg-amber-500/15 text-amber-100'
-                  : 'border-brand-700 bg-brand-900/40 text-stone-400 hover:border-amber-500/30'
-              }`}
-            >
-              {unidentifiedOnly ? 'Mostrar todas as conversas' : `Sem identificação (${unidentifiedCount})`}
-            </button>
-          )}
-        </div>
-        <div className="flex-1 overflow-y-auto">
+        <ChatConversationFilters
+          query={query}
+          onQueryChange={setQuery}
+          tagFilter={tagFilter}
+          onTagFilterChange={setTagFilter}
+          stageFilter={stageFilter}
+          onStageFilterChange={setStageFilter}
+          tags={tags}
+          stages={stages}
+          groupsOnly={groupsOnly}
+          onToggleGroupsOnly={() => {
+            setGroupsOnly((v) => {
+              const next = !v
+              if (next) setUnidentifiedOnly(false)
+              return next
+            })
+          }}
+          unidentifiedOnly={unidentifiedOnly}
+          onToggleUnidentifiedOnly={() => {
+            setUnidentifiedOnly((v) => {
+              const next = !v
+              if (next) setGroupsOnly(false)
+              return next
+            })
+          }}
+          unidentifiedCount={unidentifiedCount}
+          monitoredGroupCount={monitoredGroupCount}
+        />
+        {displayedConversations.length > 0 && (
+          <p className="shrink-0 px-3 pt-2 text-[10px] font-semibold uppercase tracking-widest text-stone-600">
+            {displayedConversations.length} conversa{displayedConversations.length !== 1 ? 's' : ''}
+          </p>
+        )}
+        <div className="flex-1 overflow-y-auto vg-scrollbar px-1.5 py-1">
           {refreshingList && !loadingList && (
-            <div className="flex justify-center py-1">
+            <div className="flex justify-center py-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-500" />
             </div>
           )}
           {loadingList && chatList.length === 0 ? (
-            <div className="flex justify-center py-10">
+            <div className="flex justify-center py-16">
               <Spinner />
             </div>
           ) : displayedConversations.length === 0 ? (
-            <div className="px-4 py-10 text-center">
-              <MessageSquare className="mx-auto h-8 w-8 text-stone-600" />
-              <p className="mt-2 text-sm text-stone-400">
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <div className="mb-4 rounded-2xl border border-brand-800/60 bg-brand-950/50 p-4">
+                <MessageSquare className="h-8 w-8 text-stone-500" />
+              </div>
+              <p className="text-sm font-medium text-stone-300">
                 {groupsOnly
-                  ? 'Nenhum grupo ativo. Ative grupos na aba Grupos.'
+                  ? 'Nenhum grupo ativo'
                   : unidentifiedOnly
-                    ? 'Nenhuma conversa sem identificação.'
-                    : 'Nenhuma conversa ainda.'}
+                    ? 'Nenhuma conversa sem identificação'
+                    : 'Nenhuma conversa ainda'}
+              </p>
+              <p className="mt-1.5 max-w-[220px] text-xs text-stone-500">
+                {groupsOnly
+                  ? 'Ative grupos na aba Grupos para vê-los aqui.'
+                  : 'Sincronize o histórico ou aguarde novas mensagens.'}
               </p>
             </div>
           ) : (
@@ -1234,15 +1217,28 @@ export function Chat() {
       </div>
 
       {/* Thread */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className={`min-w-0 flex-1 flex-col ${activeId ? 'flex' : 'hidden lg:flex'}`}>
         {!active ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-stone-500">
-            <MessageSquare className="h-10 w-10" />
-            <p className="text-sm">Selecione uma conversa para começar.</p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-stone-500">
+            <div className="rounded-2xl border border-brand-800/50 bg-brand-950/40 p-5">
+              <MessageSquare className="h-10 w-10 text-stone-600" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-stone-400">Selecione uma conversa</p>
+              <p className="mt-1 text-xs text-stone-600">Escolha um contato na lista para ver mensagens e responder.</p>
+            </div>
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-3 border-b border-brand-800 px-4 py-3">
+            <div className="flex items-center gap-2 border-b border-brand-800/80 bg-brand-950/30 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+              <button
+                type="button"
+                onClick={closeMobileThread}
+                className="lg:hidden shrink-0 rounded-xl p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+                aria-label="Voltar para conversas"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
               <UserAvatar
                 name={contactTitle(active.contact)}
                 src={active.contact?.avatarUrl}
@@ -1291,7 +1287,7 @@ export function Chat() {
               </button>
             </div>
 
-            <div ref={threadRef} className="flex-1 space-y-1 overflow-y-auto px-4 py-3">
+            <div ref={threadRef} className="flex-1 space-y-1 overflow-y-auto vg-scrollbar px-3 py-3 sm:px-4">
               {refreshingMessages && !loadingMessages && (
                 <div className="flex justify-center pb-1">
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-800/80 px-2.5 py-0.5 text-[10px] text-stone-500">
@@ -1467,7 +1463,7 @@ export function Chat() {
 
       {/* Painel do contato */}
       {active && showPanel && (
-        <div className="hidden w-72 shrink-0 flex-col overflow-y-auto border-l border-brand-800 lg:flex">
+        <div className="hidden w-72 shrink-0 flex-col overflow-y-auto vg-scrollbar border-l border-brand-800/80 bg-brand-950/20 xl:flex">
           <div className="flex flex-col items-center gap-2 border-b border-brand-800 px-4 py-5">
             <UserAvatar
               name={contactTitle(active.contact)}

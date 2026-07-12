@@ -139,4 +139,23 @@
   .mention-dropdown-item--all.mention-dropdown-item--active {
     @apply bg-amber-500/12;
   }
+
+  .vg-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(45 107 79 / 0.45) transparent;
+  }
+  .vg-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .vg-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .vg-scrollbar::-webkit-scrollbar-thumb {
+    background: rgb(45 107 79 / 0.45);
+    border-radius: 999px;
+  }
+  .vg-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgb(61 143 106 / 0.55);
+  }
 }
