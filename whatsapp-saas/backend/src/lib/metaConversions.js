@@ -434,6 +434,10 @@ async function updateMetaLpIntegration(prisma, userId, data) {
       ? parseAllowedOriginsInput(data.allowedOrigins)
       : existing.allowedOrigins || []
 
+  if (!allowedOrigins.length) {
+    return { error: "VALIDATION", message: "Informe ao menos um domínio da landing page." }
+  }
+
   const lpWhatsappMsg =
     data.lpWhatsappMsg != null
       ? String(data.lpWhatsappMsg).trim() || null

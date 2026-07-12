@@ -1,15 +1,36 @@
 import { useMemo, useState } from 'react'
-import { Copy, Check, Sparkles, CheckCircle2, Plus, Trash2, X } from 'lucide-react'
+import { Copy, Check, Sparkles, CheckCircle2, Plus, Trash2, X, AlertCircle } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { Textarea } from '../common/Textarea.jsx'
-import { Select } from '../common/Select.jsx'
+import { useToast } from '../../contexts/ToastContext.jsx'
 import { resolveBackendOrigin } from '../../lib/runtimeEnv.js'
 import { buildMetaLpPrompt } from '../../lib/buildMetaLpPrompt.js'
 import {
   normalizeBrazilPhone,
   isValidBrazilWhatsapp,
   formatPhoneExample,
+  sellersToPayload,
 } from '../../lib/lpSellers.js'
+
+function normalizeDomainsKey(textOrArr) {
+  const parts = Array.isArray(textOrArr)
+    ? textOrArr
+    : String(textOrArr || '')
+        .split(/[\n,;]+/)
+        .map((line) => line.trim())
+  return parts
+    .map((d) => String(d).trim().toLowerCase().replace(/^www\./, ''))
+    .filter(Boolean)
+    .sort()
+    .join('|')
+}
+
+function sellersKey(rows) {
+  return (rows || [])
+    .filter((s) => String(s.phone || '').replace(/\D/g, ''))
+    .map((s) => `${String(s.label || '').trim()}|${String(s.phone || '').replace(/\D/g, '')}`)
+    .join(',')
+}
 
 function newSellerRow(index) {
   return { id: `seller-${Date.now()}-${index}`, label: '', phone: '' }
@@ -28,11 +49,12 @@ function phoneFieldStatus(phone, showErrors) {
 }
 
 export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors = false, onSaveLp, savingLp = false }) {
+  const toast = useToast()
   const [copied, setCopied] = useState(null)
 
   const backendOrigin = resolveBackendOrigin()
   const publicKey = meta?.vestoPublicKey || ''
-  const pixelId = meta?.pixelId || form.pixelId || ''
+  const pixelId = meta?.pixelId || ''
   const savedDomains = meta?.allowedOrigins || []
   const domainCount = savedDomains.length
 
@@ -56,7 +78,14 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
     })
   }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers])
 
-  const promptReady = Boolean(publicKey && domainCount > 0 && savedSellers.length > 0)
+  const promptReady = Boolean(publicKey && domainCount > 0 && savedSellers.length > 0 && pixelId)
+
+  const hasUnsavedLp = useMemo(() => {
+    if (!meta) return false
+    if (normalizeDomainsKey(form.allowedOriginsText) !== normalizeDomainsKey(meta.allowedOrigins)) return true
+    if ((form.lpWhatsappMsg || '').trim() !== (meta.lpWhatsappMsg || '').trim()) return true
+    return sellersKey(sellersToPayload(form.lpSellers || [])) !== sellersKey(meta.lpSellers || [])
+  }, [form.allowedOriginsText, form.lpSellers, form.lpWhatsappMsg, meta])
 
   const copy = async (text, id) => {
     try {
@@ -64,7 +93,7 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
       setCopied(id)
       setTimeout(() => setCopied(null), 2000)
     } catch {
-      /* ignore */
+      toast.error('Não foi possível copiar — use Ctrl+C no texto do prompt.')
     }
   }
 
@@ -113,6 +142,16 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
           <p>
             <strong>{domainCount} domínio(s) ativo(s)</strong> no servidor.
+          </p>
+        </div>
+      ) : null}
+
+      {hasUnsavedLp ? (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-900/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-200/90">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+          <p>
+            <strong>Alterações não salvas.</strong> O prompt abaixo usa os dados gravados no servidor — salve antes de
+            copiar.
           </p>
         </div>
       ) : null}
@@ -218,13 +257,10 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
         </div>
       </div>
 
-      <Select
-        label="Rotacionador"
-        value={form.lpRotatorMode || 'sequential'}
-        onChange={(value) => setForm((f) => ({ ...f, lpRotatorMode: value }))}
-      >
-        <option value="sequential">Sequencial — distribui cliques igual entre todos</option>
-      </Select>
+      <div>
+        <p className="text-sm font-medium text-stone-300">Rotacionador</p>
+        <p className="mt-1 text-xs text-stone-500">Sequencial — distribui cliques igualmente entre todos os vendedores.</p>
+      </div>
 
       <Textarea
         label="Mensagem padrão do WhatsApp"
@@ -247,7 +283,11 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
           <code className="mt-1 block break-all text-stone-300">{publicKey}</code>
           <code className="mt-1 block break-all text-stone-500">{backendOrigin}/vesto-attribution.js</code>
         </div>
-      ) : null}
+      ) : (
+        <p className="text-xs text-stone-500">
+          A chave pública é gerada automaticamente no primeiro save de domínios e vendedores.
+        </p>
+      )}
 
       <div className="rounded-lg border border-accent-500/30 bg-accent-500/5 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -268,7 +308,9 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
         <p className="mb-2 text-xs text-stone-500">
           {promptReady
             ? 'Pronto — mensagem limpa no WhatsApp, atribuição silenciosa. Cole no Cursor/Codex da LP.'
-            : 'Salve domínios + vendedores primeiro. O prompt só usa dados já gravados.'}
+            : !pixelId
+              ? 'Salve o Pixel da Meta acima antes de copiar o prompt.'
+              : 'Salve domínios + vendedores primeiro. O prompt só usa dados já gravados.'}
         </p>
         <pre className="max-h-96 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] leading-relaxed text-stone-400 whitespace-pre-wrap">
           {lpPrompt}

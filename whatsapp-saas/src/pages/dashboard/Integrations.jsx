@@ -101,15 +101,6 @@ export function Integrations() {
   }, [load])
 
   const handleSave = async () => {
-    setShowSellerErrors(true)
-    const sellerErrors = validateSellers(form.lpSellers || [])
-    if (sellerErrors.length) {
-      toast.error(sellerErrors[0])
-      return
-    }
-
-    const sellersPayload = sellersToPayload(form.lpSellers || [])
-
     setSaving(true)
     try {
       const payload = {
@@ -121,11 +112,6 @@ export function Integrations() {
         testEventCode: form.testEventCode.trim() || null,
         adAccountId: form.adAccountId.trim() || null,
         adsEnabled: form.adsEnabled,
-        allowedOrigins: parseOriginsText(form.allowedOriginsText),
-        lpSellers: sellersPayload,
-        lpWhatsapp: sellersPayload[0]?.phone || null,
-        lpRotatorMode: form.lpRotatorMode || 'sequential',
-        lpWhatsappMsg: form.lpWhatsappMsg.trim() || null,
       }
       if (form.accessToken.trim()) {
         payload.accessToken = form.accessToken.trim()
@@ -140,12 +126,7 @@ export function Integrations() {
         ...f,
         accessToken: '',
         adsAccessToken: '',
-        allowedOriginsText: originsToText(integration?.allowedOrigins),
-        lpSellers: parseSellersFromIntegration(integration),
-        lpRotatorMode: integration?.lpRotatorMode || 'sequential',
-        lpWhatsappMsg: integration?.lpWhatsappMsg || f.lpWhatsappMsg,
       }))
-      setShowSellerErrors(false)
       if (integration?.pixelId) initMetaPixel(integration.pixelId)
       toast.success('Integração Meta salva.')
     } catch (err) {
@@ -156,6 +137,12 @@ export function Integrations() {
   }
 
   const handleSaveLp = async () => {
+    const domains = parseOriginsText(form.allowedOriginsText)
+    if (!domains.length) {
+      toast.error('Informe ao menos um domínio da landing page.')
+      return
+    }
+
     setShowSellerErrors(true)
     const sellerErrors = validateSellers(form.lpSellers || [])
     if (sellerErrors.length) {
@@ -186,9 +173,10 @@ export function Integrations() {
       toast.success(`${sellersPayload.length} vendedor(es) e domínios salvos.`)
     } catch (err) {
       const status = err?.response?.status
+      const code = err?.response?.data?.error
       const msg = err?.response?.data?.message
-      if (status === 404) {
-        toast.error('Backend desatualizado — faça deploy da versão mais recente no Railway.')
+      if (status === 400 && code === 'NOT_CONFIGURED') {
+        toast.error(msg || 'Salve o Pixel e o token da Meta antes de configurar a landing page.')
       } else {
         toast.error(msg || 'Falha ao salvar landing page.')
       }
@@ -344,24 +332,8 @@ export function Integrations() {
                 <strong className="text-stone-400">Purchase</strong> — compra confirmada (se toggle ativo)
               </li>
             </ul>
-            <p className="mt-3 font-medium text-stone-400">Padrão de cada payload (sempre igual)</p>
-            <ul className="mt-1 list-inside list-disc space-y-1">
-              <li>
-                <code className="text-stone-400">lead_event_source</code>: Vesto ·{' '}
-                <code className="text-stone-400">event_source</code>: crm ou ctwa
-              </li>
-              <li>
-                <code className="text-stone-400">content_category</code>: conversation_started · qualified_lead ·
-                quote · purchase
-              </li>
-              <li>
-                <code className="text-stone-400">event_source_url</code>: https://vesto.group/dashboard/chat
-              </li>
-              <li>Telefone hasheado + external_id · CTWA: ctwa_clid + page_id</li>
-            </ul>
             <p className="mt-2">
-              Na LP: <strong className="text-stone-400">Contact</strong> no clique — não Lead. Detalhes e conversões
-              personalizadas no guia abaixo.
+              Na LP: <strong className="text-stone-400">Contact</strong> no clique — não Lead. Detalhes no guia abaixo.
             </p>
           </div>
 

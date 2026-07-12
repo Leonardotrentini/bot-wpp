@@ -63,7 +63,7 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
   const [testing, setTesting] = useState(false)
   const [dashboard, setDashboard] = useState(null)
 
-  const canFetch = Boolean(meta?.adsConnected || (form.adAccountId?.trim() && meta?.hasAccessToken))
+  const canFetch = Boolean(meta?.adsConnected || (form.adAccountId?.trim() && meta?.adsConfigured))
 
   const loadDashboard = useCallback(async (overridePeriod) => {
     if (!meta?.adsEnabled) return

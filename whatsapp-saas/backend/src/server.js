@@ -164,12 +164,6 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use(
-  cors({
-    origin: corsOrigin,
-    credentials: true,
-  }),
-)
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
 
 app.get("/vesto-attribution.js", (_req, res) => {
@@ -177,7 +171,13 @@ app.get("/vesto-attribution.js", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/vesto-attribution.js"))
 })
 
+// LP pública: CORS dinâmico por domínio (antes do cors do dashboard — evita sobrescrever ACAO)
 app.use("/api/public", createPublicMetaRouter())
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/public")) return next()
+  return cors({ origin: corsOrigin, credentials: true })(req, res, next)
+})
 
 app.use("/api/admin", adminRoutes)
 app.use("/api/crm", createCrmRouter({ io }))
