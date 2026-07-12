@@ -89,11 +89,56 @@ function mapAdCreatives(ads) {
       status: ad.effective_status || ad.status || "—",
       campaignName: ad.campaign?.name || "—",
       thumbnailUrl: creativeRaw.thumbnail_url || creativeRaw.image_url || null,
+      destinationUrl: extractCreativeDestinationUrl(creativeRaw),
       body: creativeRaw.body ? String(creativeRaw.body).slice(0, 140) : null,
       title: creativeRaw.title || null,
       callToAction: null,
     }
   })
+}
+
+function extractCreativeDestinationUrl(creative) {
+  if (!creative || typeof creative !== "object") return null
+  if (creative.object_url) return String(creative.object_url)
+  if (creative.link_url) return String(creative.link_url)
+
+  const spec = creative.object_story_spec
+  if (spec?.link_data?.link) return String(spec.link_data.link)
+  if (spec?.video_data?.call_to_action?.value?.link) {
+    return String(spec.video_data.call_to_action.value.link)
+  }
+
+  const feedLinks = creative.asset_feed_spec?.link_urls
+  if (Array.isArray(feedLinks) && feedLinks[0]) return String(feedLinks[0])
+
+  return null
+}
+
+async function enrichTopAdsWithCreatives(token, ads) {
+  if (!ads.length) return ads
+
+  const ids = ads.map((a) => a.id).filter(Boolean)
+  if (!ids.length) return ads
+
+  try {
+    const batch = await graphGet("", token, {
+      ids: ids.join(","),
+      fields: "creative{thumbnail_url,image_url,object_url,link_url,object_story_spec,asset_feed_spec}",
+    })
+
+    return ads.map((ad) => {
+      const row = batch?.[ad.id]
+      const creative = row?.creative || {}
+      return {
+        ...ad,
+        thumbnailUrl: creative.thumbnail_url || creative.image_url || ad.thumbnailUrl || null,
+        destinationUrl: extractCreativeDestinationUrl(creative) || ad.destinationUrl || null,
+      }
+    })
+  } catch (err) {
+    console.warn("[metaAds] creative enrichment failed:", err.message)
+    return ads
+  }
 }
 
 async function graphGet(path, accessToken, params = {}) {
@@ -201,6 +246,8 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
         }))
         .sort((a, b) => b.clicks - a.clicks)
         .slice(0, 5)
+
+      topAdsByClicks = await enrichTopAdsWithCreatives(token, topAdsByClicks)
     } catch (adErr) {
       console.warn("[metaAds] ad-level insights failed:", adErr.message)
     }

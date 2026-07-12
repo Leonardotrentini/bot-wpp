@@ -572,6 +572,8 @@ export function resolveMetricData(metricId, data) {
           sub: ad.campaignName !== '—' ? ad.campaignName : null,
           value: `${ad.clicks} cliques`,
           href: ad.adsManagerUrl,
+          thumbnail: ad.thumbnailUrl || null,
+          destinationUrl: ad.destinationUrl || null,
         })),
         unavailable: !m?.summary,
       }
