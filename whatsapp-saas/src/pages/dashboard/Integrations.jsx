@@ -9,6 +9,7 @@ import { useToast } from '../../contexts/ToastContext.jsx'
 import { getMetaIntegration, saveMetaIntegration, testMetaIntegration } from '../../services/api.js'
 import { initMetaPixel } from '../../lib/metaPixel.js'
 import { MetaIntegrationGuide } from '../../components/integrations/MetaIntegrationGuide.jsx'
+import { UtmUrlGenerator } from '../../components/integrations/UtmUrlGenerator.jsx'
 
 function formatWhen(iso) {
   if (!iso) return '—'
@@ -242,6 +243,8 @@ export function Integrations() {
               {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Enviar evento de teste'}
             </Button>
           </div>
+
+          <UtmUrlGenerator />
 
           <MetaIntegrationGuide pixelId={form.pixelId || meta?.pixelId} />
         </div>

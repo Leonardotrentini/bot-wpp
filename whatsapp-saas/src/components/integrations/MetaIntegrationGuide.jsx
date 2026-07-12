@@ -98,15 +98,10 @@ export function MetaIntegrationGuide({ pixelId }) {
               </li>
               <li>
                 <strong className="text-stone-400">UTMs na URL do anúncio</strong> para identificar campanha,
-                conjunto e criativo:
+                conjunto e criativo — use o <strong className="text-stone-400">gerador de URL</strong> logo acima
+                deste guia.
               </li>
             </ul>
-            <pre className="overflow-x-auto rounded-lg border border-brand-800 bg-brand-950/60 p-3 text-[11px] text-stone-400">
-{`?utm_source=meta
-&utm_campaign={{campaign.name}}
-&utm_content={{ad.name}}
-&utm_term={{adset.name}}`}
-            </pre>
             <p>
               <strong className="text-stone-400">Recomendado:</strong> peça nome + WhatsApp na LP antes do botão. Com o
               mesmo telefone no chat, a Meta une visita na LP com orçamento/venda no Vesto.
