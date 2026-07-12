@@ -168,19 +168,22 @@ export function MetaIntegrationGuide({ pixelId }) {
             </div>
           </Section>
 
-          <Section title="Landing Page — prompt Vesto + rotacionador" defaultOpen>
+          <Section title="Landing Page — prompt Vesto + mensagem limpa" defaultOpen>
             <ol className="list-inside list-decimal space-y-2">
               <li>
                 Cadastre <strong className="text-stone-400">domínios</strong>,{' '}
                 <strong className="text-stone-400">vendedores</strong> e mensagem → salve.
               </li>
               <li>
-                Copie o <strong className="text-stone-400">prompt</strong> ou o código HTML gerado no painel.
+                Copie o <strong className="text-stone-400">prompt para IA</strong> e cole no projeto da LP.
               </li>
-              <li>Cole no projeto da LP — rotacionador sequencial já vem do servidor Vesto.</li>
               <li>
-                Botões com <code className="text-stone-400">data-vesto-whatsapp</code> em todas as páginas (slugs
-                inclusos).
+                A mensagem do WhatsApp fica <strong className="text-stone-400">limpa</strong> — sem códigos
+                técnicos. A atribuição Meta é silenciosa (POST no clique + CRM na 1ª mensagem).
+              </li>
+              <li>
+                Botões com <code className="text-stone-400">data-vesto-whatsapp</code> — só o script Vesto, sem JS
+                custom.
               </li>
               <li>
                 Pixel <code className="text-stone-400">{pixelHint}</code>: PageView + Contact no clique.

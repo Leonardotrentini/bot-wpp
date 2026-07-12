@@ -154,7 +154,7 @@
     var phone = resolvePhone(target, opts)
     if (!phone) return
     var msg = waMsg || "Olá! Vim pelo site e quero mais informações."
-    var text = encodeURIComponent(msg + "\n\n(" + ref + ")")
+    var text = encodeURIComponent(msg)
     window.open("https://wa.me/" + phone + "?text=" + text, "_blank", "noopener,noreferrer")
   }
 

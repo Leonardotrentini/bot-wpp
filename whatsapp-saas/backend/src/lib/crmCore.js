@@ -336,7 +336,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
 
 const { unwrapBaileysMessage, mergeInboundMessageRaw } = require("./crmMedia")
 const { extractCtwaClidFromRecord, storeContactCtwaClid } = require("./metaMessaging")
-const { resolveAndApplyAttributionFromMessage } = require("./metaAttributionLead")
+const { resolveAndApplyAttributionFromMessage, resolveAndApplyAttributionFromPendingLead, extractVstRefFromText } = require("./metaAttributionLead")
 
 function extractMediaMime(record) {
   const m = unwrapBaileysMessage(record?.message) || record?.message || {}
@@ -391,12 +391,23 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       await storeContactCtwaClid(prisma, conversation.contact, ctwaClid).catch(() => {})
     }
     if (mapped.body) {
-      const linked = await resolveAndApplyAttributionFromMessage(prisma, {
-        userId,
-        contact: conversation.contact,
-        messageBody: mapped.body,
-      }).catch(() => conversation.contact)
-      if (linked?.id) conversation.contact = linked
+      let contact = conversation.contact
+      contact =
+        (await resolveAndApplyAttributionFromMessage(prisma, {
+          userId,
+          contact,
+          messageBody: mapped.body,
+        }).catch(() => contact)) || contact
+
+      if (isNewConversation && !extractVstRefFromText(mapped.body)) {
+        contact =
+          (await resolveAndApplyAttributionFromPendingLead(prisma, {
+            userId,
+            contact,
+          }).catch(() => contact)) || contact
+      }
+
+      if (contact?.id) conversation.contact = contact
     }
   }
 

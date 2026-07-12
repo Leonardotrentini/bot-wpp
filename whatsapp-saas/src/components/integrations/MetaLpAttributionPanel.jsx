@@ -4,20 +4,12 @@ import { Button } from '../common/Button.jsx'
 import { Textarea } from '../common/Textarea.jsx'
 import { Select } from '../common/Select.jsx'
 import { resolveBackendOrigin } from '../../lib/runtimeEnv.js'
-import { buildMetaLpPrompt, buildVestoRotatorSnippet } from '../../lib/buildMetaLpPrompt.js'
+import { buildMetaLpPrompt } from '../../lib/buildMetaLpPrompt.js'
 import {
   normalizeBrazilPhone,
   isValidBrazilWhatsapp,
   formatPhoneExample,
-  sellersToPayload,
 } from '../../lib/lpSellers.js'
-
-function parseDomains(text) {
-  return String(text || '')
-    .split(/[\n,;]+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-}
 
 function newSellerRow(index) {
   return { id: `seller-${Date.now()}-${index}`, label: '', phone: '' }
@@ -63,10 +55,6 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
       rotatorMode,
     })
   }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers])
-
-  const embedCode = useMemo(() => {
-    return buildVestoRotatorSnippet({ backendOrigin, publicKey })
-  }, [backendOrigin, publicKey])
 
   const promptReady = Boolean(publicKey && domainCount > 0 && savedSellers.length > 0)
 
@@ -279,28 +267,13 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
         </div>
         <p className="mb-2 text-xs text-stone-500">
           {promptReady
-            ? 'Pronto — cole no chat da LP. Inclui domínios, vendedores, rotacionador e instruções de atribuição Meta.'
+            ? 'Pronto — mensagem limpa no WhatsApp, atribuição silenciosa. Cole no Cursor/Codex da LP.'
             : 'Salve domínios + vendedores primeiro. O prompt só usa dados já gravados.'}
         </p>
         <pre className="max-h-96 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] leading-relaxed text-stone-400 whitespace-pre-wrap">
           {lpPrompt}
         </pre>
       </div>
-
-      {promptReady ? (
-        <div>
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-stone-500">HTML mínimo (referência rápida)</p>
-            <Button variant="secondary" type="button" onClick={() => copy(embedCode, 'embed')}>
-              {copied === 'embed' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              Copiar HTML
-            </Button>
-          </div>
-          <pre className="max-h-32 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] text-stone-500 whitespace-pre-wrap">
-            {embedCode}
-          </pre>
-        </div>
-      ) : null}
     </div>
   )
 }

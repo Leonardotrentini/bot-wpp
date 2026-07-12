@@ -21,17 +21,6 @@ function formatSellerJson(sellers) {
   )
 }
 
-export function buildVestoRotatorSnippet({ backendOrigin, publicKey }) {
-  const key = publicKey || 'vpk_SUA_CHAVE'
-  const origin = (backendOrigin || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, '')
-
-  return `<!-- Cole no layout raiz da LP (vale para todas as páginas e slugs) -->
-<script src="${origin}/vesto-attribution.js?key=${key}" defer></script>
-
-<!-- Marque TODOS os botões/links de WhatsApp -->
-<a href="#" data-vesto-whatsapp class="btn-whatsapp">Falar no WhatsApp</a>`
-}
-
 export function buildMetaLpPrompt({
   publicKey,
   backendOrigin,
@@ -58,66 +47,69 @@ export function buildMetaLpPrompt({
 
   const rotatorExplain =
     rotatorMode === 'sequential'
-      ? `Rotacionador SEQUENCIAL (${sellers.length} vendedor(es)): cada clique no WhatsApp vai para o próximo número da lista, em ordem, com distribuição igual (round-robin via script Vesto + localStorage).`
+      ? `Rotacionador SEQUENCIAL (${sellers.length} vendedor(es)): cada clique alterna o próximo vendedor (distribuição igual).`
       : `Rotacionador: ${rotatorMode}`
 
   return `OBJETIVO
 Integrar esta landing page com atribuição Meta Ads → WhatsApp → CRM Vesto.
-Maximizar qualidade de match (fbclid, fbc, fbp, UTMs) para o funil CAPI: ConversationStarted, LeadQualified, Quote, Purchase.
+Maximizar match quality (fbclid, fbc, fbp, UTMs) para CAPI: ConversationStarted, LeadQualified, Quote, Purchase.
+A mensagem do WhatsApp deve ficar LIMPA para o cliente final — sem códigos técnicos visíveis.
 
-DOMÍNIOS AUTORIZADOS (CORS já ativo no Vesto — não cadastrar slugs, só hostname)
+DOMÍNIOS AUTORIZADOS (CORS ativo no Vesto — só hostname, não slug)
 ${domainLines}
 
 CHAVE VESTO
 ${key}
 
-SCRIPT OBRIGATÓRIO — colar no layout raiz (index.html, layout.tsx, _app, etc.), antes de </body>
+SCRIPT OBRIGATÓRIO — layout raiz (index.html, layout.tsx, _app), antes de </body>
 ${scriptLine}
 
-IMPORTANTE: a URL do script é ${origin}/vesto-attribution.js (raiz do backend, NÃO é ${apiBase}/vesto-attribution.js).
+URL correta do script: ${origin}/vesto-attribution.js (raiz do backend, NÃO ${apiBase}/vesto-attribution.js).
 
 PIXEL META — ID ${pixel}
-1. Instalar o Pixel base oficial da Meta no <head>.
-2. PageView no carregamento: fbq('init', '${pixel}'); fbq('track', 'PageView');
-3. NÃO disparar fbq('track','Lead') no botão WhatsApp — o script Vesto dispara Contact automaticamente no clique.
+1. Pixel base oficial no <head>.
+2. PageView: fbq('init', '${pixel}'); fbq('track', 'PageView');
+3. NÃO usar fbq('track','Lead') no WhatsApp — o script Vesto dispara Contact no clique.
 
-BOTÕES WHATSAPP — em TODOS os CTAs (header, hero, footer, mobile, todas as páginas/slugs)
+BOTÕES WHATSAPP — TODOS os CTAs (header, hero, footer, mobile, todas as páginas)
 <a href="#" data-vesto-whatsapp class="SEU_ESTILO">Texto do botão</a>
 
-Se já existir botão com JavaScript ou rotador próprio, NÃO abrir wa.me manualmente. Use:
+Se já existir onclick ou rotador na LP, NÃO montar wa.me manualmente:
 e.preventDefault();
 window.vestoOpenWhatsApp(e);
 
 VENDEDORES — ${rotatorExplain}
 ${sellerLines}
 
-Lista para referência (configurada no servidor Vesto — o script busca automaticamente, NÃO hardcodar wa.me na LP):
+Referência (servidor Vesto — NÃO hardcodar na LP):
 ${sellers.length ? formatSellerJson(sellers) : '[]'}
 
-MENSAGEM PADRÃO DO WHATSAPP
+MENSAGEM WHATSAPP (texto limpo — exatamente assim no wa.me)
 "${msg}"
-O script adiciona automaticamente (vst_XXXXXXXX) ao final da mensagem. NUNCA remover esse código.
 
-O QUE O SCRIPT VESTO FAZ AUTOMATICAMENTE (não reimplementar na LP)
-- Ao carregar: lê fbclid da URL, cria cookie _fbc se necessário, lê cookies _fbp/_fbc do Pixel.
-- Lê utm_source, utm_medium, utm_campaign, utm_content, utm_term da URL.
-- No clique: dispara fbq('track','Contact') se o Pixel existir.
-- Gera código vst_ e envia POST para ${apiBase}/public/meta/attribution?key=${key}
-- Rotaciona o vendedor (sequencial) e abre wa.me com mensagem + (vst_...).
-- O cliente manda a mensagem no WhatsApp; o Vesto liga o clique ao CRM e melhora o CAPI.
+REGRA DE UX — MENSAGEM LIMPA
+- O wa.me deve abrir SOMENTE com o texto acima — sem códigos, sem (vst_...), sem IDs técnicos.
+- A atribuição Meta é SILENCIOSA: no clique o script envia POST para o Vesto com ref interno + fbc/fbp/UTMs.
+- O CRM Vesto associa automaticamente o clique ao contato na 1ª mensagem recebida (sem código na mensagem).
+- NÃO criar vesto-whatsapp-open.js, NÃO usar data-selector="[data-vesto-skip]", NÃO adicionar nada à mensagem.
+
+O QUE O SCRIPT VESTO FAZ (não reimplementar)
+- Load: captura fbclid, cookies _fbc/_fbp, UTMs, pageUrl.
+- Clique: fbq('track','Contact'), POST ${apiBase}/public/meta/attribution?key=${key}, rotacionador sequencial, abre wa.me só com a mensagem limpa.
 
 NÃO FAZER
-- Não criar API própria de atribuição.
-- Não remover (vst_...) da mensagem do WhatsApp.
-- Não usar fbq('track','Lead') no clique do WhatsApp.
-- Não hardcodar números em wa.me — o rotacionador vem do script Vesto.
-- Não bloquear ${origin} nem ${apiBase} no Content-Security-Policy.
+- Não criar API própria de atribuição na LP.
+- Não adicionar códigos (vst_...) ou qualquer sufixo na mensagem do WhatsApp.
+- Não criar JS custom que substitua o clique do script Vesto.
+- Não usar fbq('track','Lead') no botão.
+- Não hardcodar wa.me com número fixo — rotacionador vem do Vesto.
+- Não bloquear ${origin} nem ${apiBase} no CSP.
 
-CHECKLIST AO TERMINAR
-[ ] Script com URL HTTPS completa: ${origin}/vesto-attribution.js?key=${key}
-[ ] Pixel ${pixel} com PageView no carregamento
-[ ] Todos os botões WhatsApp com data-vesto-whatsapp
-[ ] Clique abre wa.me com a mensagem + (vst_...)
-[ ] DevTools → Network: POST ${apiBase}/public/meta/attribution retorna 200
-[ ] Rotacionador sequencial alternando entre os ${sellers.length || 'N'} vendedor(es) listados acima`
+CHECKLIST
+[ ] Script: ${origin}/vesto-attribution.js?key=${key}
+[ ] Pixel ${pixel} + PageView
+[ ] Botões com data-vesto-whatsapp (sem handler custom competindo)
+[ ] wa.me abre só: "${msg}"
+[ ] Network: POST ${apiBase}/public/meta/attribution → 200
+[ ] Rotacionador alterna entre ${sellers.length || 'N'} vendedor(es) se houver mais de um`
 }

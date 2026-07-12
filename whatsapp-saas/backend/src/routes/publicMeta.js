@@ -127,6 +127,12 @@ function createPublicMetaRouter() {
       return res.json({ ok: true, ref: result.ref })
     } catch (err) {
       console.error("[public/meta/attribution]", err)
+      if (err?.code === "P2021" || String(err?.message || "").includes("MetaAttributionLead")) {
+        return res.status(503).json({
+          error: "DB_NOT_READY",
+          message: "Banco desatualizado — execute prisma db push no backend.",
+        })
+      }
       return res.status(500).json({ error: "INTERNAL_ERROR", message: "Falha ao registrar atribuição." })
     }
   })

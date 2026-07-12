@@ -1,6 +1,7 @@
 /**
  * Atribuição LP → WhatsApp (multi-tenant).
- * Cada conta tem vestoPublicKey + allowedOrigins; ref vst_ liga clique ao contato CRM.
+ * Cada conta tem vestoPublicKey + allowedOrigins.
+ * ref vst_ é interno (POST no clique); CRM também liga via lead pendente na 1ª mensagem (mensagem limpa).
  */
 
 const crypto = require("crypto")
@@ -8,6 +9,8 @@ const { storeContactMetaAttribution, parseCustomFields } = require("./metaMessag
 
 const REF_PATTERN = /\(?\s*(vst_[a-z0-9]{6,16})\s*\)?/i
 const ATTRIBUTION_TTL_DAYS = 14
+/** Janela para ligar clique LP → 1ª mensagem sem código na saudação. */
+const PENDING_LEAD_MAX_AGE_MS = 30 * 60 * 1000
 
 function generateVestoPublicKey() {
   return `vpk_${crypto.randomBytes(16).toString("hex")}`
@@ -117,6 +120,9 @@ async function createAttributionLead(prisma, userId, payload) {
       utmTerm: data.utmTerm,
       expiresAt: data.expiresAt,
     },
+  }).catch((err) => {
+    console.error("[createAttributionLead]", err)
+    throw err
   })
 
   return { ok: true, ref }
@@ -155,6 +161,32 @@ async function applyAttributionLeadToContact(prisma, { userId, contact, lead }) 
     .catch(() => {})
 
   return updated
+}
+
+function contactHasLpAttribution(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const meta = custom.meta || {}
+  return Boolean(meta.attributionRef || meta.fbc || meta.fbclid || meta.clickAt)
+}
+
+async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact }) {
+  if (!contact?.id) return contact
+  if (contactHasLpAttribution(contact)) return contact
+
+  const minClickAt = new Date(Date.now() - PENDING_LEAD_MAX_AGE_MS)
+
+  const lead = await prisma.metaAttributionLead.findFirst({
+    where: {
+      userId,
+      contactId: null,
+      expiresAt: { gt: new Date() },
+      clickAt: { gte: minClickAt },
+    },
+    orderBy: { clickAt: "desc" },
+  })
+  if (!lead) return contact
+
+  return applyAttributionLeadToContact(prisma, { userId, contact, lead })
 }
 
 async function resolveAndApplyAttributionFromMessage(prisma, { userId, contact, messageBody }) {
@@ -198,6 +230,8 @@ module.exports = {
   createAttributionLead,
   applyAttributionLeadToContact,
   resolveAndApplyAttributionFromMessage,
+  resolveAndApplyAttributionFromPendingLead,
+  contactHasLpAttribution,
   cleanupExpiredAttributionLeads,
   getStoredClickAt,
   REF_PATTERN,
