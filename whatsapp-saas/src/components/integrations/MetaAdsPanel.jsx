@@ -49,6 +49,13 @@ function statusVariant(status) {
   return 'muted'
 }
 
+function adsBadge(meta) {
+  if (meta?.adsConnected) return { variant: 'success', label: 'Anúncios ativo' }
+  if (meta?.adsVerified) return { variant: 'success', label: 'Conta verificada' }
+  if (meta?.adsConfigured) return { variant: 'muted', label: 'Credenciais salvas' }
+  return { variant: 'muted', label: 'Anúncios não configurado' }
+}
+
 export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
   const toast = useToast()
   const [period, setPeriod] = useState('7d')
@@ -87,6 +94,7 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
   }
 
   const currency = dashboard?.account?.currency || 'BRL'
+  const badge = adsBadge(meta)
 
   return (
     <div className="space-y-4 rounded-xl border border-brand-800 bg-brand-950/20 p-4">
@@ -100,9 +108,14 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
             <p className="mt-1 text-xs text-stone-500">
               Leia gastos, campanhas e criativos via Marketing API (token manual).
             </p>
-            <Badge variant={meta?.adsConnected ? 'success' : 'muted'} className="mt-2">
-              {meta?.adsConnected ? 'Anúncios conectado' : 'Anúncios não configurado'}
+            <Badge variant={badge.variant} className="mt-2">
+              {badge.label}
             </Badge>
+            {meta?.adsVerified && !meta?.adsEnabled ? (
+              <p className="mt-1 text-[11px] text-stone-500">
+                Ative o toggle abaixo e salve para sincronizar gastos e criativos.
+              </p>
+            ) : null}
           </div>
         </div>
         <a

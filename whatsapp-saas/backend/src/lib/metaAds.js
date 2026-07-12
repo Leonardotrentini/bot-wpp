@@ -46,6 +46,8 @@ function formatAdsFields(row) {
       adsEnabled: false,
       hasAdsAccessToken: false,
       adsAccessTokenHint: null,
+      adsConfigured: false,
+      adsVerified: false,
       adsConnected: false,
       lastAdsSyncAt: null,
       lastAdsError: null,
@@ -56,13 +58,17 @@ function formatAdsFields(row) {
   const fallbackToken = String(row.accessToken || "")
   const hasAdsToken = adsToken.length > 0 || fallbackToken.length > 0
   const adAccountId = row.adAccountId || ""
+  const adsConfigured = Boolean(adAccountId && hasAdsToken)
+  const adsVerified = Boolean(adsConfigured && row.lastAdsSyncAt && !row.lastAdsError)
 
   return {
     adAccountId,
     adsEnabled: row.adsEnabled === true,
     hasAdsAccessToken: adsToken.length > 0,
     adsAccessTokenHint: adsToken.length >= 4 ? `••••${adsToken.slice(-4)}` : null,
-    adsConnected: Boolean(adAccountId && hasAdsToken && row.adsEnabled),
+    adsConfigured,
+    adsVerified,
+    adsConnected: Boolean(adsConfigured && row.adsEnabled),
     lastAdsSyncAt: row.lastAdsSyncAt ? row.lastAdsSyncAt.toISOString() : null,
     lastAdsError: row.lastAdsError || null,
   }
