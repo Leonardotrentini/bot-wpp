@@ -696,6 +696,7 @@ module.exports = {
   VESTO_EVENT_SOURCE_URL,
   formatIntegrationRow,
   getMetaIntegration,
+  getMetaIntegrationCredentials,
   upsertMetaIntegration,
   trackConversationStartedEvent,
   trackLeadQualifiedEvent,
