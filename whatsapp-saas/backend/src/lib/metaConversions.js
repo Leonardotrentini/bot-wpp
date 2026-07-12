@@ -15,6 +15,7 @@
 const crypto = require("crypto")
 const { formatAdsFields, normalizeAdAccountId } = require("./metaAds")
 const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttributionLead")
+const { parseSellersInput, normalizeBrazilPhone, isValidBrazilWhatsapp } = require("./lpSellers")
 const { parseFacebookPageId, resolveCtwaClid, resolveFbc, resolveFbp } = require("./metaMessaging")
 const { getStoredClickAt } = require("./metaAttributionLead")
 
@@ -293,6 +294,10 @@ function formatIntegrationRow(row) {
     ...formatAdsFields(row),
     vestoPublicKey: row.vestoPublicKey || "",
     allowedOrigins: Array.isArray(row.allowedOrigins) ? row.allowedOrigins : [],
+    lpWhatsapp: row.lpWhatsapp || "",
+    lpWhatsappMsg: row.lpWhatsappMsg || "",
+    lpRotatorMode: row.lpRotatorMode || "sequential",
+    lpSellers: parseSellersInput(row.lpSellers),
   }
 }
 
@@ -334,6 +339,41 @@ async function upsertMetaIntegration(prisma, userId, data) {
       ? parseAllowedOriginsInput(data.allowedOrigins)
       : existing?.allowedOrigins || []
 
+  const lpWhatsappMsg =
+    data.lpWhatsappMsg != null
+      ? String(data.lpWhatsappMsg).trim() || null
+      : existing?.lpWhatsappMsg || null
+
+  const lpRotatorMode =
+    data.lpRotatorMode != null
+      ? String(data.lpRotatorMode).trim() || "sequential"
+      : existing?.lpRotatorMode || "sequential"
+
+  const lpSellers =
+    data.lpSellers != null ? parseSellersInput(data.lpSellers) : parseSellersInput(existing?.lpSellers)
+
+  if (data.lpSellers != null && lpSellers.length === 0) {
+    return { error: "VALIDATION", message: "Informe ao menos um vendedor com WhatsApp válido." }
+  }
+
+  if (data.lpSellers != null) {
+    for (let i = 0; i < lpSellers.length; i++) {
+      if (!isValidBrazilWhatsapp(lpSellers[i].phone)) {
+        return {
+          error: "VALIDATION",
+          message: `Vendedor ${i + 1}: telefone inválido. Use DDI+DDD+número (ex: 5547996747378).`,
+        }
+      }
+    }
+  }
+
+  const lpWhatsapp =
+    lpSellers.length > 0
+      ? lpSellers[0].phone
+      : data.lpWhatsapp != null
+        ? normalizeBrazilPhone(data.lpWhatsapp) || null
+        : existing?.lpWhatsapp || null
+
   const vestoPublicKey = existing?.vestoPublicKey || generateVestoPublicKey()
 
   const row = await prisma.metaIntegration.upsert({
@@ -352,6 +392,10 @@ async function upsertMetaIntegration(prisma, userId, data) {
       adsEnabled: data.adsEnabled === true,
       vestoPublicKey,
       allowedOrigins,
+      lpWhatsapp,
+      lpWhatsappMsg,
+      lpRotatorMode,
+      lpSellers,
     },
     update: {
       pixelId,
@@ -365,7 +409,69 @@ async function upsertMetaIntegration(prisma, userId, data) {
       adsAccessToken: data.adsAccessToken != null ? adsAccessToken || null : undefined,
       adsEnabled: data.adsEnabled != null ? data.adsEnabled === true : undefined,
       allowedOrigins: data.allowedOrigins != null ? allowedOrigins : undefined,
+      lpWhatsapp: data.lpWhatsapp != null || data.lpSellers != null ? lpWhatsapp : undefined,
+      lpWhatsappMsg: data.lpWhatsappMsg != null ? lpWhatsappMsg : undefined,
+      lpRotatorMode: data.lpRotatorMode != null ? lpRotatorMode : undefined,
+      lpSellers: data.lpSellers != null ? lpSellers : undefined,
       vestoPublicKey: existing?.vestoPublicKey ? undefined : vestoPublicKey,
+    },
+  })
+
+  return { integration: formatIntegrationRow(row) }
+}
+
+async function updateMetaLpIntegration(prisma, userId, data) {
+  const existing = await prisma.metaIntegration.findUnique({ where: { userId } })
+  if (!existing) {
+    return {
+      error: "NOT_CONFIGURED",
+      message: "Salve primeiro o Pixel e o token da Meta acima, depois configure a landing page.",
+    }
+  }
+
+  const allowedOrigins =
+    data.allowedOrigins != null
+      ? parseAllowedOriginsInput(data.allowedOrigins)
+      : existing.allowedOrigins || []
+
+  const lpWhatsappMsg =
+    data.lpWhatsappMsg != null
+      ? String(data.lpWhatsappMsg).trim() || null
+      : existing.lpWhatsappMsg || null
+
+  const lpRotatorMode =
+    data.lpRotatorMode != null
+      ? String(data.lpRotatorMode).trim() || "sequential"
+      : existing.lpRotatorMode || "sequential"
+
+  const lpSellers =
+    data.lpSellers != null ? parseSellersInput(data.lpSellers) : parseSellersInput(existing.lpSellers)
+
+  if (!lpSellers.length) {
+    return { error: "VALIDATION", message: "Informe ao menos um vendedor com WhatsApp válido." }
+  }
+
+  for (let i = 0; i < lpSellers.length; i++) {
+    if (!isValidBrazilWhatsapp(lpSellers[i].phone)) {
+      return {
+        error: "VALIDATION",
+        message: `Vendedor ${i + 1}: telefone inválido. Use DDI+DDD+número (ex: 5547996747378).`,
+      }
+    }
+  }
+
+  const lpWhatsapp = lpSellers[0].phone
+  const vestoPublicKey = existing.vestoPublicKey || generateVestoPublicKey()
+
+  const row = await prisma.metaIntegration.update({
+    where: { userId },
+    data: {
+      allowedOrigins,
+      lpWhatsapp,
+      lpWhatsappMsg,
+      lpRotatorMode,
+      lpSellers,
+      vestoPublicKey: existing.vestoPublicKey ? undefined : vestoPublicKey,
     },
   })
 
@@ -719,6 +825,7 @@ module.exports = {
   getMetaIntegration,
   getMetaIntegrationCredentials,
   upsertMetaIntegration,
+  updateMetaLpIntegration,
   trackConversationStartedEvent,
   trackLeadQualifiedEvent,
   trackCrmQuoteEvent,

@@ -11,6 +11,7 @@ const {
   isOriginAllowed,
   cleanupExpiredAttributionLeads,
 } = require("../lib/metaAttributionLead")
+const { formatSellersForApi } = require("../lib/lpSellers")
 
 function resolvePublicKey(req) {
   return (
@@ -25,7 +26,7 @@ function resolvePublicKey(req) {
 function createPublicMetaRouter() {
   const router = express.Router()
 
-  async function corsForAttribution(req, res) {
+  async function corsForPublicKey(req, res, { methods = "POST, OPTIONS" } = {}) {
     const origin = req.headers.origin
     const publicKey = resolvePublicKey(req)
 
@@ -51,21 +52,48 @@ function createPublicMetaRouter() {
     }
 
     res.setHeader("Access-Control-Allow-Origin", origin)
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS")
+    res.setHeader("Access-Control-Allow-Methods", methods)
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Vesto-Key")
     res.setHeader("Vary", "Origin")
     return { ok: true, integration }
   }
 
+  router.options("/meta/config", async (req, res) => {
+    const check = await corsForPublicKey(req, res, { methods: "GET, OPTIONS" })
+    if (!check.ok) return res.status(check.status).json({ error: "FORBIDDEN", message: check.message })
+    return res.status(204).end()
+  })
+
+  router.get("/meta/config", async (req, res) => {
+    try {
+      const check = await corsForPublicKey(req, res, { methods: "GET, OPTIONS" })
+      if (!check.ok) return res.status(check.status).json({ error: "FORBIDDEN", message: check.message })
+
+      const integration = check.integration
+      const sellers = formatSellersForApi(integration)
+      return res.json({
+        ok: true,
+        whatsapp: sellers[0]?.phone || String(integration.lpWhatsapp || "").replace(/\D/g, ""),
+        whatsappMsg: integration.lpWhatsappMsg || "Olá! Vim pelo site e quero mais informações.",
+        pixelId: integration.pixelId || "",
+        rotatorMode: integration.lpRotatorMode || "sequential",
+        sellers,
+      })
+    } catch (err) {
+      console.error("[public/meta/config]", err)
+      return res.status(500).json({ error: "INTERNAL_ERROR", message: "Falha ao carregar configuração." })
+    }
+  })
+
   router.options("/meta/attribution", async (req, res) => {
-    const check = await corsForAttribution(req, res)
+    const check = await corsForPublicKey(req, res)
     if (!check.ok) return res.status(check.status).json({ error: "FORBIDDEN", message: check.message })
     return res.status(204).end()
   })
 
   router.post("/meta/attribution", async (req, res) => {
     try {
-      const check = await corsForAttribution(req, res)
+      const check = await corsForPublicKey(req, res)
       if (!check.ok) return res.status(check.status).json({ error: "FORBIDDEN", message: check.message })
 
       const schema = z.object({

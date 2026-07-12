@@ -11,6 +11,7 @@ const {
   upsertMetaIntegration,
   testMetaIntegration,
   getMetaIntegrationCredentials,
+  updateMetaLpIntegration,
 } = require("../lib/metaConversions")
 const { fetchMetaAdsDashboard, testMetaAdsConnection } = require("../lib/metaAds")
 
@@ -52,6 +53,17 @@ function createIntegrationsRouter() {
       adsAccessToken: z.string().max(512).optional().nullable(),
       adsEnabled: z.boolean().optional(),
       allowedOrigins: z.array(z.string().max(253)).optional(),
+      lpWhatsapp: z.string().max(32).optional().nullable(),
+      lpWhatsappMsg: z.string().max(500).optional().nullable(),
+      lpRotatorMode: z.enum(["sequential"]).optional(),
+      lpSellers: z
+        .array(
+          z.object({
+            label: z.string().max(80).optional().nullable(),
+            phone: z.string().max(32),
+          }),
+        )
+        .optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
@@ -59,6 +71,36 @@ function createIntegrationsRouter() {
     }
 
     const result = await upsertMetaIntegration(prisma, req.user.sub, parsed.data)
+    if (result.error === "VALIDATION") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: result.message })
+    }
+
+    return res.json({ integration: result.integration })
+  })
+
+  router.patch("/meta/lp", async (req, res) => {
+    const schema = z.object({
+      allowedOrigins: z.array(z.string().max(253)).optional(),
+      lpWhatsappMsg: z.string().max(500).optional().nullable(),
+      lpRotatorMode: z.enum(["sequential"]).optional(),
+      lpSellers: z
+        .array(
+          z.object({
+            label: z.string().max(80).optional().nullable(),
+            phone: z.string().max(32),
+          }),
+        )
+        .min(1),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
+    }
+
+    const result = await updateMetaLpIntegration(prisma, req.user.sub, parsed.data)
+    if (result.error === "NOT_CONFIGURED") {
+      return res.status(400).json({ error: result.error, message: result.message })
+    }
     if (result.error === "VALIDATION") {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: result.message })
     }

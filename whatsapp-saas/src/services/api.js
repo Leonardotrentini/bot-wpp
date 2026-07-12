@@ -556,6 +556,20 @@ export async function getMetaIntegration() {
   return mockResponse({ integration: null })
 }
 
+export async function saveMetaLpSettings(payload) {
+  if (resolveUseRealApi()) return apiClient.patch('/integrations/meta/lp', payload)
+  return mockResponse({
+    integration: {
+      allowedOrigins: payload.allowedOrigins || [],
+      lpWhatsapp: payload.lpSellers?.[0]?.phone || '',
+      lpWhatsappMsg: payload.lpWhatsappMsg || '',
+      lpRotatorMode: payload.lpRotatorMode || 'sequential',
+      lpSellers: payload.lpSellers || [],
+      vestoPublicKey: 'vpk_demo123',
+    },
+  })
+}
+
 export async function saveMetaIntegration(payload) {
   if (resolveUseRealApi()) return apiClient.put('/integrations/meta', payload)
   return mockResponse({
@@ -567,6 +581,10 @@ export async function saveMetaIntegration(payload) {
       sendPurchases: payload.sendPurchases !== false,
       testEventCode: payload.testEventCode || '',
       allowedOrigins: payload.allowedOrigins || [],
+      lpWhatsapp: payload.lpWhatsapp || payload.lpSellers?.[0]?.phone || '',
+      lpWhatsappMsg: payload.lpWhatsappMsg || '',
+      lpRotatorMode: payload.lpRotatorMode || 'sequential',
+      lpSellers: payload.lpSellers || [],
       vestoPublicKey: 'vpk_demo123',
       hasAccessToken: true,
       connected: true,

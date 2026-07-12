@@ -6,12 +6,13 @@ import { Input } from '../../components/common/Input.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Toggle } from '../../components/common/Toggle.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { getMetaIntegration, saveMetaIntegration, testMetaIntegration } from '../../services/api.js'
+import { getMetaIntegration, saveMetaIntegration, saveMetaLpSettings, testMetaIntegration } from '../../services/api.js'
 import { initMetaPixel } from '../../lib/metaPixel.js'
 import { MetaIntegrationGuide } from '../../components/integrations/MetaIntegrationGuide.jsx'
 import { MetaAdsPanel } from '../../components/integrations/MetaAdsPanel.jsx'
 import { MetaLpAttributionPanel } from '../../components/integrations/MetaLpAttributionPanel.jsx'
 import { UtmUrlGenerator } from '../../components/integrations/UtmUrlGenerator.jsx'
+import { parseSellersFromIntegration, sellersToPayload, validateSellers } from '../../lib/lpSellers.js'
 
 function originsToText(origins) {
   if (!Array.isArray(origins) || !origins.length) return ''
@@ -53,10 +54,13 @@ export function Integrations() {
     adsAccessToken: '',
     adsEnabled: false,
     allowedOriginsText: '',
-    lpWhatsapp: '',
+    lpSellers: [{ id: '1', label: '', phone: '' }],
+    lpRotatorMode: 'sequential',
     lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
   })
   const [meta, setMeta] = useState(null)
+  const [showSellerErrors, setShowSellerErrors] = useState(false)
+  const [savingLp, setSavingLp] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -77,8 +81,9 @@ export function Integrations() {
           adsAccessToken: '',
           adsEnabled: integration.adsEnabled === true,
           allowedOriginsText: originsToText(integration.allowedOrigins),
-          lpWhatsapp: '',
-          lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
+          lpSellers: parseSellersFromIntegration(integration),
+          lpRotatorMode: integration.lpRotatorMode || 'sequential',
+          lpWhatsappMsg: integration.lpWhatsappMsg || 'Olá! Vim pelo site e quero mais informações.',
         })
         if (integration.enabled && integration.pixelId) {
           initMetaPixel(integration.pixelId)
@@ -96,6 +101,15 @@ export function Integrations() {
   }, [load])
 
   const handleSave = async () => {
+    setShowSellerErrors(true)
+    const sellerErrors = validateSellers(form.lpSellers || [])
+    if (sellerErrors.length) {
+      toast.error(sellerErrors[0])
+      return
+    }
+
+    const sellersPayload = sellersToPayload(form.lpSellers || [])
+
     setSaving(true)
     try {
       const payload = {
@@ -108,6 +122,10 @@ export function Integrations() {
         adAccountId: form.adAccountId.trim() || null,
         adsEnabled: form.adsEnabled,
         allowedOrigins: parseOriginsText(form.allowedOriginsText),
+        lpSellers: sellersPayload,
+        lpWhatsapp: sellersPayload[0]?.phone || null,
+        lpRotatorMode: form.lpRotatorMode || 'sequential',
+        lpWhatsappMsg: form.lpWhatsappMsg.trim() || null,
       }
       if (form.accessToken.trim()) {
         payload.accessToken = form.accessToken.trim()
@@ -116,15 +134,66 @@ export function Integrations() {
         payload.adsAccessToken = form.adsAccessToken.trim()
       }
       const { data } = await saveMetaIntegration(payload)
-      setMeta(data.integration)
-      setForm((f) => ({ ...f, accessToken: '', adsAccessToken: '' }))
-      if (data.integration?.pixelId) initMetaPixel(data.integration.pixelId)
+      const integration = data.integration
+      setMeta(integration)
+      setForm((f) => ({
+        ...f,
+        accessToken: '',
+        adsAccessToken: '',
+        allowedOriginsText: originsToText(integration?.allowedOrigins),
+        lpSellers: parseSellersFromIntegration(integration),
+        lpRotatorMode: integration?.lpRotatorMode || 'sequential',
+        lpWhatsappMsg: integration?.lpWhatsappMsg || f.lpWhatsappMsg,
+      }))
+      setShowSellerErrors(false)
+      if (integration?.pixelId) initMetaPixel(integration.pixelId)
       toast.success('Integração Meta salva.')
-      await load()
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao salvar integração.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleSaveLp = async () => {
+    setShowSellerErrors(true)
+    const sellerErrors = validateSellers(form.lpSellers || [])
+    if (sellerErrors.length) {
+      toast.error(sellerErrors[0])
+      return
+    }
+
+    const sellersPayload = sellersToPayload(form.lpSellers || [])
+
+    setSavingLp(true)
+    try {
+      const { data } = await saveMetaLpSettings({
+        allowedOrigins: parseOriginsText(form.allowedOriginsText),
+        lpSellers: sellersPayload,
+        lpRotatorMode: form.lpRotatorMode || 'sequential',
+        lpWhatsappMsg: form.lpWhatsappMsg.trim() || null,
+      })
+      const integration = data.integration
+      setMeta((prev) => ({ ...prev, ...integration }))
+      setForm((f) => ({
+        ...f,
+        allowedOriginsText: originsToText(integration?.allowedOrigins),
+        lpSellers: parseSellersFromIntegration(integration),
+        lpRotatorMode: integration?.lpRotatorMode || 'sequential',
+        lpWhatsappMsg: integration?.lpWhatsappMsg || f.lpWhatsappMsg,
+      }))
+      setShowSellerErrors(false)
+      toast.success(`${sellersPayload.length} vendedor(es) e domínios salvos.`)
+    } catch (err) {
+      const status = err?.response?.status
+      const msg = err?.response?.data?.message
+      if (status === 404) {
+        toast.error('Backend desatualizado — faça deploy da versão mais recente no Railway.')
+      } else {
+        toast.error(msg || 'Falha ao salvar landing page.')
+      }
+    } finally {
+      setSavingLp(false)
     }
   }
 
@@ -329,7 +398,14 @@ export function Integrations() {
 
           <UtmUrlGenerator />
 
-          <MetaLpAttributionPanel form={form} setForm={setForm} meta={meta} />
+          <MetaLpAttributionPanel
+            form={form}
+            setForm={setForm}
+            meta={meta}
+            showSellerErrors={showSellerErrors}
+            onSaveLp={handleSaveLp}
+            savingLp={savingLp}
+          />
 
           <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={load} />
 

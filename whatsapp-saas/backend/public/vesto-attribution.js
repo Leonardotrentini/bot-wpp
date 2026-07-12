@@ -1,6 +1,6 @@
 /**
- * Script de atribuição LP → Vesto (cole via Integrações → Meta).
- * Uso: <script src="https://SEU_BACKEND/vesto-attribution.js" data-vesto-key="vpk_..." ...>
+ * Script de atribuição LP → Vesto (rotacionador sequencial via config do servidor).
+ * Uso: <script src="https://SEU_BACKEND/vesto-attribution.js?key=vpk_..." defer></script>
  */
 (function () {
   "use strict"
@@ -9,9 +9,18 @@
   if (!script) return
 
   var key = script.getAttribute("data-vesto-key") || ""
+  if (!key) {
+    try {
+      var scriptUrl = new URL(script.src || "")
+      key = scriptUrl.searchParams.get("key") || ""
+    } catch (e) {}
+  }
+
   var apiBase = (script.getAttribute("data-api") || "").replace(/\/+$/, "")
   var whatsapp = String(script.getAttribute("data-whatsapp") || "").replace(/\D/g, "")
-  var waMsg = script.getAttribute("data-whatsapp-msg") || "Olá! Vim pelo site e quero mais informações."
+  var waMsg = script.getAttribute("data-whatsapp-msg") || ""
+  var sellers = []
+  var rotatorMode = "sequential"
 
   if (!apiBase) {
     try {
@@ -93,7 +102,42 @@
       })
   }
 
-  function handleWhatsAppClick(ev) {
+  function normalizePhone(value) {
+    return String(value || "").replace(/\D/g, "")
+  }
+
+  function pickRotatorPhone() {
+    if (!sellers.length) return whatsapp
+    if (rotatorMode !== "sequential") {
+      return normalizePhone(sellers[0].phone || sellers[0])
+    }
+    var storageKey = "vesto_seq_" + key
+    var idx = 0
+    try {
+      idx = parseInt(localStorage.getItem(storageKey) || "0", 10) || 0
+    } catch (e) {
+      idx = 0
+    }
+    var entry = sellers[idx % sellers.length]
+    var phone = normalizePhone(entry && (entry.phone || entry))
+    var next = (idx + 1) % sellers.length
+    try {
+      localStorage.setItem(storageKey, String(next))
+    } catch (e) {}
+    return phone || whatsapp
+  }
+
+  function resolvePhone(target, opts) {
+    opts = opts || {}
+    if (opts.whatsapp) return normalizePhone(opts.whatsapp)
+    if (target && target.getAttribute) {
+      var attr = target.getAttribute("data-whatsapp")
+      if (attr) return normalizePhone(attr)
+    }
+    return pickRotatorPhone()
+  }
+
+  function handleWhatsAppClick(ev, opts) {
     if (ev && ev.preventDefault) ev.preventDefault()
     if (typeof window.fbq === "function") {
       try {
@@ -106,9 +150,12 @@
       sessionStorage.setItem("vesto_ref", ref)
     } catch (e) {}
     sendAttribution(meta, ref)
-    if (!whatsapp) return
-    var text = encodeURIComponent(waMsg + "\n\n(" + ref + ")")
-    window.open("https://wa.me/" + whatsapp + "?text=" + text, "_blank", "noopener,noreferrer")
+    var target = ev && ev.currentTarget ? ev.currentTarget : null
+    var phone = resolvePhone(target, opts)
+    if (!phone) return
+    var msg = waMsg || "Olá! Vim pelo site e quero mais informações."
+    var text = encodeURIComponent(msg + "\n\n(" + ref + ")")
+    window.open("https://wa.me/" + phone + "?text=" + text, "_blank", "noopener,noreferrer")
   }
 
   captureMeta()
@@ -119,14 +166,47 @@
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].addEventListener("click", handleWhatsAppClick)
     }
-    if (!nodes.length && script.getAttribute("data-auto-bind") !== "false") {
-      window.vestoOpenWhatsApp = handleWhatsAppClick
+    window.vestoOpenWhatsApp = function (ev, opts) {
+      handleWhatsAppClick(ev || { preventDefault: function () {} }, opts || {})
     }
+    window.vestoPickWhatsApp = pickRotatorPhone
+  }
+
+  function applyConfig(cfg) {
+    if (!cfg) return
+    if (!whatsapp && cfg.whatsapp) whatsapp = normalizePhone(cfg.whatsapp)
+    if (!waMsg && cfg.whatsappMsg) waMsg = cfg.whatsappMsg
+    if (Array.isArray(cfg.sellers) && cfg.sellers.length) sellers = cfg.sellers
+    if (cfg.rotatorMode) rotatorMode = cfg.rotatorMode
+  }
+
+  function loadConfig() {
+    if (!key) return Promise.resolve()
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null
+    var timer = ctrl ? setTimeout(function () { ctrl.abort() }, 4000) : null
+    return fetch(apiBase + "/public/meta/config?key=" + encodeURIComponent(key), {
+      method: "GET",
+      credentials: "omit",
+      signal: ctrl ? ctrl.signal : undefined,
+    })
+      .then(function (res) {
+        if (!res.ok) return null
+        return res.json()
+      })
+      .then(applyConfig)
+      .catch(function () {})
+      .finally(function () {
+        if (timer) clearTimeout(timer)
+      })
+  }
+
+  function start() {
+    loadConfig().then(bind)
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", bind)
+    document.addEventListener("DOMContentLoaded", start)
   } else {
-    bind()
+    start()
   }
 })()

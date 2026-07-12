@@ -595,6 +595,10 @@ model MetaIntegration {
   adsEnabled      Boolean   @default(false)
   vestoPublicKey  String?   @unique
   allowedOrigins  String[]  @default([])
+  lpWhatsapp      String?
+  lpWhatsappMsg   String?
+  lpRotatorMode   String    @default("sequential")
+  lpSellers       Json      @default("[]")
   lastEventAt     DateTime?
   lastEventName   String?
   lastError       String?
