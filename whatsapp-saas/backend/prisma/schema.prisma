@@ -33,6 +33,7 @@ model User {
   whatsappConnection WhatsAppConnection?
   whatsappGroups     WhatsAppGroup[]
   metaIntegration    MetaIntegration?
+  gtmIntegration     GtmIntegration?
 }
 
 model Plan {
@@ -607,6 +608,17 @@ model MetaIntegration {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   attributionLeads MetaAttributionLead[]
+}
+
+/** Google Tag Manager — container vinculado à LP do tenant. */
+model GtmIntegration {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  containerId String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 /** Clique na LP (ref vst_) aguardando associação com contato WhatsApp. */

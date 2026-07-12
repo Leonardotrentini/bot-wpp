@@ -12,6 +12,7 @@ const {
   cleanupExpiredAttributionLeads,
 } = require("../lib/metaAttributionLead")
 const { formatSellersForApi } = require("../lib/lpSellers")
+const { getGtmForPublicConfig } = require("../lib/gtmIntegration")
 
 function resolvePublicKey(req) {
   return (
@@ -71,6 +72,7 @@ function createPublicMetaRouter() {
 
       const integration = check.integration
       const sellers = formatSellersForApi(integration)
+      const gtm = await getGtmForPublicConfig(prisma, integration.userId)
       return res.json({
         ok: true,
         whatsapp: sellers[0]?.phone || String(integration.lpWhatsapp || "").replace(/\D/g, ""),
@@ -78,6 +80,7 @@ function createPublicMetaRouter() {
         pixelId: integration.pixelId || "",
         rotatorMode: integration.lpRotatorMode || "sequential",
         sellers,
+        gtm: gtm ? { containerId: gtm.containerId, enabled: true } : null,
       })
     } catch (err) {
       console.error("[public/meta/config]", err)

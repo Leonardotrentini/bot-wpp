@@ -213,14 +213,24 @@ export function MetaIntegrationGuide({ pixelId }) {
               Events Manager → seu pixel → <strong>Conversões personalizadas</strong> → Criar.
             </p>
             <p className="mt-2">
-              Para eventos do <strong className="text-stone-400">Vesto (servidor)</strong>: fonte da ação = Site (única
-              opção). Na regra, troque <strong className="text-stone-400">URL</strong> por{' '}
+              Para eventos do <strong className="text-stone-400">Vesto (servidor)</strong>: na regra use{' '}
               <strong className="text-stone-400">Parâmetro do evento</strong> →{' '}
-              <code className="text-stone-400">content_category</code> → contém → valor abaixo.
+              <code className="text-stone-400">content_category</code> → contém → valor abaixo. Assim vale para LP e
+              anúncio WhatsApp (CTWA).
+            </p>
+            <p className="mt-2 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-stone-500">
+              <strong className="text-amber-200/90">Anúncio Click-to-WhatsApp:</strong> a Meta não aceita os nomes{' '}
+              <code className="text-stone-400">LeadQualified</code> / <code className="text-stone-400">Quote</code>.
+              O Vesto envia <code className="text-stone-400">QualifiedLead</code> e{' '}
+              <code className="text-stone-400">InitiateCheckout</code> — mas o{' '}
+              <code className="text-stone-400">content_category</code> continua igual. Se a conversão personalizada
+              filtrar só pelo nome <code className="text-stone-400">Quote</code>, orçamento fica &quot;—&quot; na
+              campanha. <strong className="text-stone-400">Purchase</strong> funciona nos dois fluxos (mesmo nome).
             </p>
             <p className="mt-2 text-stone-500">
-              Se a Meta obrigar regra e não mostrar parâmetro: use URL contém{' '}
-              <code className="text-stone-400">vesto.group</code> (o Vesto envia event_source_url com esse domínio).
+              LP (servidor, modo CRM): fonte da ação costuma aparecer como Site. CTWA: mensagem (business_messaging).
+              Por isso a regra por <code className="text-stone-400">content_category</code> é mais confiável que filtrar
+              só pelo nome do evento.
             </p>
 
             <div className="mt-3 space-y-2">
@@ -232,14 +242,14 @@ export function MetaIntegrationGuide({ pixelId }) {
               />
               <ConversionCard
                 name="Lead Qualificado"
-                event="LeadQualified"
-                rule="content_category contém qualified_lead"
+                event="LeadQualified (LP) · QualifiedLead (anúncio WhatsApp)"
+                rule="content_category contém qualified_lead — não filtre só LeadQualified"
                 optimization="Lead"
               />
               <ConversionCard
                 name="Orçamento"
-                event="Quote"
-                rule="content_category contém quote"
+                event="Quote (LP) · InitiateCheckout (anúncio WhatsApp)"
+                rule="content_category contém quote — não filtre só Quote"
                 optimization="Lead"
                 note="Inclui value em BRL quando há valor no orçamento."
               />

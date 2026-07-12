@@ -6,11 +6,12 @@ import { Input } from '../../components/common/Input.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Toggle } from '../../components/common/Toggle.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { getMetaIntegration, saveMetaIntegration, saveMetaLpSettings, testMetaIntegration } from '../../services/api.js'
+import { getMetaIntegration, saveMetaIntegration, saveMetaLpSettings, testMetaIntegration, getGtmIntegration, saveGtmIntegration } from '../../services/api.js'
 import { initMetaPixel } from '../../lib/metaPixel.js'
 import { MetaIntegrationGuide } from '../../components/integrations/MetaIntegrationGuide.jsx'
 import { MetaAdsPanel } from '../../components/integrations/MetaAdsPanel.jsx'
 import { MetaLpAttributionPanel } from '../../components/integrations/MetaLpAttributionPanel.jsx'
+import { GtmIntegrationPanel } from '../../components/integrations/GtmIntegrationPanel.jsx'
 import { UtmUrlGenerator } from '../../components/integrations/UtmUrlGenerator.jsx'
 import { parseSellersFromIntegration, sellersToPayload, validateSellers } from '../../lib/lpSellers.js'
 
@@ -59,8 +60,10 @@ export function Integrations() {
     lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
   })
   const [meta, setMeta] = useState(null)
+  const [gtm, setGtm] = useState(null)
   const [showSellerErrors, setShowSellerErrors] = useState(false)
   const [savingLp, setSavingLp] = useState(false)
+  const [savingGtm, setSavingGtm] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -68,6 +71,12 @@ export function Integrations() {
       const { data } = await getMetaIntegration()
       const integration = data.integration
       setMeta(integration)
+      try {
+        const { data: gtmData } = await getGtmIntegration()
+        setGtm(gtmData.integration)
+      } catch {
+        setGtm(null)
+      }
       if (integration) {
         setForm({
           pixelId: integration.pixelId || '',
@@ -185,6 +194,19 @@ export function Integrations() {
     }
   }
 
+  const handleSaveGtm = async (payload) => {
+    setSavingGtm(true)
+    try {
+      const { data } = await saveGtmIntegration(payload)
+      setGtm(data.integration)
+      toast.success('Google Tag Manager salvo.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao salvar GTM.')
+    } finally {
+      setSavingGtm(false)
+    }
+  }
+
   const handleTest = async () => {
     setTesting(true)
     setTestResults(null)
@@ -215,8 +237,9 @@ export function Integrations() {
       <div>
         <h2 className="text-xl font-semibold text-stone-50 font-heading">Integrações</h2>
         <p className="mt-2 text-sm text-stone-400 max-w-2xl">
-          Conecte o <strong className="text-stone-300">Meta Pixel</strong> para enviar cada etapa do funil WhatsApp
-          (conversa iniciada, qualificado, orçamento e compra) via API de Conversões.
+          Conecte o <strong className="text-stone-300">Meta Pixel</strong> e o{' '}
+          <strong className="text-stone-300">Google Tag Manager</strong> para rastrear a landing page e enviar o funil
+          WhatsApp via API de Conversões.
         </p>
       </div>
 
@@ -388,6 +411,7 @@ export function Integrations() {
             form={form}
             setForm={setForm}
             meta={meta}
+            gtm={gtm}
             showSellerErrors={showSellerErrors}
             onSaveLp={handleSaveLp}
             savingLp={savingLp}
@@ -398,6 +422,8 @@ export function Integrations() {
           <MetaIntegrationGuide pixelId={form.pixelId || meta?.pixelId} />
         </div>
       </Card>
+
+      <GtmIntegrationPanel gtm={gtm} onSave={handleSaveGtm} saving={savingGtm} />
     </div>
   )
 }

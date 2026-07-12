@@ -14,6 +14,7 @@ const {
   updateMetaLpIntegration,
 } = require("../lib/metaConversions")
 const { fetchMetaAdsDashboard, testMetaAdsConnection } = require("../lib/metaAds")
+const { getGtmIntegration, upsertGtmIntegration } = require("../lib/gtmIntegration")
 
 function createIntegrationsRouter() {
   const router = express.Router()
@@ -21,6 +22,7 @@ function createIntegrationsRouter() {
 
   router.get("/", async (req, res) => {
     const meta = await getMetaIntegration(prisma, req.user.sub)
+    const gtm = await getGtmIntegration(prisma, req.user.sub)
     return res.json({
       integrations: [
         {
@@ -30,6 +32,13 @@ function createIntegrationsRouter() {
             "Envia o funil WhatsApp (ConversationStarted, LeadQualified, Quote, Purchase) para o Pixel via API de Conversões.",
           connected: Boolean(meta?.connected),
           provider: "meta",
+        },
+        {
+          id: "gtm",
+          name: "Google Tag Manager",
+          description: "Container GTM para tags na landing page (GA4, Ads, pixels auxiliares).",
+          connected: Boolean(gtm?.connected),
+          provider: "gtm",
         },
       ],
     })
@@ -117,6 +126,29 @@ function createIntegrationsRouter() {
       return res.status(502).json({ error: result.error, message: result.message })
     }
     return res.json(result)
+  })
+
+  router.get("/gtm", async (req, res) => {
+    const integration = await getGtmIntegration(prisma, req.user.sub)
+    return res.json({ integration: integration || null })
+  })
+
+  router.put("/gtm", async (req, res) => {
+    const schema = z.object({
+      containerId: z.string().min(8).max(32),
+      enabled: z.boolean().optional(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
+    }
+
+    const result = await upsertGtmIntegration(prisma, req.user.sub, parsed.data)
+    if (result.error === "VALIDATION") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: result.message })
+    }
+
+    return res.json({ integration: result.integration })
   })
 
   router.get("/meta/ads", async (req, res) => {
