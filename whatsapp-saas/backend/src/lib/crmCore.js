@@ -512,6 +512,16 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     include: CONVERSATION_INCLUDE,
   })
 
+  if (isNewConversation) {
+    const { logContactActivity } = require("./crmContactActivity")
+    await logContactActivity(prisma, {
+      userId,
+      contactId: conversation.contactId,
+      type: "lead_created",
+      at: mapped.timestamp,
+    }).catch(() => {})
+  }
+
   return { message, conversation: updatedConversation, created, isNewConversation }
 }
 

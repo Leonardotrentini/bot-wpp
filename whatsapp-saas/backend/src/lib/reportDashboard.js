@@ -77,7 +77,7 @@ async function buildReportDashboard(userId, options = {}) {
   })
 
   const crmPromise = Promise.all([
-    buildCrmOverview(userId),
+    buildCrmOverview(userId, start, end),
     buildCrmFunnelByStage(userId),
     buildCrmActivitySeries(userId, start, end),
     buildCrmConversionCounts(userId, start, end),

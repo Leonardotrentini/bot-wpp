@@ -5,7 +5,17 @@ import {
   getMetricDef,
 } from './reportMetricCatalog.js'
 
-const STORAGE_VERSION = 1
+const STORAGE_VERSION = 2
+
+function migrateLayout(parsed) {
+  if (!parsed?.widgets) return parsed
+  const widgets = parsed.widgets.map((w) =>
+    w.id === 'w2' && w.metricId === 'groups.new_leads'
+      ? { ...w, metricId: 'crm.conversations_started' }
+      : w,
+  )
+  return { ...parsed, widgets, version: STORAGE_VERSION }
+}
 
 function storageKey(userId) {
   return `vesto_report_layout_${String(userId || 'default')}`
@@ -23,6 +33,11 @@ export function loadReportLayout(userId) {
     }
     const parsed = JSON.parse(raw)
     if (!parsed || parsed.version !== STORAGE_VERSION) {
+      const migrated = parsed?.version === 1 ? migrateLayout(parsed) : null
+      if (migrated) {
+        saveReportLayout(userId, migrated)
+        return migrated
+      }
       return {
         version: STORAGE_VERSION,
         filters: { ...DEFAULT_REPORT_FILTERS },

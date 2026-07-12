@@ -13,15 +13,32 @@ function parsePayloadAmount(payload) {
   return Number.isFinite(amount) ? amount : null
 }
 
-async function buildCrmOverview(userId) {
-  const [open, pending, resolved, unread, contacts] = await prisma.$transaction([
+async function buildCrmConversationsStarted(userId, start, end) {
+  /** Primeira mensagem recebida do lead define quando a conversa começou (ignora data do sync). */
+  const rows = await prisma.crmMessage.groupBy({
+    by: ["conversationId"],
+    where: { userId, fromMe: false },
+    _min: { timestamp: true },
+  })
+
+  let count = 0
+  for (const row of rows) {
+    const firstAt = row._min?.timestamp
+    if (firstAt && firstAt >= start && firstAt <= end) count += 1
+  }
+  return count
+}
+
+async function buildCrmOverview(userId, start, end) {
+  const [open, pending, resolved, unread, contacts, conversationsStarted] = await Promise.all([
     prisma.crmConversation.count({ where: { userId, status: "open" } }),
     prisma.crmConversation.count({ where: { userId, status: "pending" } }),
     prisma.crmConversation.count({ where: { userId, status: "resolved" } }),
     prisma.crmConversation.count({ where: { userId, unreadCount: { gt: 0 } } }),
     prisma.crmContact.count({ where: { userId } }),
+    buildCrmConversationsStarted(userId, start, end),
   ])
-  return { open, pending, resolved, unread, contacts }
+  return { open, pending, resolved, unread, contacts, conversationsStarted }
 }
 
 async function buildCrmFunnelByStage(userId) {
@@ -81,10 +98,8 @@ async function buildCrmActivitySeries(userId, start, end) {
 
 async function buildCrmConversionCounts(userId, start, end) {
   const range = { gte: start, lte: end }
-  const [conversationStarted, leadQualified, quote, purchase] = await Promise.all([
-    prisma.crmContact.count({
-      where: { userId, conversationStartedEventSentAt: range },
-    }),
+  const [conversationStarted, leadQualified, quote, purchase, metaConversationStarted] = await Promise.all([
+    buildCrmConversationsStarted(userId, start, end),
     prisma.crmContact.count({
       where: { userId, qualifiedEventSentAt: range },
     }),
@@ -94,9 +109,12 @@ async function buildCrmConversionCounts(userId, start, end) {
     prisma.crmContactActivity.count({
       where: { userId, type: "purchase_confirmed", createdAt: range },
     }),
+    prisma.crmContact.count({
+      where: { userId, conversationStartedEventSentAt: range },
+    }),
   ])
 
-  return { conversationStarted, leadQualified, quote, purchase }
+  return { conversationStarted, leadQualified, quote, purchase, metaConversationStarted }
 }
 
 async function buildCrmSalesByDay(userId, start, end) {
@@ -128,6 +146,7 @@ async function buildCrmSalesByDay(userId, start, end) {
 }
 
 module.exports = {
+  buildCrmConversationsStarted,
   buildCrmOverview,
   buildCrmFunnelByStage,
   buildCrmActivitySeries,

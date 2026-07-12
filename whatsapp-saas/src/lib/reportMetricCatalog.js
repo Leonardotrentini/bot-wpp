@@ -36,8 +36,8 @@ export const REPORT_METRIC_CATALOG = [
   },
   {
     id: 'groups.new_leads',
-    label: 'Novos leads',
-    description: 'Novos membros desde a ativação do grupo',
+    label: 'Novos membros (grupos)',
+    description: 'Novos participantes nos grupos WhatsApp monitorados',
     category: 'groups',
     chartType: 'kpi',
     format: 'number',
@@ -128,6 +128,15 @@ export const REPORT_METRIC_CATALOG = [
     defaultColSpan: 2,
   },
   // CRM — KPIs
+  {
+    id: 'crm.conversations_started',
+    label: 'Conversas iniciadas',
+    description: 'Primeira mensagem do lead no CRM no período',
+    category: 'crm',
+    chartType: 'kpi',
+    format: 'number',
+    defaultColSpan: 1,
+  },
   {
     id: 'crm.open',
     label: 'Conversas abertas',
@@ -332,7 +341,7 @@ export function getMetricsByCategory() {
 
 export const DEFAULT_REPORT_WIDGETS = [
   { id: 'w1', metricId: 'groups.active', colSpan: 1 },
-  { id: 'w2', metricId: 'groups.new_leads', colSpan: 1 },
+  { id: 'w2', metricId: 'crm.conversations_started', colSpan: 1 },
   { id: 'w3', metricId: 'crm.sales_revenue', colSpan: 1 },
   { id: 'w4', metricId: 'meta.spend', colSpan: 1 },
   { id: 'w5', metricId: 'groups.messages_series', colSpan: 2 },
@@ -385,7 +394,12 @@ export function resolveMetricData(metricId, data) {
     case 'groups.active':
       return { value: g?.connectedGroupsCount ?? 0, hint: g?.connectedGroupsLabel }
     case 'groups.new_leads':
-      return { value: g?.newLeads ?? 0, hint: 'Novos membros no período' }
+      return { value: g?.newLeads ?? 0, hint: 'Novos membros nos grupos (não é CRM)' }
+    case 'crm.conversations_started':
+      return {
+        value: c?.overview?.conversationsStarted ?? c?.conversions?.conversationStarted ?? 0,
+        hint: 'Primeira mensagem do lead no período',
+      }
     case 'groups.exits':
       return { value: g?.exits ?? 0, hint: 'Saídas detectadas' }
     case 'groups.active_pct':
@@ -508,6 +522,10 @@ export function resolveMetricData(metricId, data) {
           { label: 'Orçamento', value: conv.quote ?? 0 },
           { label: 'Compra', value: conv.purchase ?? 0 },
         ],
+        hint:
+          conv.metaConversationStarted != null
+            ? `Eventos Meta CAPI (ConversationStarted): ${conv.metaConversationStarted}`
+            : null,
       }
     }
     case 'attr.leads_count':
