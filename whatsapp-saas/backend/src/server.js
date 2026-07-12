@@ -96,6 +96,7 @@ const {
 } = require("./lib/messageMentions")
 const jwt = require("jsonwebtoken")
 const { createCrmRouter } = require("./routes/crm")
+const { createReportsRouter } = require("./routes/reports")
 const { createIntegrationsRouter } = require("./routes/integrations")
 const { createPublicMetaRouter } = require("./routes/publicMeta")
 const path = require("path")
@@ -188,6 +189,7 @@ app.use((req, res, next) => {
 
 app.use("/api/admin", adminRoutes)
 app.use("/api/crm", createCrmRouter({ io }))
+app.use("/api/reports", createReportsRouter())
 app.use("/api/integrations", createIntegrationsRouter())
 
 app.get("/health", async (_req, res) => {

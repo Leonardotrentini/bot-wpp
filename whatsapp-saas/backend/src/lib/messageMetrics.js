@@ -253,6 +253,10 @@ function periodToRange(period, startDate, endDate) {
   let start
   if (period === "hoje") {
     start = todayStartInSp(end)
+  } else if (period === "7d") {
+    start = new Date(end.getTime() - 7 * 86400000)
+  } else if (period === "30d") {
+    start = new Date(end.getTime() - 30 * 86400000)
   } else if (period === "custom" && startDate) {
     start = new Date(`${startDate}T00:00:00.000-03:00`)
   } else {

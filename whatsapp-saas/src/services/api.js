@@ -546,6 +546,25 @@ export async function refreshOverview({ groupIds = [], period = '2d' } = {}) {
   return getOverview({ groupIds, period })
 }
 
+export async function getReportDashboard({
+  period = '7d',
+  startDate,
+  endDate,
+  groupIds = [],
+  metaPeriod,
+} = {}) {
+  if (resolveUseRealApi()) {
+    const params = { period }
+    if (startDate) params.startDate = startDate
+    if (endDate) params.endDate = endDate
+    if (metaPeriod) params.metaPeriod = metaPeriod
+    if (groupIds?.length) params.groupIds = groupIds.join(',')
+    return apiClient.get('/reports/dashboard', { params })
+  }
+  await delay()
+  return mockResponse(mockDashboardMetrics)
+}
+
 /** @deprecated use getOverview */
 export async function getDashboardSummary() {
   return getOverview()

@@ -484,7 +484,7 @@ async function buildDashboard(userId, groupsIn = null) {
 }
 
 /** Visão geral unificada (Dashboard + Analytics enxuto). */
-async function buildOverview(userId, { groupJids = null, period = "2d" } = {}) {
+async function buildOverview(userId, { groupJids = null, period = "2d", startDate, endDate } = {}) {
   const allGroups = await prisma.whatsAppGroup.findMany({
     where: { userId },
     include: {
@@ -509,11 +509,11 @@ async function buildOverview(userId, { groupJids = null, period = "2d" } = {}) {
       : null
   const scope = selected?.length ? connected.filter((g) => selected.includes(g.groupJid)) : connected
 
-  const { start, end, retentionDays } = periodToRange(period)
+  const { start, end, retentionDays } = periodToRange(period, startDate, endDate)
   const leadMetrics = computeLeadMetrics(scope, start, end)
 
   const dashboard = await buildDashboard(userId, scope)
-  const analytics = await buildAnalytics(userId, period, undefined, undefined, scope)
+  const analytics = await buildAnalytics(userId, period, startDate, endDate, scope)
 
   const connectedGroupsList = (selected?.length ? scope : connected).map((g) => ({
     id: g.groupJid,
@@ -552,6 +552,8 @@ async function buildOverview(userId, { groupJids = null, period = "2d" } = {}) {
     topMembers: (analytics.topMembers || []).slice(0, 8),
     topMessages: analytics.topMessages || [],
     groupComparison: (analytics.groupComparison || []).slice(0, 10),
+    messagesByHour: analytics.messagesByHour,
+    responseRate: analytics.responseRate,
     meta: {
       ...dashboard.meta,
       ...analytics.meta,
