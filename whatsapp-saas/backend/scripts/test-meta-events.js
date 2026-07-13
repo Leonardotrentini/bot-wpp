@@ -102,13 +102,13 @@ function testPayloads() {
     mode: ctwaMode,
   })
   assert(ctwaQuote.event_name === QUOTE_EVENT, "CTWA Quote keeps contract name by default")
-  assert(ctwaQuote.action_source === "business_messaging", "CTWA Quote action_source")
+  assert(ctwaQuote.action_source === "system_generated", "CTWA no pixel usa system_generated")
   assert(ctwaQuote.user_data.whatsapp_business_account_id === 61586091841500, "CTWA WABA id")
   assert(!ctwaQuote.user_data.page_id, "CTWA must not send page_id")
   assert(ctwaQuote.user_data.ctwa_clid, "CTWA ctwa_clid")
   assert(ctwaQuote.custom_data.event_source === "ctwa", "CTWA event_source")
   assert(ctwaQuote.custom_data.content_category === CONTENT_CATEGORY.QUOTE, "CTWA Quote content_category")
-  assert(!ctwaQuote.event_source_url, "CTWA must not send event_source_url (business_messaging)")
+  assert(ctwaQuote.event_source_url, "CTWA no pixel envia event_source_url")
 
   const ctwaQualified = buildLeadQualifiedEvent({
     contact: mockContactCtwa,
@@ -118,8 +118,8 @@ function testPayloads() {
     mode: ctwaMode,
   })
   assert(ctwaQualified.event_name === LEAD_QUALIFIED_EVENT, "CTWA LeadQualified keeps contract name by default")
-  assert(ctwaQualified.action_source === "business_messaging", "CTWA LeadQualified action_source")
-  assert(!ctwaQualified.event_source_url, "CTWA LeadQualified must not send event_source_url")
+  assert(ctwaQualified.action_source === "system_generated", "CTWA no pixel usa system_generated")
+  assert(ctwaQualified.event_source_url, "CTWA no pixel envia event_source_url")
   assert(ctwaQualified.custom_data.content_category === CONTENT_CATEGORY.QUALIFIED_LEAD, "CTWA qualified category")
 
   const ctwaConversation = buildConversationStartedEvent({

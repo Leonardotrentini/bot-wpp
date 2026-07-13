@@ -419,7 +419,8 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   if (!mapped.fromMe) {
     const ctwaClid = extractCtwaClidFromRecord(record)
     if (ctwaClid) {
-      await storeContactCtwaClid(prisma, conversation.contact, ctwaClid).catch(() => {})
+      const withCtwa = await storeContactCtwaClid(prisma, conversation.contact, ctwaClid).catch(() => null)
+      if (withCtwa) conversation.contact = withCtwa
     }
     if (mapped.body) {
       let contact = conversation.contact

@@ -19,6 +19,7 @@
     "test:meta": "node scripts/test-meta-events.js",
     "test:meta:capi": "node scripts/test-meta-capi-contract.js",
     "test:meta:live": "node scripts/test-meta-capi-live.js",
+    "test:meta:live:db": "node scripts/test-meta-capi-live-db.js",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "prisma": {

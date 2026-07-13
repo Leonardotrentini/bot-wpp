@@ -8,9 +8,10 @@
  * - Purchase — compra confirmada
  *
  * Modos:
- * - CRM (LP/orgânico): action_source system_generated + fbc quando disponível
- * - CTWA (anúncio WhatsApp): action_source business_messaging + ctwa_clid + whatsapp_business_account_id
- *   (Meta só aceita event_name da allowlist — não custom; ver CTWA_META_EVENT_NAMES)
+ * - CRM (LP/orgânico): action_source system_generated + fbc/fbp quando disponível
+ * - CTWA (anúncio WhatsApp) → pixel (padrão): system_generated + ctwa_clid em user_data
+ *   (nomes custom ConversationStarted etc. são rejeitados com business_messaging — erro 2804066)
+ * - CTWA → WABA dataset (META_USE_WABA_DATASET=true): business_messaging + messaging_channel
  */
 
 const crypto = require("crypto")
@@ -197,6 +198,20 @@ function eventSourceForMode(mode) {
   return mode.mode === "ctwa" ? "ctwa" : "crm"
 }
 
+/** action_source por origem e destino CAPI (pixel vs WABA dataset). */
+function buildActionSourceFields(mode) {
+  if (mode.mode === "ctwa" && useWabaDatasetTarget()) {
+    return {
+      action_source: "business_messaging",
+      messaging_channel: META_MESSAGING_CHANNEL,
+    }
+  }
+  return {
+    action_source: "system_generated",
+    event_source_url: VESTO_EVENT_SOURCE_URL,
+  }
+}
+
 function buildFunnelCustomData({ contentCategory, eventSource, amount, contentName, ticket }) {
   if (!contentCategory || typeof contentCategory !== "string") {
     throw new Error("custom_data.content_category é obrigatório em todos os eventos do funil")
@@ -217,27 +232,34 @@ function buildFunnelCustomData({ contentCategory, eventSource, amount, contentNa
 
 function buildCrmUserData(contact, { userId }) {
   const userData = ensureUserData(contact, { userId })
+  attachLpAttributionToUserData(userData, contact)
+  return userData
+}
+
+/** CTWA: ctwa_clid é obrigatório; WABA id opcional quando o destino é o pixel. */
+function buildCtwaUserData(contact, { userId, whatsappBusinessAccountId, ctwaClid }) {
+  const userData = ensureUserData(contact, { userId })
+  const clid = ctwaClid || resolveCtwaClid(contact)
+  if (!clid) {
+    const err = new Error("Lead CTWA sem ctwa_clid persistido — evento não pode ser atribuído ao anúncio.")
+    err.code = "MISSING_CTWA_CLID"
+    throw err
+  }
+  userData.ctwa_clid = clid
+
+  const wabaId = parseFacebookPageId(whatsappBusinessAccountId)
+  if (wabaId) userData.whatsapp_business_account_id = wabaId
+
+  // Híbrido raro (LP → depois CTWA): cookies da LP ajudam atribuição.
+  attachLpAttributionToUserData(userData, contact)
+  return userData
+}
+
+function attachLpAttributionToUserData(userData, contact) {
   const fbc = resolveFbc(contact)
   if (fbc) userData.fbc = fbc
   const fbp = resolveFbp(contact)
   if (fbp) userData.fbp = fbp
-  return userData
-}
-
-function buildCtwaUserData(contact, { userId, whatsappBusinessAccountId, ctwaClid }) {
-  const wabaId = parseFacebookPageId(whatsappBusinessAccountId)
-  if (!wabaId) {
-    const err = new Error(
-      "Configure o ID da conta WhatsApp Business (WABA) em Integrações — obrigatório para anúncios Click-to-WhatsApp.",
-    )
-    err.code = "MISSING_WABA_ID"
-    throw err
-  }
-  const userData = ensureUserData(contact, { userId })
-  // CTWA WhatsApp: Meta exige whatsapp_business_account_id + ctwa_clid (não page_id — erro 2804072).
-  userData.whatsapp_business_account_id = wabaId
-  userData.ctwa_clid = ctwaClid
-  return userData
 }
 
 function buildFunnelEvent({
@@ -258,14 +280,12 @@ function buildFunnelEvent({
     event_time: eventTimeSec,
     event_id: eventId,
     custom_data: { ...customData, event_source: eventSource },
+    ...buildActionSourceFields(mode),
   }
 
   if (mode.mode === "ctwa") {
-    // business_messaging: Meta rejeita event_source_url (erro 2804064 em LeadQualified etc.)
     return {
       ...base,
-      action_source: "business_messaging",
-      messaging_channel: META_MESSAGING_CHANNEL,
       user_data: buildCtwaUserData(contact, {
         userId,
         whatsappBusinessAccountId: integration.facebookPageId,
@@ -276,8 +296,6 @@ function buildFunnelEvent({
 
   return {
     ...base,
-    event_source_url: VESTO_EVENT_SOURCE_URL,
-    action_source: "system_generated",
     user_data: buildCrmUserData(contact, { userId }),
   }
 }
@@ -695,22 +713,6 @@ async function dispatchMetaEvent(prisma, {
       stable: stableEventId,
     })
 
-  if (mode.mode === "ctwa" && !integration.facebookPageId) {
-    const message =
-      "Lead veio de anúncio Click-to-WhatsApp. Configure o ID da conta WhatsApp Business (WABA) em Integrações."
-    await recordIntegrationResult(prisma, userId, { eventName, error: message })
-    return {
-      sent: false,
-      eventId,
-      eventName,
-      value: amount,
-      trackingMode: mode.mode,
-      error: message,
-      reason: "missing_waba_id",
-      ...extraReturn,
-    }
-  }
-
   try {
     const payload = buildPayload({ eventId, mode })
     const eventTargetId = await resolveEventTargetId(integration, mode)
@@ -1094,6 +1096,9 @@ module.exports = {
   buildQuoteEvent,
   buildPurchaseEvent,
   buildFunnelCustomData,
+  buildCrmUserData,
+  buildCtwaUserData,
+  attachLpAttributionToUserData,
   trackMetaForContactTag,
   CTWA_META_EVENT_NAMES,
   resolveMetaPayloadEventName,

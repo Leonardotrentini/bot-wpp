@@ -174,40 +174,102 @@ function testCtwaPayloadsDefaultNames() {
     const ctwaMode = resolveTrackingMode(mockContactCtwa)
     assert(ctwaMode.mode === "ctwa", "modo ctwa")
 
-    const conversation = buildConversationStartedEvent({
-      contact: mockContactCtwa,
-      eventId: "vesto-conversation-started-contact-ctwa-1",
-      userId: "user-1",
-      integration: mockIntegration,
-      mode: ctwaMode,
-    })
-    assert(
-      resolveMetaPayloadEventName(CONVERSATION_STARTED_EVENT, ctwaMode) === CONVERSATION_STARTED_EVENT,
-      "sem alias CTWA por padrão",
-    )
-    assertFunnelPayload(conversation, {
-      eventName: CONVERSATION_STARTED_EVENT,
-      contentCategory: "conversation_started",
-    })
-    assert(conversation.action_source === "business_messaging", "CTWA action_source")
-    assert(conversation.custom_data.content_category === "conversation_started", "CTWA content_category")
+    const stages = [
+      () =>
+        buildConversationStartedEvent({
+          contact: mockContactCtwa,
+          eventId: "vesto-conversation-started-contact-ctwa-1",
+          userId: "user-1",
+          integration: mockIntegration,
+          mode: ctwaMode,
+        }),
+      () =>
+        buildLeadQualifiedEvent({
+          contact: mockContactCtwa,
+          eventId: "vesto-lead-qualified-contact-ctwa-1",
+          userId: "user-1",
+          integration: mockIntegration,
+          mode: ctwaMode,
+        }),
+      () =>
+        buildQuoteEvent({
+          contact: mockContactCtwa,
+          amount: 500,
+          eventId: "vesto-quote-contact-ctwa-1",
+          userId: "user-1",
+          integration: mockIntegration,
+          mode: ctwaMode,
+        }),
+      () =>
+        buildPurchaseEvent({
+          contact: mockContactCtwa,
+          amount: 800,
+          ticket: "PED-CTWA",
+          eventId: "vesto-purchase-contact-ctwa-1-PED-CTWA",
+          userId: "user-1",
+          integration: mockIntegration,
+          mode: ctwaMode,
+        }),
+    ]
 
-    const qualified = buildLeadQualifiedEvent({
+    for (const build of stages) {
+      const payload = build()
+      assert(payload.action_source === "system_generated", "CTWA no pixel usa system_generated")
+      assert(payload.event_source_url, "CTWA no pixel inclui event_source_url")
+      assert(!payload.messaging_channel, "CTWA no pixel sem messaging_channel")
+      assert(payload.user_data?.ctwa_clid, "CTWA user_data.ctwa_clid")
+      assert(payload.custom_data?.content_category, "CTWA content_category")
+      assert(
+        resolveMetaPayloadEventName(payload.event_name, ctwaMode) === payload.event_name,
+        "nomes do contrato sem alias",
+      )
+    }
+
+    const integrationNoWaba = { ...mockIntegration, facebookPageId: "" }
+    const quoteNoWaba = buildQuoteEvent({
       contact: mockContactCtwa,
-      eventId: "vesto-lead-qualified-contact-ctwa-1",
+      amount: 100,
+      eventId: "vesto-quote-no-waba",
       userId: "user-1",
-      integration: mockIntegration,
+      integration: integrationNoWaba,
       mode: ctwaMode,
     })
-    assertFunnelPayload(qualified, {
-      eventName: LEAD_QUALIFIED_EVENT,
-      contentCategory: "qualified_lead",
-    })
+    assert(quoteNoWaba.user_data.ctwa_clid, "CTWA sem WABA configurado ainda envia ctwa_clid")
+    assert(!quoteNoWaba.user_data.whatsapp_business_account_id, "sem WABA id quando não configurado")
   } finally {
     if (prev == null) delete process.env.META_USE_CTWA_EVENT_ALIASES
     else process.env.META_USE_CTWA_EVENT_ALIASES = prev
   }
-  console.log("✓ payloads CTWA com nomes do contrato + content_category")
+  console.log("✓ payloads CTWA com nomes do contrato + ctwa_clid + content_category")
+}
+
+function testCrmLpAttributionPayloads() {
+  const contactLp = {
+    id: "contact-lp-1",
+    phone: "554796747378",
+    customFields: {
+      meta: {
+        fbclid: "IwARtestFbclid123",
+        fbc: "fb.1.1700000000.IwARtestFbclid123",
+        fbp: "fb.1.1700000000.1234567890",
+      },
+    },
+  }
+  const crmMode = resolveTrackingMode(contactLp)
+  assert(crmMode.mode === "crm", "LP sem ctwa = crm")
+
+  const qualified = buildLeadQualifiedEvent({
+    contact: contactLp,
+    eventId: "vesto-lead-qualified-contact-lp-1",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: crmMode,
+  })
+  assert(qualified.action_source === "system_generated", "LP action_source")
+  assert(qualified.user_data.fbc, "LP user_data.fbc")
+  assert(qualified.user_data.fbp, "LP user_data.fbp")
+  assert(qualified.custom_data.content_category === "qualified_lead", "LP content_category")
+  console.log("✓ payloads LP com fbc/fbp + content_category")
 }
 
 function main() {
@@ -216,6 +278,7 @@ function main() {
   testTestEventCodeEnv()
   testCrmPayloads()
   testCtwaPayloadsDefaultNames()
+  testCrmLpAttributionPayloads()
   console.log("\nAll meta CAPI contract tests OK")
 }
 
