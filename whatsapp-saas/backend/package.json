@@ -17,6 +17,8 @@
     "test:groups": "node scripts/test-group-discovery.js",
     "test:crm": "node scripts/test-crm.js",
     "test:meta": "node scripts/test-meta-events.js",
+    "test:meta:capi": "node scripts/test-meta-capi-contract.js",
+    "test:meta:live": "node scripts/test-meta-capi-live.js",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "prisma": {

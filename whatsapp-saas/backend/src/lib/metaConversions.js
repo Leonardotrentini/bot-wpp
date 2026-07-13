@@ -36,7 +36,39 @@ const LEAD_QUALIFIED_EVENT = "LeadQualified"
 const QUOTE_EVENT = "Quote"
 const PURCHASE_EVENT = "Purchase"
 
-/** Nomes enviados à Meta em CTWA (business_messaging). Custom events são rejeitados (2804066). */
+/** Mapa central estágio → (event_name, content_category, idempotência). */
+const FUNNEL_STAGES = Object.freeze({
+  [CONVERSATION_STARTED_EVENT]: {
+    eventName: CONVERSATION_STARTED_EVENT,
+    contentCategory: "conversation_started",
+    eventIdPrefix: "vesto-conversation-started",
+    idempotencyField: "conversationStartedEventSentAt",
+    stableEventId: true,
+  },
+  [LEAD_QUALIFIED_EVENT]: {
+    eventName: LEAD_QUALIFIED_EVENT,
+    contentCategory: "qualified_lead",
+    eventIdPrefix: "vesto-lead-qualified",
+    idempotencyField: "qualifiedEventSentAt",
+    stableEventId: true,
+  },
+  [QUOTE_EVENT]: {
+    eventName: QUOTE_EVENT,
+    contentCategory: "quote",
+    eventIdPrefix: "vesto-quote",
+    idempotencyField: "quoteEventSentAt",
+    stableEventId: true,
+  },
+  [PURCHASE_EVENT]: {
+    eventName: PURCHASE_EVENT,
+    contentCategory: "purchase",
+    eventIdPrefix: "vesto-purchase",
+    idempotencyField: null,
+    stableEventId: false,
+  },
+})
+
+/** Nomes legados CTWA (só se META_USE_CTWA_EVENT_ALIASES=true). */
 const CTWA_META_EVENT_NAMES = {
   [CONVERSATION_STARTED_EVENT]: "LeadSubmitted",
   [LEAD_QUALIFIED_EVENT]: "QualifiedLead",
@@ -44,19 +76,48 @@ const CTWA_META_EVENT_NAMES = {
   [PURCHASE_EVENT]: PURCHASE_EVENT,
 }
 
+function useCtwaEventAliases() {
+  return String(process.env.META_USE_CTWA_EVENT_ALIASES || "").toLowerCase() === "true"
+}
+
+function useWabaDatasetTarget() {
+  return String(process.env.META_USE_WABA_DATASET || "").toLowerCase() === "true"
+}
+
 function resolveMetaPayloadEventName(internalEventName, mode) {
-  if (mode?.mode === "ctwa") {
+  if (mode?.mode === "ctwa" && useCtwaEventAliases()) {
     return CTWA_META_EVENT_NAMES[internalEventName] || internalEventName
   }
   return internalEventName
 }
 
-/** Valores fixos de content_category — usados nas conversões personalizadas da Meta. */
+/** Valores fixos de content_category — espelham FUNNEL_STAGES. */
 const CONTENT_CATEGORY = {
-  CONVERSATION_STARTED: "conversation_started",
-  QUALIFIED_LEAD: "qualified_lead",
-  QUOTE: "quote",
-  PURCHASE: "purchase",
+  CONVERSATION_STARTED: FUNNEL_STAGES[CONVERSATION_STARTED_EVENT].contentCategory,
+  QUALIFIED_LEAD: FUNNEL_STAGES[LEAD_QUALIFIED_EVENT].contentCategory,
+  QUOTE: FUNNEL_STAGES[QUOTE_EVENT].contentCategory,
+  PURCHASE: FUNNEL_STAGES[PURCHASE_EVENT].contentCategory,
+}
+
+function getFunnelStage(eventName) {
+  const stage = FUNNEL_STAGES[eventName]
+  if (!stage) throw new Error(`Estágio de funil desconhecido: ${eventName}`)
+  return stage
+}
+
+function buildOccurrenceEventId({ eventIdPrefix, contactId, ticket, stable = false }) {
+  const base = `${eventIdPrefix}-${contactId}`
+  if (stable) return base
+  if (ticket) return `${base}-${String(ticket).slice(0, 80)}`
+  return `${base}-${Date.now()}`
+}
+
+function resolveTestEventCode(integration, { useTestCode = false } = {}) {
+  if (!useTestCode) return null
+  const envCode = String(process.env.META_TEST_EVENT_CODE || "").trim()
+  if (envCode) return envCode
+  const dbCode = String(integration?.testEventCode || "").trim()
+  return dbCode || null
 }
 
 function hashMetaValue(value) {
@@ -137,11 +198,14 @@ function eventSourceForMode(mode) {
 }
 
 function buildFunnelCustomData({ contentCategory, eventSource, amount, contentName, ticket }) {
+  if (!contentCategory || typeof contentCategory !== "string") {
+    throw new Error("custom_data.content_category é obrigatório em todos os eventos do funil")
+  }
   const custom = {
     lead_event_source: CRM_EVENT_SOURCE,
     event_source: eventSource,
+    content_category: contentCategory,
   }
-  if (contentCategory) custom.content_category = contentCategory
   if (contentName) custom.content_name = contentName
   if (amount != null) {
     custom.currency = "BRL"
@@ -219,9 +283,10 @@ function buildFunnelEvent({
 }
 
 function buildConversationStartedEvent({ contact, eventId, userId, integration, mode, eventTime }) {
+  const stage = getFunnelStage(CONVERSATION_STARTED_EVENT)
   const clickSec = getStoredClickAt(contact)
   return buildFunnelEvent({
-    eventName: CONVERSATION_STARTED_EVENT,
+    eventName: stage.eventName,
     contact,
     eventId,
     userId,
@@ -229,38 +294,40 @@ function buildConversationStartedEvent({ contact, eventId, userId, integration, 
     mode,
     eventTime: eventTime != null ? eventTime : clickSec || undefined,
     customData: buildFunnelCustomData({
-      contentCategory: CONTENT_CATEGORY.CONVERSATION_STARTED,
+      contentCategory: stage.contentCategory,
       eventSource: eventSourceForMode(mode),
     }),
   })
 }
 
 function buildLeadQualifiedEvent({ contact, eventId, userId, integration, mode }) {
+  const stage = getFunnelStage(LEAD_QUALIFIED_EVENT)
   return buildFunnelEvent({
-    eventName: LEAD_QUALIFIED_EVENT,
+    eventName: stage.eventName,
     contact,
     eventId,
     userId,
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: CONTENT_CATEGORY.QUALIFIED_LEAD,
+      contentCategory: stage.contentCategory,
       eventSource: eventSourceForMode(mode),
     }),
   })
 }
 
 function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }) {
+  const stage = getFunnelStage(QUOTE_EVENT)
   const eventSource = eventSourceForMode(mode)
   return buildFunnelEvent({
-    eventName: QUOTE_EVENT,
+    eventName: stage.eventName,
     contact,
     eventId,
     userId,
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: CONTENT_CATEGORY.QUOTE,
+      contentCategory: stage.contentCategory,
       eventSource,
       amount,
       contentName: mode.mode === "ctwa" ? contactDisplayName(contact) : "Orçamento WhatsApp",
@@ -269,16 +336,17 @@ function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }
 }
 
 function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode }) {
+  const stage = getFunnelStage(PURCHASE_EVENT)
   const eventSource = eventSourceForMode(mode)
   return buildFunnelEvent({
-    eventName: PURCHASE_EVENT,
+    eventName: stage.eventName,
     contact,
     eventId,
     userId,
     integration,
     mode,
     customData: buildFunnelCustomData({
-      contentCategory: CONTENT_CATEGORY.PURCHASE,
+      contentCategory: stage.contentCategory,
       eventSource,
       amount,
       contentName: mode.mode === "ctwa" ? contactDisplayName(contact) : "Compra WhatsApp",
@@ -558,14 +626,21 @@ async function resolveWabaDatasetId(wabaId, accessToken) {
   return String(json.id)
 }
 
+async function resolveEventTargetId(integration, mode) {
+  if (mode?.mode === "ctwa" && useWabaDatasetTarget()) {
+    const wabaId = parseFacebookPageId(integration.facebookPageId)
+    return resolveWabaDatasetId(wabaId, integration.accessToken)
+  }
+  return integration.pixelId
+}
+
 async function sendMetaEvent(integration, eventPayload, { useTestCode = false, eventTargetId = null } = {}) {
   const targetId = eventTargetId || integration.pixelId
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${targetId}/events?access_token=${encodeURIComponent(integration.accessToken)}`
   const body = { data: [eventPayload] }
 
-  if (useTestCode && integration.testEventCode) {
-    body.test_event_code = integration.testEventCode
-  }
+  const testCode = resolveTestEventCode(integration, { useTestCode })
+  if (testCode) body.test_event_code = testCode
 
   const res = await fetch(url, {
     method: "POST",
@@ -603,12 +678,22 @@ async function dispatchMetaEvent(prisma, {
   integration,
   eventName,
   eventIdPrefix,
+  eventId: eventIdInput,
+  stableEventId = false,
+  ticket = null,
   buildPayload,
   amount = null,
   extraReturn = {},
 }) {
   const mode = resolveTrackingMode(contact)
-  const eventId = `${eventIdPrefix}-${contact.id}-${Date.now()}`
+  const eventId =
+    eventIdInput ||
+    buildOccurrenceEventId({
+      eventIdPrefix,
+      contactId: contact.id,
+      ticket,
+      stable: stableEventId,
+    })
 
   if (mode.mode === "ctwa" && !integration.facebookPageId) {
     const message =
@@ -628,11 +713,7 @@ async function dispatchMetaEvent(prisma, {
 
   try {
     const payload = buildPayload({ eventId, mode })
-    let eventTargetId = integration.pixelId
-    if (mode.mode === "ctwa") {
-      const wabaId = parseFacebookPageId(integration.facebookPageId)
-      eventTargetId = await resolveWabaDatasetId(wabaId, integration.accessToken)
-    }
+    const eventTargetId = await resolveEventTargetId(integration, mode)
     const result = await sendMetaEvent(integration, payload, { eventTargetId })
     await recordIntegrationResult(prisma, userId, { eventName, eventsReceived: result.events_received })
 
@@ -646,6 +727,8 @@ async function dispatchMetaEvent(prisma, {
       trackingMode: mode.mode,
       eventsReceived: result.events_received,
       metaTargetId: eventTargetId,
+      metaResponse: result,
+      payload,
       ...extraReturn,
     }
   } catch (err) {
@@ -657,6 +740,7 @@ async function dispatchMetaEvent(prisma, {
       value: amount,
       trackingMode: mode.mode,
       error: err.message,
+      metaResponse: err.metaResponse,
       ...extraReturn,
     }
   }
@@ -671,6 +755,7 @@ async function dispatchIdempotentMetaEvent(prisma, {
   idempotencyField,
   buildPayload,
   amount = null,
+  ticket = null,
   gate = true,
 }) {
   if (!gate) {
@@ -689,8 +774,10 @@ async function dispatchIdempotentMetaEvent(prisma, {
     integration,
     eventName,
     eventIdPrefix,
+    stableEventId: Boolean(getFunnelStage(eventName).stableEventId),
     buildPayload,
     amount,
+    ticket,
   })
 
   if (result.sent) {
@@ -780,7 +867,9 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
     contact,
     integration,
     eventName: PURCHASE_EVENT,
-    eventIdPrefix: "vesto-purchase",
+    eventIdPrefix: getFunnelStage(PURCHASE_EVENT).eventIdPrefix,
+    stableEventId: false,
+    ticket,
     amount,
     buildPayload: ({ eventId, mode }) =>
       buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode }),
@@ -794,9 +883,8 @@ async function testMetaIntegration(prisma, userId) {
   }
 
   const results = []
-  const testHint = integration.testEventCode
-    ? ` Código ${integration.testEventCode} — veja em Eventos de teste.`
-    : ""
+  const testCode = resolveTestEventCode(integration, { useTestCode: true })
+  const testHint = testCode ? ` Código ${testCode} — veja em Eventos de teste.` : ""
 
   const mockContact = {
     id: `test-contact-${userId}`,
@@ -811,11 +899,19 @@ async function testMetaIntegration(prisma, userId) {
 
   const sendTest = async (name, payload) => {
     try {
-      const result = await sendMetaEvent(integration, payload, { useTestCode: true })
-      results.push({ name, ok: true, eventsReceived: result.events_received })
+      const result = await sendMetaEvent(integration, payload, { useTestCode: Boolean(testCode) })
+      results.push({
+        name,
+        ok: true,
+        eventsReceived: result.events_received,
+        fbtrace_id: result.fbtrace_id,
+        content_category: payload?.custom_data?.content_category,
+        event_name: payload?.event_name,
+        event_id: payload?.event_id,
+      })
       return true
     } catch (err) {
-      results.push({ name, ok: false, error: err.message })
+      results.push({ name, ok: false, error: err.message, metaResponse: err.metaResponse })
       return false
     }
   }
@@ -974,12 +1070,16 @@ module.exports = {
   QUOTE_EVENT,
   PURCHASE_EVENT,
   CONTENT_CATEGORY,
+  FUNNEL_STAGES,
   VESTO_EVENT_SOURCE_URL,
   formatIntegrationRow,
   getMetaIntegration,
   getMetaIntegrationEnriched,
   getMetaIntegrationCredentials,
   resolveWabaDatasetId,
+  resolveEventTargetId,
+  resolveTestEventCode,
+  buildOccurrenceEventId,
   upsertMetaIntegration,
   updateMetaLpIntegration,
   trackConversationStartedEvent,
@@ -987,12 +1087,16 @@ module.exports = {
   trackCrmQuoteEvent,
   trackCrmPurchaseEvent,
   testMetaIntegration,
+  sendMetaEvent,
   resolveTrackingMode,
   buildConversationStartedEvent,
   buildLeadQualifiedEvent,
   buildQuoteEvent,
   buildPurchaseEvent,
+  buildFunnelCustomData,
   trackMetaForContactTag,
   CTWA_META_EVENT_NAMES,
   resolveMetaPayloadEventName,
+  useCtwaEventAliases,
+  useWabaDatasetTarget,
 }
