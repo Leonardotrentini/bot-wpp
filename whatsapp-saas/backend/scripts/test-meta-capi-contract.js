@@ -18,6 +18,8 @@ const {
   buildOccurrenceEventId,
   resolveTestEventCode,
   resolveMetaPayloadEventName,
+  sendMetaEvent,
+  assertFunnelPayloadHasContentCategory,
 } = require("../src/lib/metaConversions")
 
 const mockContactCrm = {
@@ -272,14 +274,67 @@ function testCrmLpAttributionPayloads() {
   console.log("✓ payloads LP com fbc/fbp + content_category")
 }
 
-function main() {
+function testSendMetaGuardrail() {
+  const integration = { pixelId: "1", accessToken: "x", testEventCode: "TEST" }
+  const valid = buildLeadQualifiedEvent({
+    contact: mockContactCrm,
+    eventId: "guardrail-ok",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: { mode: "crm" },
+  })
+  assertFunnelPayloadHasContentCategory(valid)
+
+  const invalid = { ...valid, custom_data: { lead_event_source: "Vesto", event_source: "crm" } }
+  let threw = false
+  try {
+    assertFunnelPayloadHasContentCategory(invalid)
+  } catch (err) {
+    threw = err.code === "MISSING_CONTENT_CATEGORY"
+  }
+  assert(threw, "assertFunnelPayloadHasContentCategory deve lançar sem content_category")
+  console.log("✓ guardrail assertFunnelPayloadHasContentCategory")
+}
+
+async function testSendMetaGuardrailAsync() {
+  const integration = { pixelId: "1", accessToken: "x", testEventCode: "TEST" }
+  const valid = buildLeadQualifiedEvent({
+    contact: mockContactCrm,
+    eventId: "guardrail-send",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: { mode: "crm" },
+  })
+  const invalid = { ...valid, custom_data: { lead_event_source: "Vesto" } }
+
+  const originalFetch = global.fetch
+  global.fetch = async () => {
+    throw new Error("fetch não deveria ser chamado sem content_category")
+  }
+  let sendThrew = false
+  try {
+    await sendMetaEvent(integration, invalid, { useTestCode: true })
+  } catch (err) {
+    sendThrew = err.code === "MISSING_CONTENT_CATEGORY"
+  }
+  global.fetch = originalFetch
+  assert(sendThrew, "sendMetaEvent deve bloquear funil sem content_category")
+  console.log("✓ guardrail sendMetaEvent bloqueia funil sem content_category")
+}
+
+async function main() {
   testFunnelStageMap()
   testStableEventIds()
   testTestEventCodeEnv()
   testCrmPayloads()
   testCtwaPayloadsDefaultNames()
   testCrmLpAttributionPayloads()
+  testSendMetaGuardrail()
+  await testSendMetaGuardrailAsync()
   console.log("\nAll meta CAPI contract tests OK")
 }
 
-main()
+main().catch((err) => {
+  console.error(err.message || err)
+  process.exit(1)
+})

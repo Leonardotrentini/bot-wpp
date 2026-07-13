@@ -58,8 +58,22 @@ export function trackMetaPixel(eventName, params = {}, eventId) {
 export function trackCrmMetaEvent(tracking) {
   if (!tracking?.eventId || !tracking?.eventName || tracking.skipped) return
 
-  const params = { currency: 'BRL' }
+  const contentCategory =
+    tracking.contentCategory || tracking.payload?.custom_data?.content_category || null
+  if (!contentCategory) {
+    if (typeof console !== 'undefined') {
+      console.warn('[metaPixel] dedup omitido: content_category ausente no tracking', tracking.eventName)
+    }
+    return false
+  }
+
+  const params = {
+    currency: 'BRL',
+    lead_event_source: 'Vesto',
+    content_category: contentCategory,
+  }
   if (tracking.value != null) params.value = tracking.value
 
   trackMetaPixel(tracking.eventName, params, tracking.eventId)
+  return true
 }

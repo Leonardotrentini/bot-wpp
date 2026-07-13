@@ -106,6 +106,26 @@ function getFunnelStage(eventName) {
   return stage
 }
 
+const FUNNEL_EVENT_NAMES = new Set(Object.keys(FUNNEL_STAGES))
+
+function isFunnelEventName(eventName) {
+  return FUNNEL_EVENT_NAMES.has(String(eventName || ""))
+}
+
+/** Guardrail: eventos do funil nunca saem sem content_category. */
+function assertFunnelPayloadHasContentCategory(eventPayload) {
+  const eventName = eventPayload?.event_name
+  if (!isFunnelEventName(eventName)) return
+  const category = eventPayload?.custom_data?.content_category
+  if (!category || typeof category !== "string" || !category.trim()) {
+    const err = new Error(
+      `Evento ${eventName} bloqueado: custom_data.content_category é obrigatório em eventos contáveis do funil.`,
+    )
+    err.code = "MISSING_CONTENT_CATEGORY"
+    throw err
+  }
+}
+
 function buildOccurrenceEventId({ eventIdPrefix, contactId, ticket, stable = false }) {
   const base = `${eventIdPrefix}-${contactId}`
   if (stable) return base
@@ -653,6 +673,8 @@ async function resolveEventTargetId(integration, mode) {
 }
 
 async function sendMetaEvent(integration, eventPayload, { useTestCode = false, eventTargetId = null } = {}) {
+  assertFunnelPayloadHasContentCategory(eventPayload)
+
   const targetId = eventTargetId || integration.pixelId
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${targetId}/events?access_token=${encodeURIComponent(integration.accessToken)}`
   const body = { data: [eventPayload] }
@@ -725,6 +747,7 @@ async function dispatchMetaEvent(prisma, {
       sent: true,
       eventId,
       eventName,
+      contentCategory: payload?.custom_data?.content_category || null,
       value: amount,
       trackingMode: mode.mode,
       eventsReceived: result.events_received,
@@ -886,7 +909,14 @@ async function testMetaIntegration(prisma, userId) {
 
   const results = []
   const testCode = resolveTestEventCode(integration, { useTestCode: true })
-  const testHint = testCode ? ` Código ${testCode} — veja em Eventos de teste.` : ""
+  if (!testCode) {
+    return {
+      error: "VALIDATION",
+      message:
+        "Configure o código de eventos de teste em Integrações → Meta antes de usar o botão Testar. Eventos de funil não são enviados ao dataset real por este botão.",
+    }
+  }
+  const testHint = ` Código ${testCode} — veja em Eventos de teste.`
 
   const mockContact = {
     id: `test-contact-${userId}`,
@@ -901,7 +931,7 @@ async function testMetaIntegration(prisma, userId) {
 
   const sendTest = async (name, payload) => {
     try {
-      const result = await sendMetaEvent(integration, payload, { useTestCode: Boolean(testCode) })
+      const result = await sendMetaEvent(integration, payload, { useTestCode: true })
       results.push({
         name,
         ok: true,
@@ -1073,6 +1103,9 @@ module.exports = {
   PURCHASE_EVENT,
   CONTENT_CATEGORY,
   FUNNEL_STAGES,
+  FUNNEL_EVENT_NAMES,
+  isFunnelEventName,
+  assertFunnelPayloadHasContentCategory,
   VESTO_EVENT_SOURCE_URL,
   formatIntegrationRow,
   getMetaIntegration,

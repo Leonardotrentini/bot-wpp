@@ -154,11 +154,17 @@ async function testLiveApi() {
     return
   }
 
+  const testEventCode = String(process.env.META_TEST_EVENT_CODE || process.env.META_TEST_CODE || "").trim()
+  if (!testEventCode) {
+    console.log("⊘ Live API skipped (defina META_TEST_EVENT_CODE — scripts não enviam ao dataset real sem test code)")
+    return
+  }
+
   const integration = {
     ...mockIntegration,
     pixelId: process.env.META_PIXEL_ID,
     accessToken: process.env.META_ACCESS_TOKEN,
-    testEventCode: process.env.META_TEST_CODE || "",
+    testEventCode,
   }
 
   const payload = buildQuoteEvent({
@@ -171,8 +177,7 @@ async function testLiveApi() {
   })
 
   const url = `https://graph.facebook.com/v22.0/${integration.pixelId}/events?access_token=${encodeURIComponent(integration.accessToken)}`
-  const body = { data: [payload] }
-  if (integration.testEventCode) body.test_event_code = integration.testEventCode
+  const body = { data: [payload], test_event_code: testEventCode }
 
   const res = await fetch(url, {
     method: "POST",
