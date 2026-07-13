@@ -442,6 +442,10 @@ async function getMetaIntegrationEnriched(prisma, userId) {
   const integration = formatIntegrationRow(row)
   if (!integration) return null
 
+  if (!useWabaDatasetTarget()) {
+    return { ...integration, wabaDatasetId: null, wabaDatasetSkipped: true }
+  }
+
   const wabaId = parseFacebookPageId(integration.facebookPageId)
   if (!wabaId || !row?.accessToken) {
     return { ...integration, wabaDatasetId: null }
@@ -455,6 +459,7 @@ async function getMetaIntegrationEnriched(prisma, userId) {
       ...integration,
       wabaDatasetId: null,
       wabaDatasetError: err.message || "Não foi possível obter o dataset do WhatsApp.",
+      wabaDatasetOptional: true,
     }
   }
 }
@@ -1014,24 +1019,29 @@ async function testMetaIntegration(prisma, userId) {
     await sendTest(t.name, t.payload)
   }
 
-  if (integration.facebookPageId) {
+  if (useWabaDatasetTarget() && integration.facebookPageId) {
     const wabaId = parseFacebookPageId(integration.facebookPageId)
     try {
       const datasetId = await resolveWabaDatasetId(wabaId, integration.accessToken)
-      results.push({ name: "CTWA Dataset (WABA)", ok: true, datasetId })
+      results.push({ name: "CTWA Dataset (WABA)", ok: true, datasetId, optional: true })
     } catch (err) {
-      results.push({ name: "CTWA Dataset (WABA)", ok: false, error: err.message })
+      results.push({
+        name: "CTWA Dataset (WABA)",
+        ok: false,
+        error: err.message,
+        optional: true,
+      })
     }
   }
 
-  const failed = results.filter((r) => !r.ok)
-  const lastOk = results.filter((r) => r.ok).pop()
+  const failed = results.filter((r) => !r.ok && !r.optional)
+  const lastOk = results.filter((r) => r.ok && !r.optional).pop() || results.filter((r) => r.ok).pop()
   await recordIntegrationResult(prisma, userId, {
     eventName: lastOk?.name || "TestEvent",
     error: failed.length ? failed.map((f) => `${f.name}: ${f.error}`).join("; ") : null,
   })
 
-  if (failed.length === results.length) {
+  if (failed.length > 0 && failed.length === results.filter((r) => !r.optional).length) {
     return { error: "META_API_ERROR", message: failed.map((f) => f.error).join(" | ") }
   }
 

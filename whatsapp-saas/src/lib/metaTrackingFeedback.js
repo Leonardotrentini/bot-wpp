@@ -1,12 +1,9 @@
-import { trackCrmMetaEvent } from './metaPixel.js'
-
-/** Feedback de toast + pixel browser para respostas `tracking` / `metaTracking` da API. */
+/** Toast para respostas `tracking` / `metaTracking` da API — somente CAPI, sem fbq browser. */
 export function toastMetaTracking(toast, tracking, fallbackLabel = 'Evento') {
   if (!tracking) return
   if (tracking.skipped && tracking.reason === 'disabled') return
 
   if (tracking.sent) {
-    trackCrmMetaEvent(tracking)
     toast.success(`${tracking.eventName || fallbackLabel} enviado à Meta.`)
     return
   }

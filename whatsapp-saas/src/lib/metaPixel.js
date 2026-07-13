@@ -1,6 +1,18 @@
 /**
- * Meta Pixel no navegador (complementa a API de Conversões com deduplicação via eventID).
+ * Meta Pixel no navegador — LP (PageView, Contact) e dashboard (PageView).
+ * Eventos de funil CRM (ConversationStarted, LeadQualified, Quote, Purchase) são só CAPI.
  */
+
+export const CRM_FUNNEL_CAPI_ONLY_EVENTS = new Set([
+  'ConversationStarted',
+  'LeadQualified',
+  'Quote',
+  'Purchase',
+])
+
+export function isCrmFunnelCapiOnlyEvent(eventName) {
+  return CRM_FUNNEL_CAPI_ONLY_EVENTS.has(String(eventName || ''))
+}
 
 let loadedPixelId = null
 
@@ -55,25 +67,8 @@ export function trackMetaPixel(eventName, params = {}, eventId) {
   return true
 }
 
+/** @deprecated Funil CRM não dispara fbq — apenas CAPI. Mantido para compatibilidade; sempre no-op. */
 export function trackCrmMetaEvent(tracking) {
-  if (!tracking?.eventId || !tracking?.eventName || tracking.skipped) return
-
-  const contentCategory =
-    tracking.contentCategory || tracking.payload?.custom_data?.content_category || null
-  if (!contentCategory) {
-    if (typeof console !== 'undefined') {
-      console.warn('[metaPixel] dedup omitido: content_category ausente no tracking', tracking.eventName)
-    }
-    return false
-  }
-
-  const params = {
-    currency: 'BRL',
-    lead_event_source: 'Vesto',
-    content_category: contentCategory,
-  }
-  if (tracking.value != null) params.value = tracking.value
-
-  trackMetaPixel(tracking.eventName, params, tracking.eventId)
-  return true
+  if (isCrmFunnelCapiOnlyEvent(tracking?.eventName)) return false
+  return false
 }

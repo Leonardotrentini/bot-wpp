@@ -3,6 +3,8 @@
  * Uso: node scripts/test-meta-capi-contract.js
  */
 
+const fs = require("fs")
+const path = require("path")
 const {
   CONVERSATION_STARTED_EVENT,
   LEAD_QUALIFIED_EVENT,
@@ -322,6 +324,71 @@ async function testSendMetaGuardrailAsync() {
   console.log("✓ guardrail sendMetaEvent bloqueia funil sem content_category")
 }
 
+function testCrmFunnelNoBrowserTwin() {
+  const feedbackSrc = fs.readFileSync(
+    path.join(__dirname, "../../src/lib/metaTrackingFeedback.js"),
+    "utf8",
+  )
+  assert(
+    !feedbackSrc.includes("trackCrmMetaEvent"),
+    "metaTrackingFeedback não deve importar/chamar trackCrmMetaEvent",
+  )
+
+  const pixelSrc = fs.readFileSync(path.join(__dirname, "../../src/lib/metaPixel.js"), "utf8")
+  assert(pixelSrc.includes("CRM_FUNNEL_CAPI_ONLY_EVENTS"), "metaPixel lista eventos só-CAPI")
+  assert(
+    pixelSrc.includes("isCrmFunnelCapiOnlyEvent"),
+    "metaPixel expõe helper isCrmFunnelCapiOnlyEvent",
+  )
+
+  const crmMode = { mode: "crm" }
+  const stages = [
+    [CONVERSATION_STARTED_EVENT, () =>
+      buildConversationStartedEvent({
+        contact: mockContactCrm,
+        eventId: "browser-policy-conversation",
+        userId: "user-1",
+        integration: mockIntegration,
+        mode: crmMode,
+      })],
+    [LEAD_QUALIFIED_EVENT, () =>
+      buildLeadQualifiedEvent({
+        contact: mockContactCrm,
+        eventId: "browser-policy-qualified",
+        userId: "user-1",
+        integration: mockIntegration,
+        mode: crmMode,
+      })],
+    [QUOTE_EVENT, () =>
+      buildQuoteEvent({
+        contact: mockContactCrm,
+        amount: 100,
+        eventId: "browser-policy-quote",
+        userId: "user-1",
+        integration: mockIntegration,
+        mode: crmMode,
+      })],
+    [PURCHASE_EVENT, () =>
+      buildPurchaseEvent({
+        contact: mockContactCrm,
+        amount: 100,
+        ticket: "BP-1",
+        eventId: "browser-policy-purchase-BP-1",
+        userId: "user-1",
+        integration: mockIntegration,
+        mode: crmMode,
+      })],
+  ]
+
+  for (const [name, build] of stages) {
+    const payload = build()
+    assert(payload.custom_data?.content_category, `CAPI ${name} tem content_category`)
+    assert(FUNNEL_STAGES[name].contentCategory === payload.custom_data.content_category)
+  }
+
+  console.log("✓ funil CRM: sem gêmeo browser + CAPI com content_category nos 4 estágios")
+}
+
 async function main() {
   testFunnelStageMap()
   testStableEventIds()
@@ -330,6 +397,7 @@ async function main() {
   testCtwaPayloadsDefaultNames()
   testCrmLpAttributionPayloads()
   testSendMetaGuardrail()
+  testCrmFunnelNoBrowserTwin()
   await testSendMetaGuardrailAsync()
   console.log("\nAll meta CAPI contract tests OK")
 }

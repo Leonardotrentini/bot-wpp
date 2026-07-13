@@ -299,15 +299,23 @@ export function Integrations() {
                 <p className="text-emerald-400/90">WABA configurado: {form.facebookPageId}</p>
                 {meta?.wabaDatasetId ? (
                   <p className="text-stone-400">
-                    Dataset WhatsApp (crie conversões personalizadas aqui para CTWA):{' '}
+                    Dataset WhatsApp (META_USE_WABA_DATASET=true):{' '}
                     <code className="text-stone-300">{meta.wabaDatasetId}</code>
                   </p>
                 ) : meta?.wabaDatasetError ? (
-                  <p className="text-amber-400/90">{meta.wabaDatasetError}</p>
-                ) : null}
+                  <p className="text-stone-500">
+                    Dataset WABA (opcional): {meta.wabaDatasetError}
+                  </p>
+                ) : (
+                  <p className="text-stone-500">
+                    Eventos CTWA vão ao pixel com ctwa_clid — dataset WABA só com META_USE_WABA_DATASET=true.
+                  </p>
+                )}
               </div>
             ) : (
-              <p className="text-xs text-amber-400/90">Sem WABA — eventos de anúncio WhatsApp falham na Meta.</p>
+              <p className="text-xs text-stone-500">
+                Opcional para CTWA — o pixel já recebe ctwa_clid. Informe o WABA se usar dataset WhatsApp no futuro.
+              </p>
             )}
           </div>
           <Input
@@ -392,11 +400,18 @@ export function Integrations() {
                   <li key={r.name} className="flex items-center gap-2 text-stone-500">
                     {r.ok ? (
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    ) : r.optional ? (
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-stone-500" />
                     ) : (
                       <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />
                     )}
-                    <span className={r.ok ? 'text-stone-300' : 'text-red-300'}>
+                    <span
+                      className={
+                        r.ok ? 'text-stone-300' : r.optional ? 'text-stone-500' : 'text-red-300'
+                      }
+                    >
                       {r.name}
+                      {r.optional && !r.ok ? ' (opcional — pixel ok)' : ''}
                       {r.ok && r.eventsReceived != null ? ` (${r.eventsReceived} recebido)` : ''}
                       {!r.ok && r.error ? ` — ${r.error}` : ''}
                     </span>

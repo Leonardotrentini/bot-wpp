@@ -12,7 +12,6 @@ import {
   cancelCrmContactReminder,
 } from '../../services/api.js'
 import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
-import { trackCrmMetaEvent } from '../../lib/metaPixel.js'
 import { toastMetaTracking, metaFunnelLabel } from '../../lib/metaTrackingFeedback.js'
 
 function notifyMetaTracking(toastApi, tracking, actionLabel) {
