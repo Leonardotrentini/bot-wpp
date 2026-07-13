@@ -217,7 +217,7 @@ export function Chat() {
   const toastApi = useToast()
   const toastRef = useRef(toastApi)
   toastRef.current = toastApi
-  const { user } = useAuth()
+  const { user, isImpersonating } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [conversations, setConversations] = useState([])
@@ -1123,7 +1123,13 @@ export function Chat() {
         user={user}
         onComplete={() => setShowOnboarding(false)}
       />
-      <div className="-mx-4 -mb-4 flex h-[calc(100dvh-7.25rem)] min-h-[420px] overflow-hidden border-y border-brand-800/80 bg-brand-900/35 lg:mx-0 lg:mb-0 lg:h-[calc(100vh-7.5rem)] lg:rounded-2xl lg:border">
+      <div
+        className={`-mx-4 -mb-4 flex overflow-hidden border-y border-brand-800/80 bg-brand-900/35 lg:mx-0 lg:mb-0 lg:rounded-2xl lg:border ${
+          isImpersonating
+            ? 'h-[calc(100dvh-9.25rem)] min-h-[420px] lg:h-[calc(100vh-9.75rem)]'
+            : 'h-[calc(100dvh-7.25rem)] min-h-[420px] lg:h-[calc(100vh-7.5rem)]'
+        }`}
+      >
       {/* Lista de conversas */}
       <div
         className={`flex w-full flex-col border-r border-brand-800/80 lg:max-w-[min(100%,360px)] lg:shrink-0 ${
@@ -1280,8 +1286,11 @@ export function Chat() {
               <button
                 type="button"
                 onClick={() => setShowPanel((v) => !v)}
-                className="rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
-                title="Painel do contato"
+                className={`rounded-lg p-2 transition hover:bg-white/5 ${
+                  showPanel ? 'text-accent-300' : 'text-stone-400 hover:text-stone-100'
+                }`}
+                title={showPanel ? 'Ocultar painel (histórico, orçamento, compra)' : 'Abrir painel do contato'}
+                aria-pressed={showPanel}
               >
                 <ChevronDown className={`h-4 w-4 transition ${showPanel ? 'rotate-90' : '-rotate-90'}`} />
               </button>
@@ -1461,9 +1470,16 @@ export function Chat() {
         )}
       </div>
 
-      {/* Painel do contato */}
+      {/* Painel do contato — lg+ coluna fixa; abaixo disso drawer sobre o chat */}
       {active && showPanel && (
-        <div className="hidden w-72 shrink-0 flex-col overflow-y-auto vg-scrollbar border-l border-brand-800/80 bg-brand-950/20 xl:flex">
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-30 bg-black/45 lg:hidden"
+            onClick={() => setShowPanel(false)}
+            aria-label="Fechar painel do contato"
+          />
+          <div className="fixed inset-y-0 right-0 z-40 flex w-[min(100vw,20rem)] flex-col overflow-y-auto vg-scrollbar border-l border-brand-800/80 bg-brand-950 shadow-2xl lg:static lg:z-auto lg:w-72 lg:shrink-0 lg:shadow-none lg:bg-brand-950/20">
           <div className="flex flex-col items-center gap-2 border-b border-brand-800 px-4 py-5">
             <UserAvatar
               name={contactTitle(active.contact)}
@@ -1695,7 +1711,8 @@ export function Chat() {
           </div>
             </>
           )}
-        </div>
+          </div>
+        </>
       )}
 
       <Modal
