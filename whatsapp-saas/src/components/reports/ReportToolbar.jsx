@@ -39,11 +39,17 @@ export function ReportToolbar({
   onSellerChange,
 }) {
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const retentionMode = metaInfo?.groupsRetentionMode || 'rolling'
   const retention = metaInfo?.groupsRetentionDays ?? 2
+  const groupsDataNote =
+    retentionMode === 'activation'
+      ? 'Grupos: mensagens guardadas desde a ativação'
+      : `Grupos ${retention}d de mensagens`
 
   const retentionMinDate = (() => {
     const d = new Date()
-    d.setDate(d.getDate() - retention)
+    const daysBack = retentionMode === 'activation' ? 365 : retention
+    d.setDate(d.getDate() - daysBack)
     return d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
   })()
 
@@ -63,7 +69,7 @@ export function ReportToolbar({
           <p className="mt-1 text-sm text-stone-500">
             {updatedLabel ? `Atualizado às ${updatedLabel}` : 'Carregando dados…'}
             <span className="mx-2 text-stone-700">·</span>
-            CRM histórico completo · Grupos {retention}d de mensagens
+            CRM histórico completo · {groupsDataNote}
           </p>
         </div>
 

@@ -6,7 +6,7 @@ const { prisma } = require("./prisma")
 const { buildOverview } = require("./analytics")
 const { listCrmSales } = require("./crmSales")
 const { fetchMetaAdsDashboard, formatAdsFields } = require("./metaAds")
-const { MESSAGE_RETENTION_DAYS, todayStartInSp } = require("./messageMetrics")
+const { MESSAGE_RETENTION_DAYS, todayStartInSp, isActivationRetention } = require("./messageMetrics")
 const { assertUserInScope } = require("./orgScope")
 const {
   buildCrmOverview,
@@ -261,7 +261,8 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
     leads,
     computed,
     meta_info: {
-      groupsRetentionDays: MESSAGE_RETENTION_DAYS,
+      groupsRetentionDays: isActivationRetention() ? null : MESSAGE_RETENTION_DAYS,
+      groupsRetentionMode: isActivationRetention() ? "activation" : "rolling",
       crmRangeNote: "CRM usa o período completo selecionado.",
       metaLastSyncAt: adsFields.lastAdsSyncAt,
       partialErrors,

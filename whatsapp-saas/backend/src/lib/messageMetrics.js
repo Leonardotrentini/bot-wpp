@@ -1,5 +1,5 @@
 const { prisma } = require("./prisma")
-const { MESSAGE_RETENTION_DAYS, clampRangeToRetention, getRetentionCutoffDate } = require("./messageRetention")
+const { MESSAGE_RETENTION_DAYS, clampRangeToRetention, getRetentionCutoffDate, isActivationRetention, MESSAGE_REPORT_MAX_DAYS } = require("./messageRetention")
 const { readUserFilter } = require("./orgScope")
 
 const PT_DAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
@@ -277,6 +277,8 @@ module.exports = {
   PT_DAYS,
   OUTBOUND_OK_STATUSES,
   MESSAGE_RETENTION_DAYS,
+  isActivationRetention,
+  MESSAGE_REPORT_MAX_DAYS,
   dayKeyInSp,
   hourInSp,
   todayStartInSp,

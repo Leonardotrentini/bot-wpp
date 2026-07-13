@@ -127,6 +127,8 @@ const {
   MESSAGE_RETENTION_DAYS,
   getRetentionCutoffMs,
   getRetentionCutoffDate,
+  getGroupMessageFloorMs,
+  isActivationRetention,
   pruneUserMessagesBeyondRetention,
 } = require("./lib/messageRetention")
 
@@ -134,8 +136,10 @@ const {
 const MESSAGE_BACKFILL_DAYS = MESSAGE_RETENTION_DAYS
 const MESSAGE_SYNC_PAGE_SIZE = Number(process.env.MESSAGE_SYNC_PAGE_SIZE || 50)
 const MESSAGE_SYNC_MAX_PAGES = Number(process.env.MESSAGE_SYNC_MAX_PAGES || 10)
+const MESSAGE_SYNC_GRADUAL_PAGES = Number(process.env.MESSAGE_SYNC_GRADUAL_PAGES || 1)
 const MESSAGE_SYNC_PAGE_DELAY_MS = Number(process.env.MESSAGE_SYNC_PAGE_DELAY_MS || 1500)
 const MESSAGE_SYNC_GROUP_DELAY_MS = Number(process.env.MESSAGE_SYNC_GROUP_DELAY_MS || 4000)
+const MESSAGE_SYNC_TICK_MS = Number(process.env.MESSAGE_SYNC_TICK_MS || 60000)
 const STATUS_REFRESH_MIN_INTERVAL_MS = Number(process.env.STATUS_REFRESH_MIN_INTERVAL_MS || 15000)
 const activeMessageImports = new Set()
 
@@ -1077,7 +1081,7 @@ async function storeGroupMessages(group, records, { cutoffMs } = {}) {
   return { saved, inbound, allBelowCutoff, lastMessage, lastMessageAt }
 }
 
-async function importGroupMessages(conn, group, cutoffMs) {
+async function importGroupMessages(conn, group, cutoffMs, { maxPages = MESSAGE_SYNC_MAX_PAGES, startPage = 1 } = {}) {
   await prisma.whatsAppGroup.update({
     where: { id: group.id },
     data: { messageSyncStatus: "SYNCING", messageSyncProgress: 5 },
@@ -1088,8 +1092,11 @@ async function importGroupMessages(conn, group, cutoffMs) {
   let evolutionRecords = 0
   let latestMessage = null
   let latestAt = null
+  let lastPage = startPage - 1
+  let hasMore = false
 
-  for (let page = 1; page <= MESSAGE_SYNC_MAX_PAGES; page += 1) {
+  for (let page = startPage; page < startPage + maxPages; page += 1) {
+    lastPage = page
     const { records, source } = await fetchGroupMessages(conn.instanceName, group.groupJid, {
       page,
       pageSize: MESSAGE_SYNC_PAGE_SIZE,
@@ -1108,32 +1115,44 @@ async function importGroupMessages(conn, group, cutoffMs) {
       latestMessage = lastMessage
     }
 
+    const pageSpan = Math.max(1, maxPages)
+    const pageIndex = page - startPage + 1
     await prisma.whatsAppGroup.update({
       where: { id: group.id },
       data: {
         messageSyncStatus: "SYNCING",
-        messageSyncProgress: Math.min(95, Math.round((page / MESSAGE_SYNC_MAX_PAGES) * 95)),
-        messagesSyncedCount: totalSaved,
+        messageSyncProgress: Math.min(95, Math.round((pageIndex / pageSpan) * 95)),
+        messagesSyncedCount: { increment: saved },
+        messagesLastSyncAt: new Date(),
       },
     })
 
-    if (allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) break
-    if (page < MESSAGE_SYNC_MAX_PAGES) await wait(MESSAGE_SYNC_PAGE_DELAY_MS)
+    if (allBelowCutoff || records.length < MESSAGE_SYNC_PAGE_SIZE) {
+      hasMore = false
+      break
+    }
+    hasMore = true
+    if (page < startPage + maxPages - 1) await wait(MESSAGE_SYNC_PAGE_DELAY_MS)
   }
+
+  const nextPage = hasMore ? lastPage + 1 : 1
+  const extras = group.groupCatalogExtras && typeof group.groupCatalogExtras === "object" ? { ...group.groupCatalogExtras } : {}
+  if (hasMore) extras.messageSyncNextPage = nextPage
+  else delete extras.messageSyncNextPage
 
   await prisma.whatsAppGroup.update({
     where: { id: group.id },
     data: {
-      messageSyncStatus: "READY",
-      messageSyncProgress: 100,
-      messagesSyncedCount: totalSaved,
+      messageSyncStatus: hasMore ? "SYNCING" : "READY",
+      messageSyncProgress: hasMore ? Math.min(95, Math.round((lastPage / (startPage + maxPages - 1)) * 95)) : 100,
       messagesLastSyncAt: new Date(),
+      groupCatalogExtras: Object.keys(extras).length ? extras : null,
       ...(latestMessage ? { lastMessage: latestMessage } : {}),
       ...(latestAt ? { lastMessageAt: latestAt } : {}),
     },
   })
 
-  if (evolutionRecords === 0) {
+  if (evolutionRecords === 0 && startPage === 1) {
     console.warn(`[msg-import] grupo ${group.groupJid}: Evolution retornou 0 mensagens no banco dela.`)
   } else if (totalSaved > 0 && inboundSaved === 0) {
     console.warn(
@@ -1141,7 +1160,7 @@ async function importGroupMessages(conn, group, cutoffMs) {
     )
   }
 
-  return { totalSaved, inboundSaved, evolutionRecords }
+  return { totalSaved, inboundSaved, evolutionRecords, hasMore, nextPage }
 }
 
 /** Sincroniza participantes dos grupos ativos (entrada/saída). */
@@ -1186,7 +1205,7 @@ function buildActivationMessage({ activated, batch }) {
   if (batch?.unknown > 0) {
     return `${activated} grupo(s) ativo(s). ${batch.unknown} ID(s) ignorado(s) (não encontrados no cache).`
   }
-  return `${activated} grupo(s) ativo(s). Métricas e mensagens a partir de agora.`
+  return `${activated} grupo(s) ativo(s). Mensagens e métricas a partir da ativação — sincronização gradual em andamento.`
 }
 
 /** Ativa monitoramento em tempo real (sem backup de mensagens antigas). */
@@ -1202,25 +1221,29 @@ async function activateGroupsForMonitoring(userId, groupJids) {
   const monitoredBeforeSet = new Set(monitoredBefore.map((g) => g.groupJid))
 
   const now = new Date()
+  const newlyActivatedJids = new Set()
   const rows = await prisma.whatsAppGroup.findMany({
     where: { userId, groupJid: { in: unique } },
     select: { id: true, groupJid: true, activatedAt: true },
   })
 
   for (const row of rows) {
+    const isNew = !monitoredBeforeSet.has(row.groupJid)
+    if (isNew) newlyActivatedJids.add(row.groupJid)
     await prisma.whatsAppGroup.update({
       where: { id: row.id },
       data: {
         monitoringEnabled: true,
         status: "ativo",
-        messageSyncStatus: "READY",
-        messageSyncProgress: 100,
         activatedAt: row.activatedAt || now,
+        ...(isNew
+          ? { messageSyncStatus: "SYNCING", messageSyncProgress: 0, messagesSyncedCount: 0 }
+          : { messageSyncStatus: "READY", messageSyncProgress: 100 }),
       },
     })
   }
 
-  const newlyActivated = unique.filter((jid) => !monitoredBeforeSet.has(jid))
+  const newlyActivated = unique.filter((jid) => newlyActivatedJids.has(jid))
   if (newlyActivated.length) {
     scheduleParticipantSync(userId, newlyActivated, async (groupJid) => {
       const conn = await getUserWhatsAppConnection(userId)
@@ -1230,60 +1253,81 @@ async function activateGroupsForMonitoring(userId, groupJids) {
       })
       if (groupRow) await syncParticipantsForGroupRow(conn, groupRow)
     })
+    void runMessageImport(userId, { onlyGroupJids: newlyActivated, gradual: true }).catch((err) => {
+      console.warn("[msg-import] activation kickoff:", err?.message || err)
+    })
   }
 
   return { activated: rows.length, batch }
 }
 
-async function runMessageImport(userId, { onlyGroupJids } = {}) {
+async function runMessageImport(userId, { onlyGroupJids, gradual = false } = {}) {
   if (activeMessageImports.has(userId)) return
   activeMessageImports.add(userId)
   try {
     const conn = await getUserWhatsAppConnection(userId)
+    if (!conn?.connected) return
+
     const groupWhere = { userId, monitoringEnabled: true }
     if (onlyGroupJids?.length) groupWhere.groupJid = { in: onlyGroupJids }
+    else if (gradual) groupWhere.messageSyncStatus = { in: ["SYNCING", "RATE_LIMITED"] }
+
     const monitoredGroups = await prisma.whatsAppGroup.findMany({
       where: groupWhere,
-      orderBy: { name: "asc" },
+      orderBy: { messagesLastSyncAt: "asc" },
+      take: gradual ? 3 : undefined,
     })
     const total = monitoredGroups.length
-    const cutoffMs = getRetentionCutoffMs()
 
     await pruneUserMessagesBeyondRetention(userId).catch((err) => {
       console.warn("[msg-import] prune:", err?.message || err)
     })
 
     if (!total) {
-      await updateConnectionSync(userId, {
-        msgImportStatus: "IDLE",
-        msgImportTotal: 0,
-        msgImportDone: 0,
-        msgImportMessage: "Selecione ao menos um grupo para importar mensagens.",
-        msgImportError: null,
-      })
+      if (!gradual) {
+        await updateConnectionSync(userId, {
+          msgImportStatus: "IDLE",
+          msgImportTotal: 0,
+          msgImportDone: 0,
+          msgImportMessage: "Nenhum grupo ativo para importar mensagens.",
+          msgImportError: null,
+        })
+      }
       return
     }
 
-    await updateConnectionSync(userId, {
-      msgImportStatus: "RUNNING",
-      msgImportTotal: total,
-      msgImportDone: 0,
-      msgImportStartedAt: new Date(),
-      msgImportMessage: `Importando mensagens dos últimos ${MESSAGE_BACKFILL_DAYS} dias. 0 de ${total} grupos.`,
-      msgImportError: null,
-      msgImportRetryAfter: null,
-    })
+    const importLabel = isActivationRetention()
+      ? "desde a ativação do grupo"
+      : `dos últimos ${MESSAGE_BACKFILL_DAYS} dias`
+
+    if (!gradual) {
+      await updateConnectionSync(userId, {
+        msgImportStatus: "RUNNING",
+        msgImportTotal: total,
+        msgImportDone: 0,
+        msgImportStartedAt: new Date(),
+        msgImportMessage: `Importando mensagens ${importLabel}. 0 de ${total} grupos.`,
+        msgImportError: null,
+        msgImportRetryAfter: null,
+      })
+    }
 
     let importSavedTotal = 0
     let importInboundTotal = 0
     let importEvolutionTotal = 0
+    let stillSyncing = 0
+    const maxPages = gradual ? MESSAGE_SYNC_GRADUAL_PAGES : MESSAGE_SYNC_MAX_PAGES
 
     for (const [index, group] of monitoredGroups.entries()) {
       try {
-        const result = await importGroupMessages(conn, group, cutoffMs)
+        const cutoffMs = getGroupMessageFloorMs(group)
+        const extras = group.groupCatalogExtras && typeof group.groupCatalogExtras === "object" ? group.groupCatalogExtras : {}
+        const startPage = Number(extras.messageSyncNextPage) || 1
+        const result = await importGroupMessages(conn, group, cutoffMs, { maxPages, startPage })
         importSavedTotal += result.totalSaved
         importInboundTotal += result.inboundSaved
         importEvolutionTotal += result.evolutionRecords
+        if (result.hasMore) stillSyncing += 1
       } catch (err) {
         if (isRateLimitError(err)) {
           await prisma.whatsAppGroup.update({
@@ -1305,25 +1349,51 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
         })
       }
 
-      const done = index + 1
-      await updateConnectionSync(userId, {
-        msgImportStatus: "RUNNING",
-        msgImportDone: done,
-        msgImportMessage: `Importando mensagens dos últimos ${MESSAGE_BACKFILL_DAYS} dias. ${done} de ${total} grupos.`,
-      })
-
-      if (done < total) await wait(MESSAGE_SYNC_GROUP_DELAY_MS)
+      if (!gradual) {
+        const done = index + 1
+        await updateConnectionSync(userId, {
+          msgImportStatus: "RUNNING",
+          msgImportDone: done,
+          msgImportMessage: `Importando mensagens ${importLabel}. ${done} de ${total} grupos.`,
+        })
+        if (done < total) await wait(MESSAGE_SYNC_GROUP_DELAY_MS)
+      } else if (index < monitoredGroups.length - 1) {
+        await wait(MESSAGE_SYNC_GROUP_DELAY_MS)
+      }
     }
 
     await pruneUserMessagesBeyondRetention(userId).catch(() => {})
+
+    if (gradual) {
+      const pending = await prisma.whatsAppGroup.count({
+        where: { userId, monitoringEnabled: true, messageSyncStatus: "SYNCING" },
+      })
+      if (pending > 0) {
+        await updateConnectionSync(userId, {
+          msgImportStatus: "RUNNING",
+          msgImportMessage: `Sincronizando mensagens ${importLabel} aos poucos… ${pending} grupo(s) em andamento.`,
+          msgImportError: null,
+        })
+      } else if (importSavedTotal > 0) {
+        await updateConnectionSync(userId, {
+          msgImportStatus: "READY",
+          msgImportMessage: `Mensagens ${importLabel} sincronizadas. Novas entram em tempo real.`,
+          msgImportError: null,
+          msgImportRetryAfter: null,
+        })
+      }
+      return
+    }
 
     let finalMessage
     if (importEvolutionTotal === 0) {
       finalMessage =
         `Importação concluída, mas a Evolution não tinha mensagens salvas (0 no banco dela). ` +
-        `Mensagens novas entram pelo webhook com o WhatsApp conectado. Confira EVOLUTION_WEBHOOK_URL no Railway.`
+        `Mensagens novas entram pelo webhook com o WhatsApp conectado.`
     } else if (importSavedTotal === 0) {
-      finalMessage = `Evolution retornou ${importEvolutionTotal} mensagem(ns), mas nenhuma ficou nos últimos ${MESSAGE_BACKFILL_DAYS} dias.`
+      finalMessage = isActivationRetention()
+        ? `Evolution retornou ${importEvolutionTotal} mensagem(ns), mas nenhuma desde a ativação do grupo.`
+        : `Evolution retornou ${importEvolutionTotal} mensagem(ns), mas nenhuma ficou nos últimos ${MESSAGE_BACKFILL_DAYS} dias.`
     } else if (importInboundTotal === 0) {
       finalMessage =
         `${importSavedTotal} mensagem(ns) importadas, porém nenhuma de outros membros (só suas). ` +
@@ -1335,9 +1405,9 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
     }
 
     await updateConnectionSync(userId, {
-      msgImportStatus: "READY",
+      msgImportStatus: stillSyncing > 0 ? "RUNNING" : "READY",
       msgImportDone: total,
-      msgImportMessage: finalMessage,
+      msgImportMessage: stillSyncing > 0 ? `${finalMessage} Ainda sincronizando ${stillSyncing} grupo(s) aos poucos.` : finalMessage,
       msgImportError: null,
       msgImportRetryAfter: null,
     })
@@ -1350,6 +1420,33 @@ async function runMessageImport(userId, { onlyGroupJids } = {}) {
     }).catch(() => {})
   } finally {
     activeMessageImports.delete(userId)
+  }
+}
+
+async function tickGradualGroupMessageImports() {
+  const syncing = await prisma.whatsAppGroup.findMany({
+    where: { monitoringEnabled: true, messageSyncStatus: { in: ["SYNCING", "RATE_LIMITED"] } },
+    select: { userId: true },
+    distinct: ["userId"],
+    take: 5,
+  })
+  for (const row of syncing) {
+    void runMessageImport(row.userId, { gradual: true }).catch((err) => {
+      console.warn("[msg-import] gradual tick:", err?.message || err)
+    })
+  }
+
+  const rateLimited = await prisma.whatsAppConnection.findMany({
+    where: {
+      msgImportStatus: "RATE_LIMITED",
+      msgImportRetryAfter: { lte: new Date() },
+      connected: true,
+    },
+    select: { userId: true },
+    take: 3,
+  })
+  for (const conn of rateLimited) {
+    void runMessageImport(conn.userId, { gradual: true }).catch(() => {})
   }
 }
 
@@ -1488,14 +1585,14 @@ app.get("/api/groups/:id/messages", authMiddleware, async (req, res) => {
     const groupJid = decodeURIComponent(req.params.id)
     const group = await prisma.whatsAppGroup.findUnique({
       where: { userId_groupJid: { userId: req.user.sub, groupJid } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, activatedAt: true },
     })
     if (!group) return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado no cache." })
 
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100))
-    const retentionStart = getRetentionCutoffDate()
+    const floor = group.activatedAt ? new Date(group.activatedAt) : getRetentionCutoffDate()
     const rows = await prisma.whatsAppMessage.findMany({
-      where: { groupId: group.id, timestamp: { gte: retentionStart } },
+      where: { groupId: group.id, timestamp: { gte: floor } },
       orderBy: { timestamp: "desc" },
       take: limit,
     })
@@ -3335,7 +3432,8 @@ async function storeIncomingMessages(instanceName, body) {
     const mapped = mapEvolutionMessage(record)
     if (!mapped.messageId) continue
     if (!mapped.timestamp || Number.isNaN(mapped.timestamp.getTime())) continue
-    if (mapped.timestamp.getTime() < getRetentionCutoffMs()) continue
+    const floorMs = getGroupMessageFloorMs(group)
+    if (mapped.timestamp.getTime() < floorMs) continue
 
     await prisma.whatsAppMessage.upsert({
       where: { groupId_messageId: { groupId: group.id, messageId: mapped.messageId } },
@@ -3651,6 +3749,12 @@ httpServer.listen(port, () => {
           schedulerTickBusy = false
         })
     }, 30000)
+    setInterval(() => {
+      void tickGradualGroupMessageImports().catch((err) =>
+        console.error("[msg-import] scheduler:", err?.message || err),
+      )
+    }, MESSAGE_SYNC_TICK_MS)
     console.log(`Agendador de automações e X1 ativo (tick 30s, max ${SCHEDULER_MAX_AUTOMATIONS_PER_TICK}/tick).`)
+    console.log(`Importação gradual de mensagens de grupos a cada ${MESSAGE_SYNC_TICK_MS / 1000}s.`)
   }
 })
