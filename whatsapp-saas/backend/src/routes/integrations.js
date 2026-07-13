@@ -8,6 +8,7 @@ const { prisma } = require("../lib/prisma")
 const { authMiddleware } = require("../lib/auth")
 const {
   getMetaIntegration,
+  getMetaIntegrationEnriched,
   upsertMetaIntegration,
   testMetaIntegration,
   getMetaIntegrationCredentials,
@@ -55,7 +56,7 @@ function createIntegrationsRouter() {
   })
 
   router.get("/meta", async (req, res) => {
-    const integration = await getMetaIntegration(prisma, req.user.sub)
+    const integration = await getMetaIntegrationEnriched(prisma, req.user.sub)
     return res.json({ integration: integration || null })
   })
 

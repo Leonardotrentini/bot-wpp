@@ -331,6 +331,28 @@ async function getMetaIntegration(prisma, userId) {
   return formatIntegrationRow(row)
 }
 
+async function getMetaIntegrationEnriched(prisma, userId) {
+  const row = await prisma.metaIntegration.findUnique({ where: { userId } })
+  const integration = formatIntegrationRow(row)
+  if (!integration) return null
+
+  const wabaId = parseFacebookPageId(integration.facebookPageId)
+  if (!wabaId || !row?.accessToken) {
+    return { ...integration, wabaDatasetId: null }
+  }
+
+  try {
+    const wabaDatasetId = await resolveWabaDatasetId(wabaId, row.accessToken)
+    return { ...integration, wabaDatasetId }
+  } catch (err) {
+    return {
+      ...integration,
+      wabaDatasetId: null,
+      wabaDatasetError: err.message || "Não foi possível obter o dataset do WhatsApp.",
+    }
+  }
+}
+
 async function getMetaIntegrationCredentials(prisma, userId) {
   return prisma.metaIntegration.findUnique({ where: { userId } })
 }
@@ -955,7 +977,9 @@ module.exports = {
   VESTO_EVENT_SOURCE_URL,
   formatIntegrationRow,
   getMetaIntegration,
+  getMetaIntegrationEnriched,
   getMetaIntegrationCredentials,
+  resolveWabaDatasetId,
   upsertMetaIntegration,
   updateMetaLpIntegration,
   trackConversationStartedEvent,

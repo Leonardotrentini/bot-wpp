@@ -52,8 +52,9 @@ export function AuthProvider({ children }) {
   }, [])
 
   const orgRole = user?.orgRole || null
-  const isOrgOwner = orgRole === 'OWNER' && !impersonation
-  const isOrgSeller = orgRole === 'SELLER' && !impersonation
+  // Papel da conta visualizada (inclui impersonação admin em conta OWNER/SELLER).
+  const isOrgOwner = orgRole === 'OWNER'
+  const isOrgSeller = orgRole === 'SELLER'
 
   const value = useMemo(
     () => ({

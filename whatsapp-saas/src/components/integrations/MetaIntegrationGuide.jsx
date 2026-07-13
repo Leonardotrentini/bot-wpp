@@ -60,14 +60,16 @@ const CHECKLIST = [
   'PageView + Contact (não Lead) no clique do WhatsApp na LP',
   'Integração Vesto ativa com token salvo',
   'Botão "Enviar eventos de teste" com todos ✓',
-  'Conversões personalizadas criadas (passo a passo abaixo)',
+  'Conversões personalizadas no dataset WhatsApp (CTWA) ou no Pixel (LP)',
   'Visão geral do Events Manager mostrando eventos via API de Conversões',
   'Colunas do funil no Ads Manager',
 ]
 
-export function MetaIntegrationGuide({ pixelId }) {
+export function MetaIntegrationGuide({ pixelId, wabaId, wabaDatasetId, wabaDatasetError }) {
   const [guideOpen, setGuideOpen] = useState(false)
   const pixelHint = pixelId?.trim() || 'SEU_PIXEL_ID'
+  const wabaHint = wabaId?.trim() || 'SEU_WABA_ID'
+  const datasetHint = wabaDatasetId?.trim() || null
 
   return (
     <div className="rounded-xl border border-brand-800 bg-brand-950/20">
@@ -208,9 +210,58 @@ export function MetaIntegrationGuide({ pixelId }) {
             </pre>
           </Section>
 
+          <Section title="⚠️ Anúncio WhatsApp (CTWA): use o dataset do WABA, não o Pixel" defaultOpen>
+            <p>
+              Se seus anúncios são <strong className="text-stone-400">Click-to-WhatsApp</strong>, o Vesto envia Lead
+              Qualificado, Orçamento e Compra para o <strong className="text-stone-400">dataset da conta WhatsApp</strong>
+              , não para o Pixel da LP.
+            </p>
+            <p className="mt-2">
+              Por isso <strong className="text-stone-400">Compra</strong> pode aparecer no Ads Manager (métrica padrão da
+              Meta) enquanto <strong className="text-stone-400">Lead Qualificado</strong> e{' '}
+              <strong className="text-stone-400">Orçamento</strong> ficam &quot;—&quot;: as conversões personalizadas
+              foram criadas no Pixel errado.
+            </p>
+            <ol className="mt-3 list-inside list-decimal space-y-2">
+              <li>
+                Events Manager → <strong className="text-stone-400">Fontes de dados</strong>
+              </li>
+              <li>
+                Selecione a conta WhatsApp (WABA{' '}
+                <code className="text-stone-400">{wabaHint}</code>
+                ) — não o Pixel <code className="text-stone-400">{pixelHint}</code>
+              </li>
+              <li>
+                Aba <strong className="text-stone-400">Conversões personalizadas</strong> → crie Lead Qualificado e
+                Orçamento com regra <code className="text-stone-400">content_category</code> (passo a passo abaixo)
+              </li>
+              <li>
+                No Ads Manager → Personalizar colunas → busque o nome da conversão criada no{' '}
+                <strong className="text-stone-400">dataset WhatsApp</strong>
+              </li>
+            </ol>
+            {datasetHint ? (
+              <p className="mt-3 rounded-lg border border-emerald-900/40 bg-emerald-950/20 p-3 text-stone-400">
+                <strong className="text-emerald-200/90">Dataset WhatsApp desta conta:</strong>{' '}
+                <code className="text-stone-300">{datasetHint}</code> — use esta fonte no Events Manager.
+              </p>
+            ) : wabaId?.trim() ? (
+              <p className="mt-3 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-stone-500">
+                {wabaDatasetError ||
+                  'Salve o token e o WABA acima para o Vesto buscar o ID do dataset WhatsApp automaticamente.'}
+              </p>
+            ) : (
+              <p className="mt-3 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-stone-500">
+                Configure o <strong className="text-stone-400">ID da conta WhatsApp (WABA)</strong> acima — sem ele,
+                eventos de anúncio WhatsApp não são enviados corretamente.
+              </p>
+            )}
+          </Section>
+
           <Section title="Como criar cada conversão personalizada" defaultOpen>
             <p className="text-stone-400">
-              Events Manager → seu pixel → <strong>Conversões personalizadas</strong> → Criar.
+              Events Manager → fonte de dados correta (Pixel da LP <strong>ou</strong> dataset WhatsApp acima) →{' '}
+              <strong>Conversões personalizadas</strong> → Criar.
             </p>
             <p className="mt-2">
               Para eventos do <strong className="text-stone-400">Vesto (servidor)</strong>: na regra use{' '}

@@ -295,7 +295,17 @@ export function Integrations() {
               <strong className="text-stone-400">ID da conta</strong>. Não use ID da Página nem do Pixel.
             </p>
             {form.facebookPageId ? (
-              <p className="text-xs text-emerald-400/90">WABA configurado: {form.facebookPageId}</p>
+              <div className="space-y-1 text-xs">
+                <p className="text-emerald-400/90">WABA configurado: {form.facebookPageId}</p>
+                {meta?.wabaDatasetId ? (
+                  <p className="text-stone-400">
+                    Dataset WhatsApp (crie conversões personalizadas aqui para CTWA):{' '}
+                    <code className="text-stone-300">{meta.wabaDatasetId}</code>
+                  </p>
+                ) : meta?.wabaDatasetError ? (
+                  <p className="text-amber-400/90">{meta.wabaDatasetError}</p>
+                ) : null}
+              </div>
             ) : (
               <p className="text-xs text-amber-400/90">Sem WABA — eventos de anúncio WhatsApp falham na Meta.</p>
             )}
@@ -419,7 +429,12 @@ export function Integrations() {
 
           <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={load} />
 
-          <MetaIntegrationGuide pixelId={form.pixelId || meta?.pixelId} />
+          <MetaIntegrationGuide
+            pixelId={form.pixelId || meta?.pixelId}
+            wabaId={form.facebookPageId || meta?.facebookPageId}
+            wabaDatasetId={meta?.wabaDatasetId}
+            wabaDatasetError={meta?.wabaDatasetError}
+          />
         </div>
       </Card>
 
