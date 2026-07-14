@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Receipt,
@@ -9,10 +9,11 @@ import {
   ChevronRight,
   Pencil,
   Trash2,
+  Calendar,
+  RefreshCw,
 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
-import { Input } from '../../components/common/Input.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import { DateRangeCalendar } from '../../components/common/DateRangeCalendar.jsx'
@@ -25,6 +26,15 @@ import {
   updateCrmContactActivity,
   deleteCrmContactActivity,
 } from '../../services/api.js'
+
+const PERIOD_OPTIONS = [
+  { id: 'today', label: 'Hoje' },
+  { id: '7d', label: '7 dias' },
+  { id: '30d', label: '30 dias' },
+  { id: '90d', label: '90 dias' },
+  { id: 'custom', label: 'Personalizado' },
+  { id: 'all', label: 'Tudo' },
+]
 
 function formatBrl(value) {
   const n = Number(value)
@@ -136,8 +146,48 @@ export function Sales() {
   const [deleteSale, setDeleteSale] = useState(null)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const calendarRef = useRef(null)
 
   const maxDate = todayYmd()
+
+  useEffect(() => {
+    if (!calendarOpen) return
+    const onDoc = (e) => {
+      if (calendarRef.current && !calendarRef.current.contains(e.target)) {
+        setCalendarOpen(false)
+      }
+    }
+    const onKey = (e) => {
+      if (e.key === 'Escape') setCalendarOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [calendarOpen])
+
+  useEffect(() => {
+    if (period !== 'custom') setCalendarOpen(false)
+  }, [period])
+
+  const setPeriodOption = (next) => {
+    setPeriod(next)
+    if (next !== 'custom') {
+      setStartDate('')
+      setEndDate('')
+      setCalendarOpen(false)
+      return
+    }
+    if (!startDate) {
+      const t = todayYmd()
+      setStartDate(t)
+      setEndDate(t)
+    }
+    setCalendarOpen(true)
+  }
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 350)
@@ -357,86 +407,124 @@ export function Sales() {
         </Card>
       </div>
 
-      <Card>
-        <div className="flex flex-col gap-3 border-b border-brand-800 pb-4">
-          <div className="flex flex-1 flex-col gap-3 lg:flex-row lg:items-end">
-            <div className="sm:w-44">
-              <Select
-                label="Período"
-                value={period}
-                onChange={(e) => {
-                  const next = e.target.value
-                  setPeriod(next)
-                  if (next !== 'custom') {
-                    setStartDate('')
-                    setEndDate('')
-                  } else if (!startDate) {
-                    const t = todayYmd()
-                    setStartDate(t)
-                    setEndDate(t)
-                  }
-                }}
-              >
-                <option value="today">Hoje</option>
-                <option value="7d">Últimos 7 dias</option>
-                <option value="30d">Últimos 30 dias</option>
-                <option value="90d">Últimos 90 dias</option>
-                <option value="custom">Personalizado…</option>
-                <option value="all">Tudo</option>
-              </Select>
+      <Card className="overflow-visible">
+        <div className="space-y-3 border-b border-brand-800 pb-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-brand-800/60 bg-brand-950/70 p-1">
+              {PERIOD_OPTIONS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setPeriodOption(p.id)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                    period === p.id
+                      ? 'bg-accent-500 text-brand-950 shadow-sm shadow-accent-500/20'
+                      : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
-            {isOrgOwner && members.length > 0 ? (
-              <div className="sm:w-48">
-                <Select label="Vendedor" value={sellerUserId} onChange={(e) => setSellerUserId(e.target.value)}>
-                  <option value="">Todos</option>
-                  {members.map((m) => (
-                    <option key={m.userId} value={m.userId}>
-                      {m.name || m.email}
-                      {m.role === 'OWNER' ? ' (dono)' : ''}
+
+            <div className="flex flex-wrap items-center gap-2">
+              {period === 'custom' ? (
+                <div className="relative" ref={calendarRef}>
+                  <button
+                    type="button"
+                    onClick={() => setCalendarOpen((v) => !v)}
+                    className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition ${
+                      calendarOpen
+                        ? 'border-accent-500/50 bg-accent-500/10 text-accent-200'
+                        : 'border-brand-700 bg-brand-950/50 text-stone-300 hover:border-brand-600'
+                    }`}
+                  >
+                    <Calendar className="h-4 w-4 shrink-0 text-accent-400" />
+                    <span className="font-medium">
+                      {startDate && endDate
+                        ? `${formatYmdShort(startDate)} – ${formatYmdShort(endDate)}`
+                        : startDate
+                          ? `${formatYmdShort(startDate)} → fim`
+                          : 'Escolher datas'}
+                    </span>
+                  </button>
+                  {calendarOpen ? (
+                    <div className="absolute left-0 top-full z-40 mt-2 sm:left-auto sm:right-0">
+                      <DateRangeCalendar
+                        start={startDate}
+                        end={endDate}
+                        maxDate={maxDate}
+                        onChange={({ start, end }) => {
+                          setStartDate(start || '')
+                          setEndDate(end || '')
+                          if (start && end) setCalendarOpen(false)
+                        }}
+                        onApply={
+                          startDate
+                            ? () => {
+                                if (!endDate) setEndDate(startDate)
+                                setCalendarOpen(false)
+                              }
+                            : undefined
+                        }
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {isOrgOwner && members.length > 0 ? (
+                <div className="min-w-[160px] sm:w-44">
+                  <Select
+                    value={sellerUserId}
+                    onChange={(e) => setSellerUserId(e.target.value)}
+                    aria-label="Filtrar por vendedor"
+                  >
+                    <option value="">Vendedor: todos</option>
+                    {members.map((m) => (
+                      <option key={m.userId} value={m.userId}>
+                        {m.name || m.email}
+                        {m.role === 'OWNER' ? ' (dono)' : ''}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              ) : null}
+
+              <div className="min-w-[140px] sm:w-40">
+                <Select value={tagId} onChange={(e) => setTagId(e.target.value)} aria-label="Filtrar por tag">
+                  <option value="">Tag: todas</option>
+                  {tags.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
                     </option>
                   ))}
                 </Select>
               </div>
-            ) : null}
-            <div className="sm:w-48">
-              <Select label="Tag" value={tagId} onChange={(e) => setTagId(e.target.value)}>
-                <option value="">Todas</option>
-                {tags.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-[2.35rem] h-4 w-4 text-stone-500" />
-              <Input
-                label="Buscar"
-                placeholder="Cliente, telefone ou ticket..."
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                className="pl-9"
-              />
-            </div>
-            <Button variant="secondary" onClick={load} disabled={loading || !customReady} className="shrink-0">
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Atualizar'}
-            </Button>
-          </div>
 
-          {period === 'custom' ? (
-            <div className="rounded-xl border border-brand-800/60 bg-brand-950/40 p-3">
-              <p className="mb-2 text-xs font-medium text-stone-500">Intervalo personalizado</p>
-              <DateRangeCalendar
-                start={startDate}
-                end={endDate}
-                maxDate={maxDate}
-                onChange={({ start, end }) => {
-                  setStartDate(start || '')
-                  setEndDate(end || '')
-                }}
-              />
+              <div className="relative min-w-[180px] flex-1 sm:max-w-xs">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
+                <input
+                  type="search"
+                  placeholder="Cliente, telefone ou ticket…"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  className="w-full rounded-xl border border-brand-700 bg-brand-950/50 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/50"
+                />
+              </div>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={load}
+                disabled={loading || !customReady}
+                className="shrink-0 gap-1.5"
+              >
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Atualizar
+              </Button>
             </div>
-          ) : null}
+          </div>
 
           {selectedIds.size > 0 ? (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-accent-500/25 bg-accent-500/10 px-3 py-2">
