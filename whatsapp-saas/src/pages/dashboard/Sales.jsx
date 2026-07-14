@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Receipt, Loader2, Search, MessageSquare, ChevronLeft, ChevronRight, Pencil, Trash2 } from 'lucide-react'
+import {
+  Receipt,
+  Loader2,
+  Search,
+  MessageSquare,
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  Trash2,
+} from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
+import { DateRangeCalendar } from '../../components/common/DateRangeCalendar.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import {
@@ -33,8 +43,29 @@ function formatWhen(iso) {
   })
 }
 
-function periodToRange(period) {
+function formatYmdShort(ymd) {
+  if (!ymd) return ''
+  const d = new Date(`${ymd}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return ymd
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
+function todayYmd() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+}
+
+function periodToRange(period, startDate, endDate) {
   if (period === 'all') return { from: null, to: null }
+  if (period === 'custom') {
+    if (!startDate) return { from: null, to: null }
+    const from = new Date(`${startDate}T00:00:00`)
+    const endYmd = endDate || startDate
+    const to = new Date(`${endYmd}T23:59:59.999`)
+    return {
+      from: Number.isNaN(from.getTime()) ? null : from.toISOString(),
+      to: Number.isNaN(to.getTime()) ? null : to.toISOString(),
+    }
+  }
   const to = new Date()
   const from = new Date()
   if (period === 'today') {
@@ -87,6 +118,8 @@ export function Sales() {
   const [summary, setSummary] = useState({ count: 0, totalAmount: 0, averageAmount: 0 })
   const [pagination, setPagination] = useState({ page: 1, limit: 30, total: 0, pages: 0 })
   const [period, setPeriod] = useState('30d')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [page, setPage] = useState(1)
@@ -94,13 +127,17 @@ export function Sales() {
   const [tagId, setTagId] = useState('')
   const [members, setMembers] = useState([])
   const [tags, setTags] = useState([])
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [editSale, setEditSale] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [editTicket, setEditTicket] = useState('')
   const [editAt, setEditAt] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const [deleteSale, setDeleteSale] = useState(null)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  const maxDate = todayYmd()
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 350)
@@ -109,7 +146,7 @@ export function Sales() {
 
   useEffect(() => {
     setPage(1)
-  }, [period, debouncedQ, sellerUserId, tagId])
+  }, [period, startDate, endDate, debouncedQ, sellerUserId, tagId])
 
   useEffect(() => {
     let cancelled = false
@@ -131,10 +168,19 @@ export function Sales() {
     }
   }, [isOrgOwner])
 
+  const customReady = period !== 'custom' || Boolean(startDate)
+
   const load = useCallback(async () => {
+    if (period === 'custom' && !startDate) {
+      setSales([])
+      setSummary({ count: 0, totalAmount: 0, averageAmount: 0 })
+      setPagination({ page: 1, limit: 30, total: 0, pages: 0 })
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
-      const range = periodToRange(period)
+      const range = periodToRange(period, startDate, endDate)
       const { data } = await getCrmSales({
         from: range.from,
         to: range.to,
@@ -147,13 +193,14 @@ export function Sales() {
       setSales(data.sales || [])
       setSummary(data.summary || { count: 0, totalAmount: 0, averageAmount: 0 })
       setPagination(data.pagination || { page: 1, limit: 30, total: 0, pages: 0 })
+      setSelectedIds(new Set())
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao carregar vendas.')
       setSales([])
     } finally {
       setLoading(false)
     }
-  }, [period, debouncedQ, page, sellerUserId, tagId, toast])
+  }, [period, startDate, endDate, debouncedQ, page, sellerUserId, tagId, toast])
 
   useEffect(() => {
     load()
@@ -169,10 +216,40 @@ export function Sales() {
         return '30 dias'
       case '90d':
         return '90 dias'
+      case 'custom':
+        if (startDate && endDate) return `${formatYmdShort(startDate)} – ${formatYmdShort(endDate)}`
+        if (startDate) return formatYmdShort(startDate)
+        return 'período personalizado'
       default:
         return 'todo o período'
     }
-  }, [period])
+  }, [period, startDate, endDate])
+
+  const pageIds = useMemo(() => sales.map((s) => s.id), [sales])
+  const selectedOnPage = pageIds.filter((id) => selectedIds.has(id))
+  const allPageSelected = pageIds.length > 0 && selectedOnPage.length === pageIds.length
+  const somePageSelected = selectedOnPage.length > 0 && !allPageSelected
+
+  const toggleOne = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleAllPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allPageSelected) {
+        for (const id of pageIds) next.delete(id)
+      } else {
+        for (const id of pageIds) next.add(id)
+      }
+      return next
+    })
+  }
 
   const openEdit = (sale) => {
     setEditSale(sale)
@@ -228,6 +305,34 @@ export function Sales() {
     }
   }
 
+  const handleBulkDelete = async () => {
+    const targets = sales.filter((s) => selectedIds.has(s.id) && s.contact?.id)
+    if (!targets.length) {
+      setBulkDeleteOpen(false)
+      return
+    }
+    setDeleting(true)
+    let ok = 0
+    let fail = 0
+    try {
+      for (const sale of targets) {
+        try {
+          await deleteCrmContactActivity(sale.contact.id, sale.id)
+          ok += 1
+        } catch {
+          fail += 1
+        }
+      }
+      if (ok && !fail) toast.success(`${ok} venda(s) removida(s).`)
+      else if (ok && fail) toast.error(`${ok} removida(s), ${fail} falhou(aram).`)
+      else toast.error('Não foi possível remover as vendas selecionadas.')
+      setBulkDeleteOpen(false)
+      await load()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div>
@@ -255,12 +360,28 @@ export function Sales() {
       <Card>
         <div className="flex flex-col gap-3 border-b border-brand-800 pb-4">
           <div className="flex flex-1 flex-col gap-3 lg:flex-row lg:items-end">
-            <div className="sm:w-40">
-              <Select label="Período" value={period} onChange={(e) => setPeriod(e.target.value)}>
+            <div className="sm:w-44">
+              <Select
+                label="Período"
+                value={period}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setPeriod(next)
+                  if (next !== 'custom') {
+                    setStartDate('')
+                    setEndDate('')
+                  } else if (!startDate) {
+                    const t = todayYmd()
+                    setStartDate(t)
+                    setEndDate(t)
+                  }
+                }}
+              >
                 <option value="today">Hoje</option>
                 <option value="7d">Últimos 7 dias</option>
                 <option value="30d">Últimos 30 dias</option>
                 <option value="90d">Últimos 90 dias</option>
+                <option value="custom">Personalizado…</option>
                 <option value="all">Tudo</option>
               </Select>
             </div>
@@ -297,10 +418,40 @@ export function Sales() {
                 className="pl-9"
               />
             </div>
-            <Button variant="secondary" onClick={load} disabled={loading} className="shrink-0">
+            <Button variant="secondary" onClick={load} disabled={loading || !customReady} className="shrink-0">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Atualizar'}
             </Button>
           </div>
+
+          {period === 'custom' ? (
+            <div className="rounded-xl border border-brand-800/60 bg-brand-950/40 p-3">
+              <p className="mb-2 text-xs font-medium text-stone-500">Intervalo personalizado</p>
+              <DateRangeCalendar
+                start={startDate}
+                end={endDate}
+                maxDate={maxDate}
+                onChange={({ start, end }) => {
+                  setStartDate(start || '')
+                  setEndDate(end || '')
+                }}
+              />
+            </div>
+          ) : null}
+
+          {selectedIds.size > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-accent-500/25 bg-accent-500/10 px-3 py-2">
+              <p className="text-sm text-accent-200">
+                <strong>{selectedIds.size}</strong> selecionada(s)
+              </p>
+              <Button size="sm" variant="danger" onClick={() => setBulkDeleteOpen(true)} disabled={deleting}>
+                <Trash2 className="h-3.5 w-3.5" />
+                Excluir selecionadas
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+                Limpar seleção
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         {loading ? (
@@ -310,7 +461,11 @@ export function Sales() {
         ) : sales.length === 0 ? (
           <div className="py-16 text-center">
             <Receipt className="mx-auto h-10 w-10 text-stone-600" />
-            <p className="mt-3 text-sm text-stone-500">Nenhuma venda encontrada neste período.</p>
+            <p className="mt-3 text-sm text-stone-500">
+              {period === 'custom' && !startDate
+                ? 'Escolha o início e o fim no calendário.'
+                : 'Nenhuma venda encontrada neste período.'}
+            </p>
             <p className="mt-1 text-xs text-stone-600">
               Confirme compras no card do cliente em Conversas para registrar vendas aqui.
             </p>
@@ -318,9 +473,21 @@ export function Sales() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-sm">
+              <table className="w-full min-w-[800px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-brand-800 text-xs uppercase tracking-wide text-stone-500">
+                    <th className="w-10 px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={allPageSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = somePageSelected
+                        }}
+                        onChange={toggleAllPage}
+                        className="h-4 w-4 rounded border-brand-600 bg-brand-950 text-accent-500 focus:ring-accent-500/40"
+                        aria-label="Selecionar todas nesta página"
+                      />
+                    </th>
                     <th className="px-3 py-3 font-medium">Data</th>
                     <th className="px-3 py-3 font-medium">Cliente</th>
                     <th className="px-3 py-3 font-medium">Vendedor</th>
@@ -331,68 +498,85 @@ export function Sales() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sales.map((sale) => (
-                    <tr key={sale.id} className="border-b border-brand-800/60 hover:bg-brand-950/40">
-                      <td className="px-3 py-3 text-stone-400">{formatWhen(sale.confirmedAt)}</td>
-                      <td className="px-3 py-3">
-                        <p className="font-medium text-stone-100">{sale.contact?.name || '—'}</p>
-                        <p className="text-xs text-stone-500">{sale.contact?.phone || ''}</p>
-                      </td>
-                      <td className="px-3 py-3 text-stone-300">
-                        {sale.seller?.name || sale.seller?.email || '—'}
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {(sale.tags || []).length ? (
-                            sale.tags.map((t) => (
-                              <span
-                                key={t.id}
-                                className="inline-flex max-w-[120px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium"
-                                style={{ backgroundColor: `${t.color}22`, color: t.color }}
-                                title={t.name}
-                              >
-                                {t.name}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-stone-600">—</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 font-semibold text-emerald-400">{formatBrl(sale.amount)}</td>
-                      <td className="px-3 py-3 text-stone-400">{sale.ticket || '—'}</td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => openEdit(sale)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2 py-1.5 text-xs text-stone-300 transition hover:bg-brand-800 hover:text-stone-100"
-                            title="Editar venda"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                            Editar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeleteSale(sale)}
-                            className="inline-flex items-center rounded-lg border border-brand-700 p-1.5 text-stone-500 transition hover:border-red-800 hover:bg-red-500/10 hover:text-red-400"
-                            title="Excluir venda"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                          {sale.contact?.conversationId ? (
-                            <Link
-                              to={`/dashboard/chat?c=${encodeURIComponent(sale.contact.conversationId)}`}
-                              className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-accent-400 transition hover:bg-accent-500/10"
+                  {sales.map((sale) => {
+                    const checked = selectedIds.has(sale.id)
+                    return (
+                      <tr
+                        key={sale.id}
+                        className={`border-b border-brand-800/60 hover:bg-brand-950/40 ${
+                          checked ? 'bg-accent-500/5' : ''
+                        }`}
+                      >
+                        <td className="px-3 py-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleOne(sale.id)}
+                            className="h-4 w-4 rounded border-brand-600 bg-brand-950 text-accent-500 focus:ring-accent-500/40"
+                            aria-label={`Selecionar venda de ${sale.contact?.name || 'cliente'}`}
+                          />
+                        </td>
+                        <td className="px-3 py-3 text-stone-400">{formatWhen(sale.confirmedAt)}</td>
+                        <td className="px-3 py-3">
+                          <p className="font-medium text-stone-100">{sale.contact?.name || '—'}</p>
+                          <p className="text-xs text-stone-500">{sale.contact?.phone || ''}</p>
+                        </td>
+                        <td className="px-3 py-3 text-stone-300">
+                          {sale.seller?.name || sale.seller?.email || '—'}
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-wrap gap-1">
+                            {(sale.tags || []).length ? (
+                              sale.tags.map((t) => (
+                                <span
+                                  key={t.id}
+                                  className="inline-flex max-w-[120px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+                                  style={{ backgroundColor: `${t.color}22`, color: t.color }}
+                                  title={t.name}
+                                >
+                                  {t.name}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-stone-600">—</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 font-semibold text-emerald-400">{formatBrl(sale.amount)}</td>
+                        <td className="px-3 py-3 text-stone-400">{sale.ticket || '—'}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEdit(sale)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2 py-1.5 text-xs text-stone-300 transition hover:bg-brand-800 hover:text-stone-100"
+                              title="Editar venda"
                             >
-                              <MessageSquare className="h-3.5 w-3.5" />
-                              Chat
-                            </Link>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                              <Pencil className="h-3.5 w-3.5" />
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteSale(sale)}
+                              className="inline-flex items-center rounded-lg border border-brand-700 p-1.5 text-stone-500 transition hover:border-red-800 hover:bg-red-500/10 hover:text-red-400"
+                              title="Excluir venda"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                            {sale.contact?.conversationId ? (
+                              <Link
+                                to={`/dashboard/chat?c=${encodeURIComponent(sale.contact.conversationId)}`}
+                                className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-accent-400 transition hover:bg-accent-500/10"
+                              >
+                                <MessageSquare className="h-3.5 w-3.5" />
+                                Chat
+                              </Link>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -478,6 +662,15 @@ export function Sales() {
             ? `Remover a venda de ${formatBrl(deleteSale.amount)} (${deleteSale.contact?.name || 'cliente'}) do registro?`
             : ''
         }
+      />
+
+      <ConfirmModal
+        isOpen={bulkDeleteOpen}
+        onClose={() => setBulkDeleteOpen(false)}
+        onConfirm={handleBulkDelete}
+        loading={deleting}
+        title="Excluir vendas selecionadas"
+        message={`Remover ${selectedIds.size} venda(s) do registro? Esta ação não reenvia nada à Meta.`}
       />
     </div>
   )
