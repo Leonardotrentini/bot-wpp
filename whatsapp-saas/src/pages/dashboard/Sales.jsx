@@ -29,11 +29,11 @@ import {
 
 const PERIOD_OPTIONS = [
   { id: 'today', label: 'Hoje' },
-  { id: '7d', label: '7 dias' },
-  { id: '30d', label: '30 dias' },
-  { id: '90d', label: '90 dias' },
+  { id: '7d', label: 'Últimos 7 dias' },
+  { id: '30d', label: 'Últimos 30 dias' },
+  { id: '90d', label: 'Últimos 90 dias' },
   { id: 'custom', label: 'Personalizado' },
-  { id: 'all', label: 'Tudo' },
+  { id: 'all', label: 'Todo o período' },
 ]
 
 function formatBrl(value) {
@@ -409,27 +409,24 @@ export function Sales() {
 
       <Card className="overflow-visible">
         <div className="space-y-3 border-b border-brand-800 pb-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-brand-800/60 bg-brand-950/70 p-1">
-              {PERIOD_OPTIONS.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setPeriodOption(p.id)}
-                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                    period === p.id
-                      ? 'bg-accent-500 text-brand-950 shadow-sm shadow-accent-500/20'
-                      : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
-                  }`}
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+            <div className="relative flex min-w-0 flex-wrap items-center gap-2" ref={calendarRef}>
+              <div className="w-full min-w-[180px] sm:w-[210px]">
+                <Select
+                  value={period}
+                  onChange={(e) => setPeriodOption(e.target.value)}
+                  aria-label="Período"
                 >
-                  {p.label}
-                </button>
-              ))}
-            </div>
+                  {PERIOD_OPTIONS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
 
-            <div className="flex flex-wrap items-center gap-2">
               {period === 'custom' ? (
-                <div className="relative" ref={calendarRef}>
+                <>
                   <button
                     type="button"
                     onClick={() => setCalendarOpen((v) => !v)}
@@ -440,16 +437,14 @@ export function Sales() {
                     }`}
                   >
                     <Calendar className="h-4 w-4 shrink-0 text-accent-400" />
-                    <span className="font-medium">
+                    <span className="whitespace-nowrap font-medium">
                       {startDate && endDate
                         ? `${formatYmdShort(startDate)} – ${formatYmdShort(endDate)}`
-                        : startDate
-                          ? `${formatYmdShort(startDate)} → fim`
-                          : 'Escolher datas'}
+                        : 'Escolher datas'}
                     </span>
                   </button>
                   {calendarOpen ? (
-                    <div className="absolute left-0 top-full z-40 mt-2 sm:left-auto sm:right-0">
+                    <div className="absolute left-0 top-full z-40 mt-2">
                       <DateRangeCalendar
                         start={startDate}
                         end={endDate}
@@ -470,60 +465,60 @@ export function Sales() {
                       />
                     </div>
                   ) : null}
-                </div>
+                </>
               ) : null}
+            </div>
 
-              {isOrgOwner && members.length > 0 ? (
-                <div className="min-w-[160px] sm:w-44">
-                  <Select
-                    value={sellerUserId}
-                    onChange={(e) => setSellerUserId(e.target.value)}
-                    aria-label="Filtrar por vendedor"
-                  >
-                    <option value="">Vendedor: todos</option>
-                    {members.map((m) => (
-                      <option key={m.userId} value={m.userId}>
-                        {m.name || m.email}
-                        {m.role === 'OWNER' ? ' (dono)' : ''}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-              ) : null}
-
-              <div className="min-w-[140px] sm:w-40">
-                <Select value={tagId} onChange={(e) => setTagId(e.target.value)} aria-label="Filtrar por tag">
-                  <option value="">Tag: todas</option>
-                  {tags.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
+            {isOrgOwner && members.length > 0 ? (
+              <div className="min-w-[160px] sm:w-44">
+                <Select
+                  value={sellerUserId}
+                  onChange={(e) => setSellerUserId(e.target.value)}
+                  aria-label="Filtrar por vendedor"
+                >
+                  <option value="">Vendedor: todos</option>
+                  {members.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name || m.email}
+                      {m.role === 'OWNER' ? ' (dono)' : ''}
                     </option>
                   ))}
                 </Select>
               </div>
+            ) : null}
 
-              <div className="relative min-w-[180px] flex-1 sm:max-w-xs">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
-                <input
-                  type="search"
-                  placeholder="Cliente, telefone ou ticket…"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  className="w-full rounded-xl border border-brand-700 bg-brand-950/50 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/50"
-                />
-              </div>
-
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={load}
-                disabled={loading || !customReady}
-                className="shrink-0 gap-1.5"
-              >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Atualizar
-              </Button>
+            <div className="min-w-[140px] sm:w-40">
+              <Select value={tagId} onChange={(e) => setTagId(e.target.value)} aria-label="Filtrar por tag">
+                <option value="">Tag: todas</option>
+                {tags.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
             </div>
+
+            <div className="relative min-w-[180px] flex-1 sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
+              <input
+                type="search"
+                placeholder="Cliente, telefone ou ticket…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                className="w-full rounded-xl border border-brand-700 bg-brand-950/50 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/50"
+              />
+            </div>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={load}
+              disabled={loading || !customReady}
+              className="shrink-0 gap-1.5"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Atualizar
+            </Button>
           </div>
 
           {selectedIds.size > 0 ? (
