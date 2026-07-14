@@ -269,7 +269,7 @@ function testCrmLpAttributionPayloads() {
     integration: mockIntegration,
     mode: crmMode,
   })
-  assert(qualified.action_source === "system_generated", "LP action_source")
+  assert(qualified.action_source === "website", "LP com fbc/fbp usa website")
   assert(qualified.user_data.fbc, "LP user_data.fbc")
   assert(qualified.user_data.fbp, "LP user_data.fbp")
   assert(qualified.custom_data.content_category === "qualified_lead", "LP content_category")

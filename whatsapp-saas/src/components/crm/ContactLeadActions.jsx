@@ -246,11 +246,17 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
       if (!metaWarned) {
         const modeLabel = data.tracking?.trackingMode === 'ctwa' ? ' (anúncio WhatsApp)' : ''
-        toastRef.current.success(
-          data.tracking?.sent
-            ? `Compra confirmada e enviada à Meta${modeLabel}.`
-            : 'Compra confirmada.',
-        )
+        if (data.tracking?.sent && data.tracking?.hasAdsAttribution === false) {
+          toastRef.current.success(
+            `Compra confirmada e enviada à Meta${modeLabel}. Sem clique de anúncio neste lead — coluna Compras do Ads pode ficar "—".`,
+          )
+        } else {
+          toastRef.current.success(
+            data.tracking?.sent
+              ? `Compra confirmada e enviada à Meta${modeLabel}.`
+              : 'Compra confirmada.',
+          )
+        }
       }
       setPurchaseOpen(false)
       if (historyOpen) loadHistory()

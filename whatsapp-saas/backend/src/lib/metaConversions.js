@@ -19,7 +19,7 @@ const { formatAdsFields, normalizeAdAccountId } = require("./metaAds")
 const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttributionLead")
 const { parseSellersInput, normalizeBrazilPhone, isValidBrazilWhatsapp } = require("./lpSellers")
 const { parseFacebookPageId, resolveCtwaClid, resolveFbc, resolveFbp } = require("./metaMessaging")
-const { getStoredClickAt } = require("./metaAttributionLead")
+const { getStoredClickAt, ensureAttributionBeforeMetaEvent } = require("./metaAttributionLead")
 const { trackGtmForMetaEvent } = require("./gtmConversions")
 
 const GRAPH_API_VERSION = "v22.0"
@@ -178,6 +178,15 @@ function buildUserData(contact, { userId, clientIp, clientUserAgent } = {}) {
   const hashedPhone = hashPhoneForMeta(phone)
   if (hashedPhone) userData.ph = [hashedPhone]
 
+  const { first, last } = splitContactName(contact)
+  const hashedFn = hashMetaValue(first)
+  if (hashedFn) userData.fn = [hashedFn]
+  const hashedLn = hashMetaValue(last)
+  if (hashedLn) userData.ln = [hashedLn]
+
+  const hashedCountry = hashMetaValue("br")
+  if (hashedCountry) userData.country = [hashedCountry]
+
   const externalKey = contact?.id || userId
   if (externalKey) {
     const hashedExternal = hashMetaValue(String(externalKey))
@@ -214,16 +223,37 @@ function contactDisplayName(contact) {
   return contact?.name || contact?.pushName || "Lead WhatsApp"
 }
 
+function splitContactName(contact) {
+  const raw = String(contactDisplayName(contact) || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z\s]/g, " ")
+    .trim()
+    .toLowerCase()
+  if (!raw || raw === "lead whatsapp") return { first: null, last: null }
+  const parts = raw.split(/\s+/).filter(Boolean)
+  if (parts.length === 1) return { first: parts[0], last: null }
+  return { first: parts[0], last: parts.slice(1).join(" ") }
+}
+
 function eventSourceForMode(mode) {
   return mode.mode === "ctwa" ? "ctwa" : "crm"
 }
 
 /** action_source por origem e destino CAPI (pixel vs WABA dataset). */
-function buildActionSourceFields(mode) {
+function buildActionSourceFields(mode, contact = null) {
   if (mode.mode === "ctwa" && useWabaDatasetTarget()) {
     return {
       action_source: "business_messaging",
       messaging_channel: META_MESSAGING_CHANNEL,
+    }
+  }
+  // Com fbc/fbp da LP, website + cookies dá melhor atribuição na coluna Compras do Ads.
+  const hasLpClick = Boolean(resolveFbc(contact) || resolveFbp(contact))
+  if (mode.mode === "crm" && hasLpClick) {
+    return {
+      action_source: "website",
+      event_source_url: VESTO_EVENT_SOURCE_URL,
     }
   }
   return {
@@ -300,7 +330,7 @@ function buildFunnelEvent({
     event_time: eventTimeSec,
     event_id: eventId,
     custom_data: { ...customData, event_source: eventSource },
-    ...buildActionSourceFields(mode),
+    ...buildActionSourceFields(mode, contact),
   }
 
   if (mode.mode === "ctwa") {
@@ -833,15 +863,17 @@ async function trackConversationStartedEvent(prisma, { userId, contact }) {
   const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
 
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+
   return dispatchIdempotentMetaEvent(prisma, {
     userId,
-    contact,
+    contact: contactReady,
     integration,
     eventName: CONVERSATION_STARTED_EVENT,
     eventIdPrefix: "vesto-conversation-started",
     idempotencyField: "conversationStartedEventSentAt",
     buildPayload: ({ eventId, mode }) =>
-      buildConversationStartedEvent({ contact, eventId, userId, integration, mode }),
+      buildConversationStartedEvent({ contact: contactReady, eventId, userId, integration, mode }),
     gate: true,
   })
 }
@@ -850,15 +882,17 @@ async function trackLeadQualifiedEvent(prisma, { userId, contact }) {
   const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
 
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+
   return dispatchIdempotentMetaEvent(prisma, {
     userId,
-    contact,
+    contact: contactReady,
     integration,
     eventName: LEAD_QUALIFIED_EVENT,
     eventIdPrefix: "vesto-lead-qualified",
     idempotencyField: "qualifiedEventSentAt",
     buildPayload: ({ eventId, mode }) =>
-      buildLeadQualifiedEvent({ contact, eventId, userId, integration, mode }),
+      buildLeadQualifiedEvent({ contact: contactReady, eventId, userId, integration, mode }),
     gate: true,
   })
 }
@@ -869,16 +903,18 @@ async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
     return { sent: false, skipped: true, reason: "disabled" }
   }
 
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+
   return dispatchIdempotentMetaEvent(prisma, {
     userId,
-    contact,
+    contact: contactReady,
     integration,
     eventName: QUOTE_EVENT,
     eventIdPrefix: "vesto-quote",
     idempotencyField: "quoteEventSentAt",
     amount,
     buildPayload: ({ eventId, mode }) =>
-      buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }),
+      buildQuoteEvent({ contact: contactReady, amount, eventId, userId, integration, mode }),
     gate: true,
   })
 }
@@ -892,9 +928,11 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
     return { sent: false, skipped: true, reason: "not_configured" }
   }
 
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+
   return dispatchMetaEvent(prisma, {
     userId,
-    contact,
+    contact: contactReady,
     integration,
     eventName: PURCHASE_EVENT,
     eventIdPrefix: getFunnelStage(PURCHASE_EVENT).eventIdPrefix,
@@ -902,7 +940,15 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
     ticket,
     amount,
     buildPayload: ({ eventId, mode }) =>
-      buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode }),
+      buildPurchaseEvent({ contact: contactReady, amount, ticket, eventId, userId, integration, mode }),
+    extraReturn: {
+      hasAdsAttribution: Boolean(
+        contactReady?.customFields?.meta?.ctwaClid ||
+          contactReady?.customFields?.meta?.fbc ||
+          contactReady?.customFields?.meta?.fbp ||
+          contactReady?.customFields?.meta?.fbclid,
+      ),
+    },
   })
 }
 

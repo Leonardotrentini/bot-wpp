@@ -10,7 +10,7 @@ const { storeContactMetaAttribution, parseCustomFields } = require("./metaMessag
 const REF_PATTERN = /\(?\s*(vst_[a-z0-9]{6,16})\s*\)?/i
 const ATTRIBUTION_TTL_DAYS = 14
 /** Janela para ligar clique LP → 1ª mensagem sem código na saudação. */
-const PENDING_LEAD_MAX_AGE_MS = 30 * 60 * 1000
+const PENDING_LEAD_MAX_AGE_MS = 48 * 60 * 60 * 1000
 
 function generateVestoPublicKey() {
   return `vpk_${crypto.randomBytes(16).toString("hex")}`
@@ -166,7 +166,77 @@ async function applyAttributionLeadToContact(prisma, { userId, contact, lead }) 
 function contactHasLpAttribution(contact) {
   const custom = parseCustomFields(contact?.customFields)
   const meta = custom.meta || {}
-  return Boolean(meta.attributionRef || meta.fbc || meta.fbclid || meta.clickAt)
+  return Boolean(meta.attributionRef || meta.fbc || meta.fbclid || meta.fbp || meta.clickAt)
+}
+
+function contactHasAnyAdsAttribution(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const meta = custom.meta || {}
+  return Boolean(meta.ctwaClid || meta.fbc || meta.fbclid || meta.fbp)
+}
+
+/** Reaplica lead já ligado ao contato (fbc/fbp) se o customFields perdeu os cookies. */
+async function resolveAndApplyAttributionFromLinkedLead(prisma, { userId, contact }) {
+  if (!contact?.id || contactHasLpAttribution(contact)) return contact
+
+  const lead = await prisma.metaAttributionLead.findFirst({
+    where: {
+      userId,
+      contactId: contact.id,
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { clickAt: "desc" },
+  })
+  if (!lead) return contact
+  return applyAttributionLeadToContact(prisma, { userId, contact, lead })
+}
+
+/** Lê últimas mensagens inbound em busca de vst_ref da LP. */
+async function resolveAndApplyAttributionFromRecentMessages(prisma, { userId, contact, limit = 30 }) {
+  if (!contact?.id || contactHasLpAttribution(contact)) return contact
+
+  const messages = await prisma.crmMessage.findMany({
+    where: {
+      userId,
+      conversation: { contactId: contact.id },
+      fromMe: false,
+      body: { not: null },
+    },
+    orderBy: { timestamp: "desc" },
+    take: limit,
+    select: { body: true },
+  })
+
+  for (const msg of messages) {
+    const updated = await resolveAndApplyAttributionFromMessage(prisma, {
+      userId,
+      contact,
+      messageBody: msg.body,
+    })
+    if (updated && contactHasLpAttribution(updated)) return updated
+  }
+  return contact
+}
+
+/**
+ * Antes de Quote/Purchase/LeadQualified: tenta recuperar fbc/fbp/ctwa do lead/mensagens.
+ * Sem isso o evento sobe no pixel mas a coluna Compras do Ads fica "—".
+ */
+async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact }) {
+  if (!contact?.id) return contact
+  if (contactHasAnyAdsAttribution(contact)) return contact
+
+  let next = contact
+  next = (await resolveAndApplyAttributionFromLinkedLead(prisma, { userId, contact: next }).catch(() => next)) || next
+  if (contactHasAnyAdsAttribution(next)) return next
+
+  next =
+    (await resolveAndApplyAttributionFromRecentMessages(prisma, { userId, contact: next }).catch(() => next)) || next
+  if (contactHasAnyAdsAttribution(next)) return next
+
+  next =
+    (await resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact: next }).catch(() => next)) || next
+  return next
 }
 
 async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact }) {
@@ -231,7 +301,11 @@ module.exports = {
   applyAttributionLeadToContact,
   resolveAndApplyAttributionFromMessage,
   resolveAndApplyAttributionFromPendingLead,
+  resolveAndApplyAttributionFromLinkedLead,
+  resolveAndApplyAttributionFromRecentMessages,
+  ensureAttributionBeforeMetaEvent,
   contactHasLpAttribution,
+  contactHasAnyAdsAttribution,
   cleanupExpiredAttributionLeads,
   getStoredClickAt,
   REF_PATTERN,

@@ -55,7 +55,7 @@ function testPayloads() {
     mode: crmMode,
   })
   assert(conversationStarted.event_name === CONVERSATION_STARTED_EVENT, "ConversationStarted event_name")
-  assert(conversationStarted.action_source === "system_generated", "ConversationStarted CRM action_source")
+  assert(conversationStarted.action_source === "website", "ConversationStarted LP com fbclid → website")
   assert(
     conversationStarted.custom_data.content_category === CONTENT_CATEGORY.CONVERSATION_STARTED,
     "conversation_started category",
@@ -73,6 +73,7 @@ function testPayloads() {
   assert(leadQualified.event_name === LEAD_QUALIFIED_EVENT, "LeadQualified event_name")
   assert(leadQualified.custom_data.content_category === CONTENT_CATEGORY.QUALIFIED_LEAD, "qualified_lead category")
   assert(leadQualified.event_source_url === VESTO_EVENT_SOURCE_URL, "LeadQualified event_source_url")
+  assert(leadQualified.action_source === "website", "LeadQualified LP → website")
 
   const quote = buildQuoteEvent({
     contact: mockContactCrm,
@@ -83,7 +84,7 @@ function testPayloads() {
     mode: crmMode,
   })
   assert(quote.event_name === QUOTE_EVENT, "Quote event_name")
-  assert(quote.action_source === "system_generated", "Quote CRM action_source")
+  assert(quote.action_source === "website", "Quote LP → website")
   assert(quote.custom_data.event_source === "crm", "Quote CRM event_source")
   assert(quote.custom_data.content_category === CONTENT_CATEGORY.QUOTE, "Quote content_category")
   assert(quote.custom_data.lead_event_source === "Vesto", "Quote lead_event_source")
@@ -141,7 +142,7 @@ function testPayloads() {
     mode: crmMode,
   })
   assert(crmPurchase.event_name === PURCHASE_EVENT, "CRM purchase event")
-  assert(crmPurchase.action_source === "system_generated", "CRM purchase action_source")
+  assert(crmPurchase.action_source === "website", "CRM purchase LP → website")
   assert(crmPurchase.custom_data.content_category === CONTENT_CATEGORY.PURCHASE, "Purchase content_category")
   assert(crmPurchase.event_source_url === VESTO_EVENT_SOURCE_URL, "Purchase event_source_url")
 
