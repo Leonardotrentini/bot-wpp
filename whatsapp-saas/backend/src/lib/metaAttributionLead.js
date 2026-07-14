@@ -219,8 +219,8 @@ async function resolveAndApplyAttributionFromRecentMessages(prisma, { userId, co
 }
 
 /**
- * Antes de Quote/Purchase/LeadQualified: tenta recuperar fbc/fbp/ctwa do lead/mensagens.
- * Sem isso o evento sobe no pixel mas a coluna Compras do Ads fica "—".
+ * Antes de Quote/Purchase/LeadQualified: recupera fbc/fbp já ligados ao contato
+ * ou vst_ref nas mensagens. NÃO usa lead pendente solto (risco de atribuir clique de outro lead).
  */
 async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact }) {
   if (!contact?.id) return contact
@@ -232,10 +232,6 @@ async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact }) {
 
   next =
     (await resolveAndApplyAttributionFromRecentMessages(prisma, { userId, contact: next }).catch(() => next)) || next
-  if (contactHasAnyAdsAttribution(next)) return next
-
-  next =
-    (await resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact: next }).catch(() => next)) || next
   return next
 }
 
