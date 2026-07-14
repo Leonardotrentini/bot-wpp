@@ -16,15 +16,30 @@ function parsePayloadAmount(payload) {
   return Number.isFinite(amount) ? amount : null
 }
 
-function formatSaleRow(row) {
+function formatSaleRow(row, sellerById = {}) {
   const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? row.payload : {}
   const contact = row.contact
   const formatted = contact ? formatContactRow(contact) : null
+  const sellerUserId = payload.actorUserId || row.userId
+  const seller =
+    sellerById[sellerUserId] ||
+    (payload.actorName
+      ? { userId: sellerUserId, name: String(payload.actorName), email: null }
+      : sellerUserId
+        ? { userId: sellerUserId, name: null, email: null }
+        : null)
+
   return {
     id: row.id,
     amount: parsePayloadAmount(payload),
     ticket: payload.ticket ? String(payload.ticket) : null,
     confirmedAt: row.createdAt.toISOString(),
+    seller,
+    tags: (contact?.tags || []).map((link) => ({
+      id: link.tag?.id || link.tagId,
+      name: link.tag?.name || "",
+      color: link.tag?.color || "#a8a29e",
+    })).filter((t) => t.id && t.name),
     contact: formatted
       ? {
           id: formatted.id,
@@ -36,16 +51,31 @@ function formatSaleRow(row) {
   }
 }
 
-function buildSalesWhere(userIds, { from, to, q }) {
+function buildSalesWhere(userIds, { from, to, q, sellerUserId, tagName }) {
   const where = {
     ...uFilter(userIds),
     type: "purchase_confirmed",
+  }
+
+  if (sellerUserId) {
+    const sid = String(sellerUserId)
+    where.AND = [
+      ...(where.AND || []),
+      {
+        OR: [{ userId: sid }, { payload: { path: ["actorUserId"], equals: sid } }],
+      },
+    ]
   }
 
   if (from || to) {
     where.createdAt = {}
     if (from) where.createdAt.gte = new Date(from)
     if (to) where.createdAt.lte = new Date(to)
+  }
+
+  const contactFilter = {}
+  if (tagName) {
+    contactFilter.tags = { some: { tag: { name: String(tagName) } } }
   }
 
   const term = String(q || "").trim()
@@ -64,17 +94,41 @@ function buildSalesWhere(userIds, { from, to, q }) {
         string_contains: term,
       },
     })
-    where.AND = [{ OR: or }]
+    where.AND = [...(where.AND || []), { OR: or }]
+  }
+
+  if (Object.keys(contactFilter).length) {
+    where.contact = { ...(where.contact || {}), ...contactFilter }
   }
 
   return where
 }
 
-async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50 } = {}) {
+async function loadSellersMap(prisma, userIds) {
+  const ids = [...new Set((userIds || []).filter(Boolean))]
+  if (!ids.length) return {}
+  const users = await prisma.user.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, email: true },
+  })
+  return Object.fromEntries(users.map((u) => [u.id, { userId: u.id, name: u.name, email: u.email }]))
+}
+
+async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50, sellerUserId, tagId } = {}) {
   const safePage = Math.max(1, Number(page) || 1)
   const safeLimit = Math.min(100, Math.max(1, Number(limit) || 50))
   const skip = (safePage - 1) * safeLimit
-  const where = buildSalesWhere(userIds, { from, to, q })
+
+  let tagName = null
+  if (tagId) {
+    const tag = await prisma.crmTag.findFirst({
+      where: { id: String(tagId), ...uFilter(userIds) },
+      select: { name: true },
+    })
+    tagName = tag?.name || null
+  }
+
+  const where = buildSalesWhere(userIds, { from, to, q, sellerUserId, tagName })
 
   const [rows, total, amountRows] = await Promise.all([
     prisma.crmContactActivity.findMany({
@@ -83,6 +137,7 @@ async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50
         contact: {
           include: {
             conversation: { select: { id: true } },
+            tags: { include: { tag: true } },
           },
         },
       },
@@ -96,6 +151,13 @@ async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50
       select: { payload: true },
     }),
   ])
+
+  const sellerIds = new Set()
+  for (const row of rows) {
+    const payload = row.payload && typeof row.payload === "object" ? row.payload : {}
+    sellerIds.add(payload.actorUserId || row.userId)
+  }
+  const sellerById = await loadSellersMap(prisma, [...sellerIds])
 
   let totalAmount = 0
   let amountCount = 0
@@ -111,7 +173,7 @@ async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50
   const averageAmount = amountCount > 0 ? Math.round((totalAmount / amountCount) * 100) / 100 : 0
 
   return {
-    sales: rows.map(formatSaleRow),
+    sales: rows.map((row) => formatSaleRow(row, sellerById)),
     pagination: {
       page: safePage,
       limit: safeLimit,
@@ -128,4 +190,6 @@ async function listCrmSales(prisma, userIds, { from, to, q, page = 1, limit = 50
 
 module.exports = {
   listCrmSales,
+  formatSaleRow,
+  parsePayloadAmount,
 }

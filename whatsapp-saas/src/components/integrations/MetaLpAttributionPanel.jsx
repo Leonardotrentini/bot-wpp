@@ -125,7 +125,8 @@ export function MetaLpAttributionPanel({ form, setForm, meta, gtm, showSellerErr
       <div>
         <h4 className="text-sm font-semibold text-stone-100">Landing Page → WhatsApp</h4>
         <p className="mt-1 text-xs text-stone-500">
-          Salve domínios e vendedores → copie o prompt → cole no Codex/Cursor do projeto da LP.
+          Salve domínios e vendedores → copie o prompt → cole no Codex/Cursor da LP. O prompt já exige
+          rodízio no servidor (/api/next-seller) + atribuição Vesto — não localStorage.
         </p>
       </div>
 

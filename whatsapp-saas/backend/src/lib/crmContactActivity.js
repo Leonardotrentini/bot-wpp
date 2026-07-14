@@ -204,7 +204,150 @@ async function deleteContactActivity(prisma, userId, contactId, activityId) {
   if (!activity) return { error: "NOT_FOUND", message: "Etapa não encontrada." }
 
   await prisma.crmContactActivity.delete({ where: { id: activityId } })
-  return { ok: true }
+
+  const custom = parseCustomFields(contact.customFields)
+  let customChanged = false
+
+  if (activity.type === "purchase_confirmed") {
+    const remaining = await prisma.crmContactActivity.findFirst({
+      where: { contactId, userId, type: "purchase_confirmed" },
+      orderBy: { createdAt: "desc" },
+    })
+    if (remaining) {
+      const payload =
+        remaining.payload && typeof remaining.payload === "object" && !Array.isArray(remaining.payload)
+          ? remaining.payload
+          : {}
+      custom.purchase = {
+        amount: Number(payload.amount) || custom.purchase?.amount,
+        currency: "BRL",
+        ticket: payload.ticket ? String(payload.ticket) : null,
+        confirmedAt: remaining.createdAt.toISOString(),
+      }
+    } else {
+      delete custom.purchase
+    }
+    customChanged = true
+  }
+
+  if (activity.type === "quote_saved") {
+    const remaining = await prisma.crmContactActivity.findFirst({
+      where: { contactId, userId, type: "quote_saved" },
+      orderBy: { createdAt: "desc" },
+    })
+    if (remaining) {
+      const payload =
+        remaining.payload && typeof remaining.payload === "object" && !Array.isArray(remaining.payload)
+          ? remaining.payload
+          : {}
+      custom.quote = {
+        amount: Number(payload.amount) || custom.quote?.amount,
+        currency: "BRL",
+        savedAt: remaining.createdAt.toISOString(),
+        tagName: QUOTE_TAG_NAME,
+      }
+    } else {
+      delete custom.quote
+    }
+    customChanged = true
+  }
+
+  let contactRow = contact
+  if (customChanged) {
+    contactRow = await prisma.crmContact.update({
+      where: { id: contact.id },
+      data: { customFields: custom },
+      include: { tags: { include: { tag: true } } },
+    })
+  } else {
+    contactRow = await reloadContact(prisma, contact.id)
+  }
+
+  return { ok: true, contact: formatContactRow(contactRow) }
+}
+
+async function updateContactActivity(
+  prisma,
+  io,
+  { userId, contactId, activityId, amount, ticket, at, actorUserId, actorName },
+) {
+  const contact = await prisma.crmContact.findFirst({ where: { id: contactId, userId } })
+  if (!contact) return { error: "NOT_FOUND" }
+
+  const activity = await prisma.crmContactActivity.findFirst({
+    where: { id: activityId, contactId, userId },
+  })
+  if (!activity) return { error: "NOT_FOUND", message: "Etapa não encontrada." }
+  if (!["purchase_confirmed", "quote_saved"].includes(activity.type)) {
+    return { error: "INVALID_TYPE", message: "Só é possível editar orçamento ou compra." }
+  }
+
+  const prevPayload =
+    activity.payload && typeof activity.payload === "object" && !Array.isArray(activity.payload)
+      ? { ...activity.payload }
+      : {}
+
+  const nextPayload = { ...prevPayload }
+  if (amount != null) {
+    const value = Math.round(Number(amount) * 100) / 100
+    if (!Number.isFinite(value) || value <= 0) return { error: "INVALID_AMOUNT" }
+    nextPayload.amount = value
+  }
+  if (activity.type === "purchase_confirmed" && ticket !== undefined) {
+    nextPayload.ticket = ticket ? String(ticket).trim() : null
+  }
+  if (actorUserId && !nextPayload.actorUserId) {
+    nextPayload.actorUserId = actorUserId
+    if (actorName) nextPayload.actorName = actorName
+  }
+
+  const data = { payload: nextPayload }
+  if (at) {
+    const when = new Date(at)
+    if (Number.isNaN(when.getTime())) return { error: "INVALID_DATE" }
+    data.createdAt = when
+  }
+
+  const updatedActivity = await prisma.crmContactActivity.update({
+    where: { id: activity.id },
+    data,
+  })
+
+  const latestSameType = await prisma.crmContactActivity.findFirst({
+    where: { contactId, userId, type: activity.type },
+    orderBy: { createdAt: "desc" },
+  })
+
+  const custom = parseCustomFields(contact.customFields)
+  if (latestSameType?.id === updatedActivity.id) {
+    if (activity.type === "purchase_confirmed") {
+      custom.purchase = {
+        amount: nextPayload.amount,
+        currency: "BRL",
+        ticket: nextPayload.ticket || null,
+        confirmedAt: updatedActivity.createdAt.toISOString(),
+      }
+    } else {
+      custom.quote = {
+        amount: nextPayload.amount,
+        currency: "BRL",
+        savedAt: updatedActivity.createdAt.toISOString(),
+        tagName: QUOTE_TAG_NAME,
+      }
+    }
+    await prisma.crmContact.update({
+      where: { id: contact.id },
+      data: { customFields: custom },
+    })
+  }
+
+  const contactRow = await reloadContact(prisma, contact.id)
+  await emitContactConversation(prisma, io, userId, contact.id)
+
+  return {
+    activity: formatActivityRow(updatedActivity),
+    contact: formatContactRow(contactRow),
+  }
 }
 
 async function reloadContact(prisma, contactId) {
@@ -262,7 +405,7 @@ async function normalizeContactQuoteTags(prisma, userId, contactId) {
   return { normalized: true, contact: updated }
 }
 
-async function saveContactQuote(prisma, io, { userId, contactId, amount }) {
+async function saveContactQuote(prisma, io, { userId, contactId, amount, actorUserId, actorName }) {
   const contact = await prisma.crmContact.findFirst({ where: { id: contactId, userId } })
   if (!contact) return { error: "NOT_FOUND" }
 
@@ -284,19 +427,44 @@ async function saveContactQuote(prisma, io, { userId, contactId, amount }) {
     include: { tags: { include: { tag: true } } },
   })
 
-  await logContactActivity(prisma, {
-    userId,
-    contactId: contact.id,
-    type: "quote_saved",
-    payload: { amount: value, tagName: QUOTE_TAG_NAME },
+  const quotePayload = {
+    amount: value,
+    tagName: QUOTE_TAG_NAME,
+    ...(actorUserId ? { actorUserId, actorName: actorName || null } : {}),
+  }
+
+  const existingQuote = await prisma.crmContactActivity.findFirst({
+    where: { contactId: contact.id, userId, type: "quote_saved" },
+    orderBy: { createdAt: "desc" },
   })
+  if (existingQuote) {
+    const prev =
+      existingQuote.payload && typeof existingQuote.payload === "object" && !Array.isArray(existingQuote.payload)
+        ? existingQuote.payload
+        : {}
+    await prisma.crmContactActivity.update({
+      where: { id: existingQuote.id },
+      data: { payload: { ...prev, ...quotePayload } },
+    })
+  } else {
+    await logContactActivity(prisma, {
+      userId,
+      contactId: contact.id,
+      type: "quote_saved",
+      payload: quotePayload,
+    })
+  }
 
   await emitContactConversation(prisma, io, userId, contact.id)
   const tracking = await trackCrmQuoteEvent(prisma, { userId, contact: updated, amount: value })
   return { contact: formatContactRow(updated), tracking }
 }
 
-async function confirmContactPurchase(prisma, io, { userId, contactId, amount, ticket, moveToClosed = true }) {
+async function confirmContactPurchase(
+  prisma,
+  io,
+  { userId, contactId, amount, ticket, moveToClosed = true, actorUserId, actorName },
+) {
   const contact = await prisma.crmContact.findFirst({
     where: { id: contactId, userId },
     include: { conversation: true },
@@ -311,10 +479,11 @@ async function confirmContactPurchase(prisma, io, { userId, contactId, amount, t
 
   const custom = parseCustomFields(contact.customFields)
   const confirmedAt = new Date().toISOString()
+  const ticketValue = ticket ? String(ticket).trim() : null
   custom.purchase = {
     amount: value,
     currency: "BRL",
-    ticket: ticket ? String(ticket).trim() : null,
+    ticket: ticketValue,
     confirmedAt,
   }
 
@@ -341,12 +510,44 @@ async function confirmContactPurchase(prisma, io, { userId, contactId, amount, t
     }
   }
 
-  await logContactActivity(prisma, {
-    userId,
-    contactId: contact.id,
-    type: "purchase_confirmed",
-    payload: { amount: value, ticket: custom.purchase.ticket },
+  const purchasePayload = {
+    amount: value,
+    ticket: ticketValue,
+    actorUserId: actorUserId || userId,
+    actorName: actorName || null,
+  }
+
+  const existingPurchase = await prisma.crmContactActivity.findFirst({
+    where: { contactId: contact.id, userId, type: "purchase_confirmed" },
+    orderBy: { createdAt: "desc" },
   })
+  if (existingPurchase) {
+    const prev =
+      existingPurchase.payload &&
+      typeof existingPurchase.payload === "object" &&
+      !Array.isArray(existingPurchase.payload)
+        ? existingPurchase.payload
+        : {}
+    await prisma.crmContactActivity.update({
+      where: { id: existingPurchase.id },
+      data: {
+        payload: {
+          ...prev,
+          ...purchasePayload,
+          actorUserId: prev.actorUserId || purchasePayload.actorUserId,
+          actorName: prev.actorName || purchasePayload.actorName,
+        },
+        createdAt: new Date(confirmedAt),
+      },
+    })
+  } else {
+    await logContactActivity(prisma, {
+      userId,
+      contactId: contact.id,
+      type: "purchase_confirmed",
+      payload: purchasePayload,
+    })
+  }
 
   const updated = await reloadContact(prisma, contact.id)
   if (conversation) {
@@ -359,7 +560,7 @@ async function confirmContactPurchase(prisma, io, { userId, contactId, amount, t
     userId,
     contact: updated,
     amount: value,
-    ticket: custom.purchase.ticket,
+    ticket: ticketValue,
   })
 
   return {
@@ -377,6 +578,7 @@ module.exports = {
   logContactActivity,
   getContactActivityTimeline,
   deleteContactActivity,
+  updateContactActivity,
   normalizeContactQuoteTags,
   saveContactQuote,
   confirmContactPurchase,

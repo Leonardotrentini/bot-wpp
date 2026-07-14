@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Receipt, ShoppingBag, Bell, Loader2, X, Trash2 } from 'lucide-react'
+import { History, Receipt, ShoppingBag, Bell, Loader2, X, Trash2, Pencil } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { Modal } from '../common/Modal.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import {
   getCrmContactActivity,
   deleteCrmContactActivity,
+  updateCrmContactActivity,
   saveCrmContactQuote,
   confirmCrmContactPurchase,
   createCrmContactReminder,
@@ -73,6 +74,26 @@ function parseAmountInput(raw) {
   return Number.isFinite(n) ? n : NaN
 }
 
+function amountToInput(value) {
+  if (value == null || !Number.isFinite(Number(value))) return ''
+  return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function isoToDatetimeLocal(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function datetimeLocalToIso(value) {
+  if (!value) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
 function activityIcon(type) {
   switch (type) {
     case 'quote_saved':
@@ -115,6 +136,11 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
   const [savingReminder, setSavingReminder] = useState(false)
   const [cancellingReminderId, setCancellingReminderId] = useState(null)
   const [deletingActivityId, setDeletingActivityId] = useState(null)
+  const [editActivity, setEditActivity] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [editTicket, setEditTicket] = useState('')
+  const [editAt, setEditAt] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const contactId = contact?.id
   const pendingReminders = contact?.reminders || []
@@ -191,13 +217,56 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     if (!window.confirm(`Remover esta etapa do histórico?\n\n${label}`)) return
     setDeletingActivityId(activityId)
     try {
-      await deleteCrmContactActivity(contactId, activityId)
+      const { data } = await deleteCrmContactActivity(contactId, activityId)
       setActivities((prev) => prev.filter((a) => a.id !== activityId))
+      if (data.contact) onContactUpdate?.(data.contact)
       toastRef.current.success('Etapa removida do histórico.')
     } catch (err) {
       toastRef.current.error(err?.response?.data?.message || 'Falha ao remover etapa.')
     } finally {
       setDeletingActivityId(null)
+    }
+  }
+
+  const openEditActivity = (item) => {
+    if (!['quote_saved', 'purchase_confirmed'].includes(item.type)) return
+    setEditActivity(item)
+    setEditAmount(amountToInput(item.payload?.amount))
+    setEditTicket(item.payload?.ticket || '')
+    setEditAt(isoToDatetimeLocal(item.at))
+  }
+
+  const handleSaveEditActivity = async () => {
+    if (!contactId || !editActivity?.id) return
+    const amount = parseAmountInput(editAmount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toastRef.current.error('Informe um valor válido.')
+      return
+    }
+    const at = datetimeLocalToIso(editAt)
+    if (!at) {
+      toastRef.current.error('Informe uma data válida.')
+      return
+    }
+    setSavingEdit(true)
+    try {
+      const payload = { amount, at }
+      if (editActivity.type === 'purchase_confirmed') {
+        payload.ticket = editTicket.trim() || null
+      }
+      const { data } = await updateCrmContactActivity(contactId, editActivity.id, payload)
+      if (data.activity) {
+        setActivities((prev) => prev.map((a) => (a.id === data.activity.id ? data.activity : a)))
+      } else {
+        await loadHistory()
+      }
+      if (data.contact) onContactUpdate?.(data.contact)
+      toastRef.current.success('Histórico atualizado.')
+      setEditActivity(null)
+    } catch (err) {
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao editar etapa.')
+    } finally {
+      setSavingEdit(false)
     }
   }
 
@@ -329,11 +398,18 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
               </p>
             )}
             {contact.purchase?.amount != null && (
-              <p>
+              <p className="flex flex-wrap items-center gap-2">
                 Compra: <span className="font-medium text-emerald-400">{formatBrl(contact.purchase.amount)}</span>
                 {contact.purchase.ticket ? (
                   <span className="text-stone-500"> · ticket {contact.purchase.ticket}</span>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={() => setPurchaseOpen(true)}
+                  className="text-[10px] font-semibold uppercase tracking-wide text-accent-400 hover:text-accent-300"
+                >
+                  Editar
+                </button>
               </p>
             )}
             {contact.nextReminder?.scheduledAt && (
@@ -418,20 +494,33 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
                       })}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteActivity(item.id, item.label)}
-                    disabled={deletingActivityId === item.id}
-                    className="mt-0.5 shrink-0 rounded-lg p-1.5 text-stone-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
-                    title="Remover etapa"
-                    aria-label="Remover etapa"
-                  >
-                    {deletingActivityId === item.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
-                    )}
-                  </button>
+                  <div className="mt-0.5 flex shrink-0 gap-0.5">
+                    {['quote_saved', 'purchase_confirmed'].includes(item.type) ? (
+                      <button
+                        type="button"
+                        onClick={() => openEditActivity(item)}
+                        className="rounded-lg p-1.5 text-stone-500 transition hover:bg-accent-500/10 hover:text-accent-300"
+                        title="Editar etapa"
+                        aria-label="Editar etapa"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteActivity(item.id, item.label)}
+                      disabled={deletingActivityId === item.id}
+                      className="rounded-lg p-1.5 text-stone-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+                      title="Remover etapa"
+                      aria-label="Remover etapa"
+                    >
+                      {deletingActivityId === item.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
                 </li>
               )
             })}
@@ -471,20 +560,28 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       <Modal
         isOpen={purchaseOpen}
         onClose={() => setPurchaseOpen(false)}
-        title="Confirmar compra"
+        title={contact.purchase?.amount != null ? 'Atualizar compra' : 'Confirmar compra'}
         footer={
           <>
             <Button variant="ghost" onClick={() => setPurchaseOpen(false)}>
               Cancelar
             </Button>
             <Button onClick={handleConfirmPurchase} disabled={confirmingPurchase}>
-              {confirmingPurchase ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirmar'}
+              {confirmingPurchase ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : contact.purchase?.amount != null ? (
+                'Atualizar'
+              ) : (
+                'Confirmar'
+              )}
             </Button>
           </>
         }
       >
         <p className="mb-3 text-sm text-stone-400">
-          Registra a compra, aplica a tag &quot;Comprou&quot; e move para o estágio Fechado quando existir.
+          {contact.purchase?.amount != null
+            ? 'Atualiza o valor no card e no registro de vendas (sem duplicar a linha). Purchase na Meta só envia 1x.'
+            : 'Registra a compra, aplica a tag "Comprou" e move para o estágio Fechado quando existir.'}
         </p>
         <label className="mb-1 block text-xs font-medium text-stone-500">Valor da compra (R$)</label>
         <input
@@ -594,6 +691,51 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
           onKeyDown={(e) => e.key === 'Enter' && handleSaveReminder()}
           placeholder="Ex.: Retornar sobre o orçamento"
           className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+        />
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(editActivity)}
+        onClose={() => setEditActivity(null)}
+        title={editActivity?.type === 'purchase_confirmed' ? 'Editar compra' : 'Editar orçamento'}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditActivity(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveEditActivity} disabled={savingEdit}>
+              {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar'}
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-stone-400">
+          Corrige a etapa no histórico do lead. Não reenvia evento à Meta.
+        </p>
+        <label className="mb-1 block text-xs font-medium text-stone-500">Valor (R$)</label>
+        <input
+          value={editAmount}
+          onChange={(e) => setEditAmount(e.target.value)}
+          placeholder="Ex.: 1.500,00"
+          className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+        />
+        {editActivity?.type === 'purchase_confirmed' ? (
+          <>
+            <label className="mb-1 block text-xs font-medium text-stone-500">Ticket (opcional)</label>
+            <input
+              value={editTicket}
+              onChange={(e) => setEditTicket(e.target.value)}
+              placeholder="Ex.: #1234"
+              className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+            />
+          </>
+        ) : null}
+        <label className="mb-1 block text-xs font-medium text-stone-500">Data / hora</label>
+        <input
+          type="datetime-local"
+          value={editAt}
+          onChange={(e) => setEditAt(e.target.value)}
+          className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
         />
       </Modal>
     </>

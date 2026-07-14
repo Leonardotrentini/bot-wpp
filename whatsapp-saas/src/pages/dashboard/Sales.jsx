@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Receipt, Loader2, Search, MessageSquare, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Receipt, Loader2, Search, MessageSquare, ChevronLeft, ChevronRight, Pencil, Trash2 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Select } from '../../components/common/Select.jsx'
+import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { getCrmSales } from '../../services/api.js'
+import { useAuth } from '../../contexts/AuthContext.jsx'
+import {
+  getCrmSales,
+  getCrmTags,
+  fetchOrgMembers,
+  updateCrmContactActivity,
+  deleteCrmContactActivity,
+} from '../../services/api.js'
 
 function formatBrl(value) {
   const n = Number(value)
@@ -41,8 +49,39 @@ function periodToRange(period) {
   return { from: from.toISOString(), to: to.toISOString() }
 }
 
+function parseAmountInput(raw) {
+  const cleaned = String(raw || '')
+    .trim()
+    .replace(/\s/g, '')
+    .replace(/\./g, '')
+    .replace(',', '.')
+  const n = Number(cleaned)
+  return Number.isFinite(n) ? n : NaN
+}
+
+function amountToInput(value) {
+  if (value == null || !Number.isFinite(Number(value))) return ''
+  return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function isoToDatetimeLocal(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function datetimeLocalToIso(value) {
+  if (!value) return null
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
+}
+
 export function Sales() {
   const toast = useToast()
+  const { isOrgOwner } = useAuth()
   const [loading, setLoading] = useState(true)
   const [sales, setSales] = useState([])
   const [summary, setSummary] = useState({ count: 0, totalAmount: 0, averageAmount: 0 })
@@ -51,6 +90,17 @@ export function Sales() {
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [page, setPage] = useState(1)
+  const [sellerUserId, setSellerUserId] = useState('')
+  const [tagId, setTagId] = useState('')
+  const [members, setMembers] = useState([])
+  const [tags, setTags] = useState([])
+  const [editSale, setEditSale] = useState(null)
+  const [editAmount, setEditAmount] = useState('')
+  const [editTicket, setEditTicket] = useState('')
+  const [editAt, setEditAt] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
+  const [deleteSale, setDeleteSale] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q.trim()), 350)
@@ -59,7 +109,27 @@ export function Sales() {
 
   useEffect(() => {
     setPage(1)
-  }, [period, debouncedQ])
+  }, [period, debouncedQ, sellerUserId, tagId])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.allSettled([
+      isOrgOwner ? fetchOrgMembers() : Promise.resolve({ members: [] }),
+      getCrmTags(),
+    ]).then(([membersRes, tagsRes]) => {
+      if (cancelled) return
+      if (membersRes.status === 'fulfilled') {
+        setMembers(membersRes.value?.members || [])
+      }
+      if (tagsRes.status === 'fulfilled') {
+        const payload = tagsRes.value?.data || tagsRes.value || {}
+        setTags(payload.tags || [])
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [isOrgOwner])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -71,6 +141,8 @@ export function Sales() {
         q: debouncedQ || undefined,
         page,
         limit: 30,
+        sellerUserId: sellerUserId || undefined,
+        tagId: tagId || undefined,
       })
       setSales(data.sales || [])
       setSummary(data.summary || { count: 0, totalAmount: 0, averageAmount: 0 })
@@ -81,7 +153,7 @@ export function Sales() {
     } finally {
       setLoading(false)
     }
-  }, [period, debouncedQ, page, toast])
+  }, [period, debouncedQ, page, sellerUserId, tagId, toast])
 
   useEffect(() => {
     load()
@@ -102,12 +174,66 @@ export function Sales() {
     }
   }, [period])
 
+  const openEdit = (sale) => {
+    setEditSale(sale)
+    setEditAmount(amountToInput(sale.amount))
+    setEditTicket(sale.ticket || '')
+    setEditAt(isoToDatetimeLocal(sale.confirmedAt))
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editSale?.contact?.id) {
+      toast.error('Venda sem contato vinculado.')
+      return
+    }
+    const amount = parseAmountInput(editAmount)
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error('Informe um valor válido.')
+      return
+    }
+    const at = datetimeLocalToIso(editAt)
+    if (!at) {
+      toast.error('Informe uma data válida.')
+      return
+    }
+    setSavingEdit(true)
+    try {
+      await updateCrmContactActivity(editSale.contact.id, editSale.id, {
+        amount,
+        ticket: editTicket.trim() || null,
+        at,
+      })
+      toast.success('Venda atualizada.')
+      setEditSale(null)
+      await load()
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao editar venda.')
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteSale?.contact?.id) return
+    setDeleting(true)
+    try {
+      await deleteCrmContactActivity(deleteSale.contact.id, deleteSale.id)
+      toast.success('Venda removida do registro.')
+      setDeleteSale(null)
+      await load()
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao remover venda.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-stone-50 font-heading">Registro de vendas</h2>
         <p className="mt-2 text-sm text-stone-400">
-          Histórico de todas as compras confirmadas no CRM — {periodLabel}.
+          Histórico de compras confirmadas no CRM — {periodLabel}. Cada venda fica atribuída ao vendedor que confirmou.
         </p>
       </div>
 
@@ -127,15 +253,38 @@ export function Sales() {
       </div>
 
       <Card>
-        <div className="flex flex-col gap-3 border-b border-brand-800 pb-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-end">
-            <div className="sm:w-44">
+        <div className="flex flex-col gap-3 border-b border-brand-800 pb-4">
+          <div className="flex flex-1 flex-col gap-3 lg:flex-row lg:items-end">
+            <div className="sm:w-40">
               <Select label="Período" value={period} onChange={(e) => setPeriod(e.target.value)}>
                 <option value="today">Hoje</option>
                 <option value="7d">Últimos 7 dias</option>
                 <option value="30d">Últimos 30 dias</option>
                 <option value="90d">Últimos 90 dias</option>
                 <option value="all">Tudo</option>
+              </Select>
+            </div>
+            {isOrgOwner && members.length > 0 ? (
+              <div className="sm:w-48">
+                <Select label="Vendedor" value={sellerUserId} onChange={(e) => setSellerUserId(e.target.value)}>
+                  <option value="">Todos</option>
+                  {members.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name || m.email}
+                      {m.role === 'OWNER' ? ' (dono)' : ''}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            ) : null}
+            <div className="sm:w-48">
+              <Select label="Tag" value={tagId} onChange={(e) => setTagId(e.target.value)}>
+                <option value="">Todas</option>
+                {tags.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
               </Select>
             </div>
             <div className="relative flex-1">
@@ -148,10 +297,10 @@ export function Sales() {
                 className="pl-9"
               />
             </div>
+            <Button variant="secondary" onClick={load} disabled={loading} className="shrink-0">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Atualizar'}
+            </Button>
           </div>
-          <Button variant="secondary" onClick={load} disabled={loading} className="shrink-0">
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Atualizar'}
-          </Button>
         </div>
 
         {loading ? (
@@ -169,12 +318,13 @@ export function Sales() {
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-left text-sm">
+              <table className="w-full min-w-[760px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-brand-800 text-xs uppercase tracking-wide text-stone-500">
                     <th className="px-3 py-3 font-medium">Data</th>
                     <th className="px-3 py-3 font-medium">Cliente</th>
-                    <th className="px-3 py-3 font-medium">Telefone</th>
+                    <th className="px-3 py-3 font-medium">Vendedor</th>
+                    <th className="px-3 py-3 font-medium">Tags</th>
                     <th className="px-3 py-3 font-medium">Valor</th>
                     <th className="px-3 py-3 font-medium">Ticket</th>
                     <th className="px-3 py-3 font-medium text-right">Ação</th>
@@ -184,22 +334,62 @@ export function Sales() {
                   {sales.map((sale) => (
                     <tr key={sale.id} className="border-b border-brand-800/60 hover:bg-brand-950/40">
                       <td className="px-3 py-3 text-stone-400">{formatWhen(sale.confirmedAt)}</td>
-                      <td className="px-3 py-3 font-medium text-stone-100">{sale.contact?.name || '—'}</td>
-                      <td className="px-3 py-3 text-stone-400">{sale.contact?.phone || '—'}</td>
+                      <td className="px-3 py-3">
+                        <p className="font-medium text-stone-100">{sale.contact?.name || '—'}</p>
+                        <p className="text-xs text-stone-500">{sale.contact?.phone || ''}</p>
+                      </td>
+                      <td className="px-3 py-3 text-stone-300">
+                        {sale.seller?.name || sale.seller?.email || '—'}
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {(sale.tags || []).length ? (
+                            sale.tags.map((t) => (
+                              <span
+                                key={t.id}
+                                className="inline-flex max-w-[120px] truncate rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+                                style={{ backgroundColor: `${t.color}22`, color: t.color }}
+                                title={t.name}
+                              >
+                                {t.name}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-stone-600">—</span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-3 py-3 font-semibold text-emerald-400">{formatBrl(sale.amount)}</td>
                       <td className="px-3 py-3 text-stone-400">{sale.ticket || '—'}</td>
-                      <td className="px-3 py-3 text-right">
-                        {sale.contact?.conversationId ? (
-                          <Link
-                            to={`/dashboard/chat?c=${encodeURIComponent(sale.contact.conversationId)}`}
-                            className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-accent-400 transition hover:bg-accent-500/10"
+                      <td className="px-3 py-3">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => openEdit(sale)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2 py-1.5 text-xs text-stone-300 transition hover:bg-brand-800 hover:text-stone-100"
+                            title="Editar venda"
                           >
-                            <MessageSquare className="h-3.5 w-3.5" />
-                            Chat
-                          </Link>
-                        ) : (
-                          <span className="text-xs text-stone-600">—</span>
-                        )}
+                            <Pencil className="h-3.5 w-3.5" />
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteSale(sale)}
+                            className="inline-flex items-center rounded-lg border border-brand-700 p-1.5 text-stone-500 transition hover:border-red-800 hover:bg-red-500/10 hover:text-red-400"
+                            title="Excluir venda"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                          {sale.contact?.conversationId ? (
+                            <Link
+                              to={`/dashboard/chat?c=${encodeURIComponent(sale.contact.conversationId)}`}
+                              className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-accent-400 transition hover:bg-accent-500/10"
+                            >
+                              <MessageSquare className="h-3.5 w-3.5" />
+                              Chat
+                            </Link>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -235,6 +425,60 @@ export function Sales() {
           </>
         )}
       </Card>
+
+      <Modal
+        isOpen={Boolean(editSale)}
+        onClose={() => setEditSale(null)}
+        title="Editar venda"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setEditSale(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={savingEdit}>
+              {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar'}
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-3 text-sm text-stone-400">
+          Corrige valor, ticket e data no registro. Não reenvia Purchase à Meta.
+        </p>
+        <label className="mb-1 block text-xs font-medium text-stone-500">Valor (R$)</label>
+        <input
+          value={editAmount}
+          onChange={(e) => setEditAmount(e.target.value)}
+          placeholder="Ex.: 1.500,00"
+          className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+        />
+        <label className="mb-1 block text-xs font-medium text-stone-500">Ticket (opcional)</label>
+        <input
+          value={editTicket}
+          onChange={(e) => setEditTicket(e.target.value)}
+          placeholder="Ex.: #1234"
+          className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+        />
+        <label className="mb-1 block text-xs font-medium text-stone-500">Data / hora</label>
+        <input
+          type="datetime-local"
+          value={editAt}
+          onChange={(e) => setEditAt(e.target.value)}
+          className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+        />
+      </Modal>
+
+      <ConfirmModal
+        isOpen={Boolean(deleteSale)}
+        onClose={() => setDeleteSale(null)}
+        onConfirm={handleDelete}
+        loading={deleting}
+        title="Excluir venda"
+        message={
+          deleteSale
+            ? `Remover a venda de ${formatBrl(deleteSale.amount)} (${deleteSale.contact?.name || 'cliente'}) do registro?`
+            : ''
+        }
+      />
     </div>
   )
 }

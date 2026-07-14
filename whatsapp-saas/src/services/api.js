@@ -830,13 +830,25 @@ export async function deleteCrmContactActivity(contactId, activityId) {
   return mockResponse({ ok: true })
 }
 
-export async function getCrmSales({ from, to, q, page, limit } = {}) {
+export async function updateCrmContactActivity(contactId, activityId, payload) {
+  if (resolveUseRealApi()) {
+    return apiClient.patch(
+      `/crm/contacts/${encodeURIComponent(contactId)}/activity/${encodeURIComponent(activityId)}`,
+      payload,
+    )
+  }
+  return mockResponse({ activity: { id: activityId, ...payload }, contact: { id: contactId } })
+}
+
+export async function getCrmSales({ from, to, q, page, limit, sellerUserId, tagId } = {}) {
   if (resolveUseRealApi()) {
     return apiClient.get('/crm/sales', {
       params: {
         ...(from ? { from } : {}),
         ...(to ? { to } : {}),
         ...(q ? { q } : {}),
+        ...(sellerUserId ? { sellerUserId } : {}),
+        ...(tagId ? { tagId } : {}),
         ...(page ? { page } : {}),
         ...(limit ? { limit } : {}),
       },
