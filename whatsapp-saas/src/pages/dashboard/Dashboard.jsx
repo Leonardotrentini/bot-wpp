@@ -5,7 +5,7 @@ import { getGroups, fetchOrgSellers } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useReportLayout } from '../../hooks/useReportLayout.js'
-import { useReportDashboard } from '../../hooks/useReportDashboard.js'
+import { useReportDashboard, EMPTY_GROUP_IDS } from '../../hooks/useReportDashboard.js'
 import { mapPeriodToMetaPeriod } from '../../lib/reportPeriod.js'
 import { ReportToolbar } from '../../components/reports/ReportToolbar.jsx'
 import { ReportGrid } from '../../components/reports/ReportGrid.jsx'
@@ -44,9 +44,9 @@ export function Dashboard() {
     restoreDefault,
   } = useReportLayout(user?.id)
 
-  const { data, loading, refreshing, load, refresh, lastUpdatedAt } = useReportDashboard({
+  const { data, loading, refreshing, load, refresh, lastUpdatedAt, error } = useReportDashboard({
     filters: layout.filters,
-    groupIds: [],
+    groupIds: EMPTY_GROUP_IDS,
     sellerUserId: sellerUserId || undefined,
     funnelSteps: layout.funnelSteps,
   })
@@ -81,7 +81,7 @@ export function Dashboard() {
       return
     }
     load()
-  }, [load, layout.filters.period, layout.filters.startDate, layout.filters.endDate, layout.funnelSteps, sellerUserId])
+  }, [load])
 
   const handleFiltersChange = useCallback(
     (patch) => {
@@ -113,8 +113,9 @@ export function Dashboard() {
   const hasConnected = groups.some((g) => g.status === 'ativo' && g.monitoringEnabled)
   const existingMetricIds = layout.widgets.map((w) => w.metricId)
   const partialErrors = data?.meta_info?.partialErrors || []
+  const showInitialSkeleton = loading && !data
 
-  if (loading && !data) {
+  if (showInitialSkeleton) {
     return (
       <div className="space-y-6 max-w-[1400px]">
         <Skeleton className="h-24 rounded-2xl" />
@@ -142,8 +143,8 @@ export function Dashboard() {
         onAddWidget={() => setPickerOpen(true)}
         onRestoreDefault={restoreDefault}
         onRefresh={handleRefresh}
-        refreshing={refreshing}
-        loading={loading}
+        refreshing={refreshing || (loading && Boolean(data))}
+        loading={loading && !data}
         partialErrors={partialErrors}
         metaInfo={data?.meta_info}
         lastUpdatedAt={lastUpdatedAt}
@@ -170,7 +171,7 @@ export function Dashboard() {
 
       {!data && !loading && (
         <div className="rounded-2xl border border-brand-800/60 bg-brand-900/30 px-6 py-12 text-center">
-          <p className="text-sm text-stone-400">Não foi possível carregar o painel.</p>
+          <p className="text-sm text-stone-400">{error || 'Não foi possível carregar o painel.'}</p>
           <button
             type="button"
             onClick={handleRefresh}
@@ -181,16 +182,27 @@ export function Dashboard() {
         </div>
       )}
 
+      {data && error && (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-sm text-amber-100/90">
+          Não foi possível atualizar agora. Exibindo o último painel carregado.{' '}
+          <button type="button" onClick={handleRefresh} className="underline text-accent-400 hover:text-accent-300">
+            Tentar de novo
+          </button>
+        </div>
+      )}
+
       {data && (
-        <ReportGrid
-          widgets={layout.widgets}
-          data={data}
-          editing={editing}
-          funnelSteps={layout.funnelSteps}
-          onFunnelStepsChange={setFunnelSteps}
-          onRemove={removeWidget}
-          onMove={moveWidget}
-        />
+        <div className={loading || refreshing ? 'opacity-70 transition-opacity' : 'transition-opacity'}>
+          <ReportGrid
+            widgets={layout.widgets}
+            data={data}
+            editing={editing}
+            funnelSteps={layout.funnelSteps}
+            onFunnelStepsChange={setFunnelSteps}
+            onRemove={removeWidget}
+            onMove={moveWidget}
+          />
+        </div>
       )}
 
       {editing && (
