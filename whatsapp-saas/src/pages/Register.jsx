@@ -71,8 +71,8 @@ export function Register() {
           <form onSubmit={onSubmit} className="mt-8 space-y-4">
             <Input label="Nome completo" value={name} onChange={(e) => setName(e.target.value)} error={errors.name} placeholder="Maria Santos" />
             <Input label="E-mail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} error={errors.email} placeholder="voce@empresa.com.br" />
-            <Input label="Senha" type="password" value={password} onChange={(e) => setPassword(e.target.value)} error={errors.password} placeholder="Mínimo 6 caracteres" />
-            <Input label="Confirmar senha" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} error={errors.confirm} placeholder="Repita a senha" />
+            <Input label="Senha" type="password" revealable value={password} onChange={(e) => setPassword(e.target.value)} error={errors.password} placeholder="Mínimo 6 caracteres" />
+            <Input label="Confirmar senha" type="password" revealable value={confirm} onChange={(e) => setConfirm(e.target.value)} error={errors.confirm} placeholder="Repita a senha" />
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? 'Criando...' : 'Criar conta'}
             </Button>

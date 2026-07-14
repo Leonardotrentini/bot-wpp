@@ -75,6 +75,7 @@ export function Login() {
             <Input
               label="Senha"
               type="password"
+              revealable
               name="password"
               autoComplete="current-password"
               value={password}

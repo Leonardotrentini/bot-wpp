@@ -55,11 +55,11 @@ export function AcceptInvite() {
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <div>
             <label className="mb-1 block text-xs text-stone-500">Nova senha</label>
-            <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <Input type="password" revealable value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>
           <div>
             <label className="mb-1 block text-xs text-stone-500">Confirmar senha</label>
-            <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+            <Input type="password" revealable value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
           </div>
           {error && <p className="text-sm text-red-400">{error}</p>}
           <Button type="submit" className="w-full" disabled={loading}>
