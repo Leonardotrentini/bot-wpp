@@ -200,6 +200,66 @@ async function buildCrmSalesByDay(userIds, start, end) {
     .sort((a, b) => a.date.localeCompare(b.date))
 }
 
+/**
+ * Conta contatos distintos com qualquer uma das tags no período (tag aplicada no intervalo).
+ * @param {string[]} userIds
+ * @param {Date} start
+ * @param {Date} end
+ * @param {string[][]} tagGroups — cada grupo = tags de uma etapa (OR dentro do grupo)
+ */
+async function buildCrmTagFunnelCounts(userIds, start, end, tagGroups = []) {
+  if (!Array.isArray(tagGroups) || !tagGroups.length) return []
+
+  const uf = uFilter(userIds)
+  const results = []
+
+  for (const rawIds of tagGroups) {
+    const tagIds = [...new Set((rawIds || []).map((id) => String(id).trim()).filter(Boolean))]
+    if (!tagIds.length) {
+      results.push(0)
+      continue
+    }
+
+    const count = await prisma.crmContact.count({
+      where: {
+        ...uf,
+        tags: {
+          some: {
+            tagId: { in: tagIds },
+            createdAt: { gte: start, lte: end },
+          },
+        },
+      },
+    })
+    results.push(count)
+  }
+
+  return results
+}
+
+/** Lista de tags da conta (para o editor do funil). */
+async function buildCrmTagsList(userIds) {
+  const tags = await prisma.crmTag.findMany({
+    where: uFilter(userIds),
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, color: true },
+  })
+
+  const seen = new Set()
+  const unique = []
+  for (const tag of tags) {
+    const key = String(tag.name || "").trim().toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    unique.push({
+      id: tag.id,
+      name: tag.name,
+      color: tag.color || "#a8a29e",
+    })
+  }
+  return unique
+}
+
 module.exports = {
   buildCrmConversationsStarted,
   buildCrmOverview,
@@ -208,4 +268,6 @@ module.exports = {
   buildCrmConversionCounts,
   buildCrmQuotesSummary,
   buildCrmSalesByDay,
+  buildCrmTagFunnelCounts,
+  buildCrmTagsList,
 }

@@ -4,8 +4,9 @@ import {
   createWidgetId,
   getMetricDef,
 } from './reportMetricCatalog.js'
+import { DEFAULT_FUNNEL_STEPS, normalizeFunnelSteps } from './reportFunnelConfig.js'
 
-const STORAGE_VERSION = 3
+const STORAGE_VERSION = 4
 
 const LEGACY_DEFAULT_METRIC_IDS = [
   'groups.active',
@@ -28,8 +29,17 @@ function isLegacyDefaultLayout(widgets) {
   return ids.every((id, i) => id === legacy[i])
 }
 
+function defaultLayout() {
+  return {
+    version: STORAGE_VERSION,
+    filters: { ...DEFAULT_REPORT_FILTERS },
+    widgets: DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
+    funnelSteps: DEFAULT_FUNNEL_STEPS.map((s) => ({ ...s, tagIds: [] })),
+  }
+}
+
 function migrateLayout(parsed) {
-  if (!parsed?.widgets) return parsed
+  if (!parsed?.widgets) return { ...defaultLayout(), ...parsed, funnelSteps: normalizeFunnelSteps(parsed.funnelSteps) }
 
   let widgets = parsed.widgets.map((w) =>
     w.id === 'w2' && w.metricId === 'groups.new_leads'
@@ -37,11 +47,16 @@ function migrateLayout(parsed) {
       : w,
   )
 
-  if (parsed.version === 2 && isLegacyDefaultLayout(widgets)) {
+  if ((parsed.version === 2 || parsed.version === 3) && isLegacyDefaultLayout(widgets)) {
     widgets = DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w }))
   }
 
-  return { ...parsed, widgets, version: STORAGE_VERSION }
+  return {
+    ...parsed,
+    widgets,
+    funnelSteps: normalizeFunnelSteps(parsed.funnelSteps),
+    version: STORAGE_VERSION,
+  }
 }
 
 function storageKey(userId) {
@@ -51,26 +66,18 @@ function storageKey(userId) {
 export function loadReportLayout(userId) {
   try {
     const raw = localStorage.getItem(storageKey(userId))
-    if (!raw) {
-      return {
-        version: STORAGE_VERSION,
-        filters: { ...DEFAULT_REPORT_FILTERS },
-        widgets: DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
-      }
-    }
+    if (!raw) return defaultLayout()
     const parsed = JSON.parse(raw)
     if (!parsed || parsed.version !== STORAGE_VERSION) {
       const migrated =
-        parsed?.version === 1 || parsed?.version === 2 ? migrateLayout(parsed) : null
+        parsed?.version === 1 || parsed?.version === 2 || parsed?.version === 3
+          ? migrateLayout(parsed)
+          : null
       if (migrated) {
         saveReportLayout(userId, migrated)
         return migrated
       }
-      return {
-        version: STORAGE_VERSION,
-        filters: { ...DEFAULT_REPORT_FILTERS },
-        widgets: DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
-      }
+      return defaultLayout()
     }
     return {
       version: STORAGE_VERSION,
@@ -78,13 +85,10 @@ export function loadReportLayout(userId) {
       widgets: Array.isArray(parsed.widgets) && parsed.widgets.length
         ? parsed.widgets
         : DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
+      funnelSteps: normalizeFunnelSteps(parsed.funnelSteps),
     }
   } catch {
-    return {
-      version: STORAGE_VERSION,
-      filters: { ...DEFAULT_REPORT_FILTERS },
-      widgets: DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
-    }
+    return defaultLayout()
   }
 }
 
@@ -96,6 +100,7 @@ export function saveReportLayout(userId, layout) {
         version: STORAGE_VERSION,
         filters: layout.filters,
         widgets: layout.widgets,
+        funnelSteps: normalizeFunnelSteps(layout.funnelSteps),
       }),
     )
   } catch {
@@ -109,11 +114,7 @@ export function resetReportLayout(userId) {
   } catch {
     /* ignore */
   }
-  return {
-    version: STORAGE_VERSION,
-    filters: { ...DEFAULT_REPORT_FILTERS },
-    widgets: DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
-  }
+  return defaultLayout()
 }
 
 export function addWidgetToLayout(layout, metricId) {
@@ -154,5 +155,12 @@ export function updateLayoutFilters(layout, filters) {
   return {
     ...layout,
     filters: { ...layout.filters, ...filters },
+  }
+}
+
+export function updateLayoutFunnelSteps(layout, funnelSteps) {
+  return {
+    ...layout,
+    funnelSteps: normalizeFunnelSteps(funnelSteps),
   }
 }

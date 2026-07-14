@@ -28,7 +28,6 @@ export function Dashboard() {
   const toast = useToast()
   const { user, isOrgOwner } = useAuth()
   const [groups, setGroups] = useState([])
-  const [selectedIds, setSelectedIds] = useState([])
   const [sellerUserId, setSellerUserId] = useState('')
   const [sellers, setSellers] = useState([])
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -38,6 +37,7 @@ export function Dashboard() {
     editing,
     setEditing,
     setFilters,
+    setFunnelSteps,
     addWidget,
     removeWidget,
     moveWidget,
@@ -46,8 +46,9 @@ export function Dashboard() {
 
   const { data, loading, refreshing, load, refresh, lastUpdatedAt } = useReportDashboard({
     filters: layout.filters,
-    groupIds: selectedIds,
+    groupIds: [],
     sellerUserId: sellerUserId || undefined,
+    funnelSteps: layout.funnelSteps,
   })
 
   useEffect(() => {
@@ -80,7 +81,7 @@ export function Dashboard() {
       return
     }
     load()
-  }, [load, layout.filters.period, layout.filters.startDate, layout.filters.endDate, selectedIds, sellerUserId])
+  }, [load, layout.filters.period, layout.filters.startDate, layout.filters.endDate, layout.funnelSteps, sellerUserId])
 
   const handleFiltersChange = useCallback(
     (patch) => {
@@ -146,9 +147,6 @@ export function Dashboard() {
         partialErrors={partialErrors}
         metaInfo={data?.meta_info}
         lastUpdatedAt={lastUpdatedAt}
-        groups={groups}
-        selectedGroupIds={selectedIds}
-        onGroupsChange={setSelectedIds}
         sellers={isOrgOwner ? sellers : []}
         sellerUserId={sellerUserId}
         onSellerChange={setSellerUserId}
@@ -188,6 +186,8 @@ export function Dashboard() {
           widgets={layout.widgets}
           data={data}
           editing={editing}
+          funnelSteps={layout.funnelSteps}
+          onFunnelStepsChange={setFunnelSteps}
           onRemove={removeWidget}
           onMove={moveWidget}
         />

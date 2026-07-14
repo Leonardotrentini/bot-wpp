@@ -97,57 +97,72 @@ export function ListWidget({ payload }) {
     return <p className="text-sm text-stone-500">Sem dados no período.</p>
   }
 
-  const hasRichAds = items.some((item) => item.thumbnail || item.destinationUrl)
+  const hasRichAds = items.some((item) => item.thumbnail || item.destinationUrl || item.href)
 
   return (
     <ul className={`space-y-3 ${hasRichAds ? '' : 'max-h-64 overflow-y-auto'}`}>
-      {items.map((item, index) => (
-        <li
-          key={item.id ? `${item.id}-${index}` : `${item.label}-${index}`}
-          className="flex items-center gap-3 rounded-xl border border-brand-800/40 bg-brand-950/30 p-3"
-        >
-          {(item.thumbnail || item.href) && (
-            <AdThumbnail src={item.thumbnail} href={item.href} alt={item.label} />
-          )}
-
-          <div className="min-w-0 flex-1">
-            {item.href ? (
-              <a
-                href={item.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-stone-200 hover:text-accent-400 transition font-medium leading-snug"
-              >
-                <span className="truncate">{item.label}</span>
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              </a>
-            ) : (
-              <p className="text-stone-200 font-medium leading-snug truncate">{item.label}</p>
+      {items.map((item, index) => {
+        const primaryHref = item.href || item.destinationUrl || item.adsManagerUrl || null
+        return (
+          <li
+            key={item.id ? `${item.id}-${index}` : `${item.label}-${index}`}
+            className="flex items-center gap-3 rounded-xl border border-brand-800/40 bg-brand-950/30 p-3"
+          >
+            {(item.thumbnail || primaryHref) && (
+              <AdThumbnail src={item.thumbnail} href={primaryHref} alt={item.label} />
             )}
 
-            {item.sub ? <p className="text-xs text-stone-500 mt-0.5 truncate">{item.sub}</p> : null}
+            <div className="min-w-0 flex-1">
+              {primaryHref ? (
+                <a
+                  href={primaryHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-stone-200 hover:text-accent-400 transition font-medium leading-snug"
+                >
+                  <span className="truncate">{item.label}</span>
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                </a>
+              ) : (
+                <p className="text-stone-200 font-medium leading-snug truncate">{item.label}</p>
+              )}
 
-            {item.destinationUrl ? (
-              <a
-                href={item.destinationUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-1 inline-flex items-center gap-1 text-[11px] text-sky-400/90 hover:text-sky-300 transition truncate max-w-full"
-                title={item.destinationUrl}
-              >
-                <span className="truncate">{truncateUrl(item.destinationUrl)}</span>
-                <ExternalLink className="h-3 w-3 shrink-0" />
-              </a>
+              {item.sub ? <p className="text-xs text-stone-500 mt-0.5 truncate">{item.sub}</p> : null}
+
+              {item.destinationUrl && item.destinationUrl !== primaryHref ? (
+                <a
+                  href={item.destinationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center gap-1 text-[11px] text-sky-400/90 hover:text-sky-300 transition truncate max-w-full"
+                  title={item.destinationUrl}
+                >
+                  <span className="truncate">{truncateUrl(item.destinationUrl)}</span>
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </a>
+              ) : null}
+
+              {!item.destinationUrl && item.adsManagerUrl && item.adsManagerUrl !== primaryHref ? (
+                <a
+                  href={item.adsManagerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center gap-1 text-[11px] text-stone-500 hover:text-stone-300 transition"
+                >
+                  Abrir no Ads Manager
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </a>
+              ) : null}
+            </div>
+
+            {item.value ? (
+              <Badge variant="muted" className="shrink-0 tabular-nums">
+                {item.value}
+              </Badge>
             ) : null}
-          </div>
-
-          {item.value ? (
-            <Badge variant="muted" className="shrink-0 tabular-nums">
-              {item.value}
-            </Badge>
-          ) : null}
-        </li>
-      ))}
+          </li>
+        )
+      })}
     </ul>
   )
 }

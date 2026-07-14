@@ -1,11 +1,20 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { getReportDashboard, refreshOverview } from '../services/api.js'
+import {
+  encodeFunnelTagGroups,
+  funnelStepsToTagGroups,
+} from '../lib/reportFunnelConfig.js'
 
-export function useReportDashboard({ filters, groupIds, sellerUserId, onRefreshDone }) {
+export function useReportDashboard({ filters, groupIds, sellerUserId, funnelSteps, onRefreshDone }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null)
+
+  const funnelTagGroupsParam = useMemo(
+    () => encodeFunnelTagGroups(funnelStepsToTagGroups(funnelSteps)),
+    [funnelSteps],
+  )
 
   const fetchDashboard = useCallback(async () => {
     const res = await getReportDashboard({
@@ -15,11 +24,20 @@ export function useReportDashboard({ filters, groupIds, sellerUserId, onRefreshD
       groupIds,
       metaPeriod: filters.metaPeriod,
       sellerUserId: sellerUserId || undefined,
+      funnelTagGroups: funnelTagGroupsParam || undefined,
     })
     setData(res.data)
     setLastUpdatedAt(new Date())
     return res.data
-  }, [filters.period, filters.startDate, filters.endDate, filters.metaPeriod, groupIds, sellerUserId])
+  }, [
+    filters.period,
+    filters.startDate,
+    filters.endDate,
+    filters.metaPeriod,
+    groupIds,
+    sellerUserId,
+    funnelTagGroupsParam,
+  ])
 
   const load = useCallback(async () => {
     setLoading(true)

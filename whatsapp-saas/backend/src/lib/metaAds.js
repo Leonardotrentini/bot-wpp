@@ -109,7 +109,12 @@ function extractCreativeDestinationUrl(creative) {
   }
 
   const feedLinks = creative.asset_feed_spec?.link_urls
-  if (Array.isArray(feedLinks) && feedLinks[0]) return String(feedLinks[0])
+  if (Array.isArray(feedLinks) && feedLinks[0]) {
+    const first = feedLinks[0]
+    if (typeof first === "string") return first
+    if (first?.website_url) return String(first.website_url)
+    if (first?.display_url) return String(first.display_url)
+  }
 
   return null
 }
@@ -123,16 +128,23 @@ async function enrichTopAdsWithCreatives(token, ads) {
   try {
     const batch = await graphGet("", token, {
       ids: ids.join(","),
-      fields: "creative{thumbnail_url,image_url,object_url,link_url,object_story_spec,asset_feed_spec}",
+      fields:
+        "preview_shareable_link,creative{thumbnail_url,image_url,object_url,link_url,object_story_spec,asset_feed_spec}",
     })
 
     return ads.map((ad) => {
       const row = batch?.[ad.id]
       const creative = row?.creative || {}
+      const destinationUrl =
+        extractCreativeDestinationUrl(creative) ||
+        (row?.preview_shareable_link ? String(row.preview_shareable_link) : null) ||
+        ad.destinationUrl ||
+        null
       return {
         ...ad,
         thumbnailUrl: creative.thumbnail_url || creative.image_url || ad.thumbnailUrl || null,
-        destinationUrl: extractCreativeDestinationUrl(creative) || ad.destinationUrl || null,
+        destinationUrl,
+        previewUrl: row?.preview_shareable_link ? String(row.preview_shareable_link) : ad.previewUrl || null,
       }
     })
   } catch (err) {
@@ -241,13 +253,15 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
           ctr: parseMetricNumber(row.ctr),
           impressions: parseInt(row.impressions || 0, 10) || 0,
           adsManagerUrl: row.ad_id
-            ? `https://www.facebook.com/adsmanager/manage/ads?act=${accountDigits}&selected_ad_ids=${row.ad_id}`
+            ? `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${accountDigits}&selected_ad_ids=${row.ad_id}`
             : null,
         }))
         .sort((a, b) => b.clicks - a.clicks)
-        .slice(0, 5)
 
-      topAdsByClicks = await enrichTopAdsWithCreatives(token, topAdsByClicks)
+      // Enriquecer top 25 para rankear por leads/vendas depois (frontend/backend cruzam atribuição).
+      const toEnrich = topAdsByClicks.slice(0, 25)
+      const enriched = await enrichTopAdsWithCreatives(token, toEnrich)
+      topAdsByClicks = enriched
     } catch (adErr) {
       console.warn("[metaAds] ad-level insights failed:", adErr.message)
     }

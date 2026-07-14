@@ -15,8 +15,14 @@ const {
   buildCrmConversionCounts,
   buildCrmQuotesSummary,
   buildCrmSalesByDay,
+  buildCrmTagFunnelCounts,
+  buildCrmTagsList,
 } = require("./crmFunnelMetrics")
-const { buildAttributionSummary } = require("./attributionMetrics")
+const {
+  buildAttributionSummary,
+  buildSalesByAdContent,
+  rankAdsByLeadsAndSales,
+} = require("./attributionMetrics")
 const { buildUnifiedLeadsMetrics } = require("./reportLeadsMetrics")
 
 function reportPeriodToRange(period, startDate, endDate) {
@@ -47,6 +53,20 @@ function mapPeriodToMetaPeriod(period) {
   return "7d"
 }
 
+function parseFunnelTagGroups(raw) {
+  if (!raw || typeof raw !== "string") return []
+  return String(raw)
+    .split(";")
+    .map((group) =>
+      group
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    )
+    .filter((g) => g.length > 0)
+    .slice(0, 12)
+}
+
 function parseReportQuery(req) {
   const rawIds = req.query?.groupIds || req.query?.groupId
   const groupJids = rawIds
@@ -64,8 +84,9 @@ function parseReportQuery(req) {
     typeof req.query?.sellerUserId === "string" && req.query.sellerUserId.trim()
       ? req.query.sellerUserId.trim()
       : undefined
+  const funnelTagGroups = parseFunnelTagGroups(req.query?.funnelTagGroups)
 
-  return { groupJids, period, startDate, endDate, metaPeriod, sellerUserId }
+  return { groupJids, period, startDate, endDate, metaPeriod, sellerUserId, funnelTagGroups }
 }
 
 function costPerMetric(spend, count) {
@@ -75,7 +96,16 @@ function costPerMetric(spend, count) {
 
 async function buildReportDashboard(scopeUserIds, options = {}) {
   let userIds = Array.isArray(scopeUserIds) ? [...scopeUserIds] : [scopeUserIds]
-  const { groupJids, period, startDate, endDate, metaPeriod, sellerUserId, metaOwnerUserId } = options
+  const {
+    groupJids,
+    period,
+    startDate,
+    endDate,
+    metaPeriod,
+    sellerUserId,
+    metaOwnerUserId,
+    funnelTagGroups = [],
+  } = options
 
   if (sellerUserId) {
     if (!assertUserInScope({ userIds }, sellerUserId)) {
@@ -110,6 +140,8 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
       page: 1,
       limit: 1,
     }),
+    buildCrmTagsList(userIds),
+    buildCrmTagFunnelCounts(userIds, start, end, funnelTagGroups),
   ]).catch((err) => {
     partialErrors.push({ source: "crm", message: err?.message || "Falha ao carregar CRM." })
     return null
@@ -132,7 +164,12 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
 
   const attrPromise = buildAttributionSummary(userIds, start, end).catch((err) => {
     partialErrors.push({ source: "attribution", message: err?.message || "Falha ao carregar atribuição." })
-    return { total: 0, bySource: [], byCampaign: [] }
+    return { total: 0, bySource: [], byCampaign: [], byContent: [], rows: [] }
+  })
+
+  const salesByAdPromise = buildSalesByAdContent(userIds, start, end).catch((err) => {
+    partialErrors.push({ source: "attribution", message: err?.message || "Falha ao atribuir vendas a anúncios." })
+    return new Map()
   })
 
   const leadsPromise = buildUnifiedLeadsMetrics(userIds, start, end, { groupJids }).catch((err) => {
@@ -149,17 +186,35 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
     }
   })
 
-  const [groupsRaw, crmRaw, metaRaw, attribution, leads] = await Promise.all([
+  const [groupsRaw, crmRaw, metaRaw, attributionRaw, salesByAd, leads] = await Promise.all([
     groupsPromise,
     crmPromise,
     metaPromise,
     attrPromise,
+    salesByAdPromise,
     leadsPromise,
   ])
 
+  const attribution = {
+    total: attributionRaw?.total || 0,
+    bySource: attributionRaw?.bySource || [],
+    byCampaign: attributionRaw?.byCampaign || [],
+    byContent: attributionRaw?.byContent || [],
+  }
+
   let crm = null
   if (crmRaw) {
-    const [overview, funnel, funnelEvents, conversions, quotes, salesByDay, salesList] = crmRaw
+    const [
+      overview,
+      funnel,
+      funnelEvents,
+      conversions,
+      quotes,
+      salesByDay,
+      salesList,
+      tags,
+      tagFunnelCounts,
+    ] = crmRaw
     crm = {
       overview,
       funnel,
@@ -170,6 +225,9 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
         summary: salesList.summary,
         byDay: salesByDay,
       },
+      tags: tags || [],
+      tagFunnelCounts: tagFunnelCounts || [],
+      funnelTagGroups,
     }
   }
 
@@ -188,17 +246,24 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
     },
     campaigns: [],
     topAdsByClicks: [],
+    topAds: [],
     error: metaRaw?.error || null,
     message: metaRaw?.message || null,
     lastSyncAt: adsFields.lastAdsSyncAt,
   }
 
   if (metaAdsOk && metaRaw.summary) {
+    const rankedAds = rankAdsByLeadsAndSales(
+      metaRaw.topAdsByClicks || [],
+      attribution.byContent,
+      salesByAd,
+    )
     meta = {
       ...meta,
       summary: metaRaw.summary,
       campaigns: metaRaw.campaigns || [],
-      topAdsByClicks: metaRaw.topAdsByClicks || [],
+      topAdsByClicks: rankedAds,
+      topAds: rankedAds,
       account: metaRaw.account || null,
       syncedAt: metaRaw.syncedAt || null,
       error: null,

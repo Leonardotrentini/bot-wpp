@@ -1,8 +1,18 @@
-import { useCallback, useMemo } from 'react'
+import { useMemo } from 'react'
 import { getMetricDef } from '../../lib/reportMetricCatalog.js'
 import { ReportWidget } from './ReportWidget.jsx'
 
-function WidgetSlot({ widget, data, editing, onRemove, onMove, index, total }) {
+function WidgetSlot({
+  widget,
+  data,
+  editing,
+  onRemove,
+  onMove,
+  index,
+  total,
+  funnelSteps,
+  onFunnelStepsChange,
+}) {
   const def = getMetricDef(widget.metricId)
   const isKpi = def?.chartType === 'kpi'
   const wide = !isKpi && widget.colSpan >= 2
@@ -19,12 +29,27 @@ function WidgetSlot({ widget, data, editing, onRemove, onMove, index, total }) {
         onMoveDown={() => onMove(widget.id, 'down')}
         isFirst={index === 0}
         isLast={index === total - 1}
+        funnelSteps={funnelSteps}
+        onFunnelStepsChange={onFunnelStepsChange}
       />
     </div>
   )
 }
 
-export function ReportGrid({ widgets, data, editing, onRemove, onMove }) {
+export function ReportGrid({
+  widgets,
+  data,
+  editing,
+  onRemove,
+  onMove,
+  funnelSteps,
+  onFunnelStepsChange,
+}) {
+  const dataWithFunnel = useMemo(
+    () => (data ? { ...data, funnelSteps } : data),
+    [data, funnelSteps],
+  )
+
   const { kpis, charts } = useMemo(() => {
     const kpiList = []
     const chartList = []
@@ -61,12 +86,14 @@ export function ReportGrid({ widgets, data, editing, onRemove, onMove }) {
               <WidgetSlot
                 key={widget.id}
                 widget={widget}
-                data={data}
+                data={dataWithFunnel}
                 editing={editing}
                 onRemove={onRemove}
                 onMove={onMove}
                 index={index}
                 total={kpis.length}
+                funnelSteps={funnelSteps}
+                onFunnelStepsChange={onFunnelStepsChange}
               />
             ))}
           </div>
@@ -83,12 +110,14 @@ export function ReportGrid({ widgets, data, editing, onRemove, onMove }) {
               <WidgetSlot
                 key={widget.id}
                 widget={widget}
-                data={data}
+                data={dataWithFunnel}
                 editing={editing}
                 onRemove={onRemove}
                 onMove={onMove}
                 index={index}
                 total={charts.length}
+                funnelSteps={funnelSteps}
+                onFunnelStepsChange={onFunnelStepsChange}
               />
             ))}
           </div>

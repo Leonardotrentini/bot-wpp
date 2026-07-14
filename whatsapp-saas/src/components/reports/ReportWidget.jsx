@@ -11,7 +11,7 @@ import { ChartWidget } from './widgets/ChartWidget.jsx'
 import { TableWidget, ListWidget } from './widgets/TableWidget.jsx'
 import { FunnelWidget, ConversionsWidget } from './widgets/FunnelWidget.jsx'
 
-function WidgetBody({ def, payload }) {
+function WidgetBody({ def, payload, editing, funnelSteps, onFunnelStepsChange }) {
   if (payload?.empty) {
     return <p className="text-sm text-stone-500 py-4">Métrica não disponível.</p>
   }
@@ -30,7 +30,14 @@ function WidgetBody({ def, payload }) {
     case 'funnel':
       return <FunnelWidget payload={payload} />
     case 'conversions':
-      return <ConversionsWidget payload={payload} />
+      return (
+        <ConversionsWidget
+          payload={payload}
+          editing={editing}
+          funnelSteps={funnelSteps}
+          onFunnelStepsChange={onFunnelStepsChange}
+        />
+      )
     default:
       return <p className="text-sm text-stone-500">Tipo de widget não suportado.</p>
   }
@@ -79,6 +86,8 @@ export function ReportWidget({
   onMoveDown,
   isFirst,
   isLast,
+  funnelSteps,
+  onFunnelStepsChange,
 }) {
   const def = getMetricDef(widget.metricId)
   if (!def) return null
@@ -109,7 +118,13 @@ export function ReportWidget({
           </div>
         </div>
         <p className="mt-4 text-xs font-medium uppercase tracking-wide text-stone-500">{def.label}</p>
-        <WidgetBody def={def} payload={payload} />
+        <WidgetBody
+          def={def}
+          payload={payload}
+          editing={editing}
+          funnelSteps={funnelSteps}
+          onFunnelStepsChange={onFunnelStepsChange}
+        />
         {sourceNote && editing ? (
           <p className="mt-2 text-[10px] text-stone-600">{sourceNote}</p>
         ) : null}
@@ -141,7 +156,13 @@ export function ReportWidget({
           />
         )}
       </div>
-      <WidgetBody def={def} payload={payload} />
+      <WidgetBody
+        def={def}
+        payload={payload}
+        editing={editing}
+        funnelSteps={funnelSteps}
+        onFunnelStepsChange={onFunnelStepsChange}
+      />
     </Card>
   )
 }

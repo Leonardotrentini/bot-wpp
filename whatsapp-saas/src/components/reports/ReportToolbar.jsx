@@ -1,8 +1,6 @@
-import { RefreshCw, Settings2, RotateCcw, Plus, ChevronDown, ChevronUp, Filter } from 'lucide-react'
-import { useState } from 'react'
+import { RefreshCw, Settings2, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { DateRangeCalendar } from '../common/DateRangeCalendar.jsx'
-import { GroupFilterBar } from './GroupFilterBar.jsx'
 import { Select } from '../common/Select.jsx'
 
 const PERIOD_OPTIONS = [
@@ -31,14 +29,10 @@ export function ReportToolbar({
   partialErrors,
   metaInfo,
   lastUpdatedAt,
-  groups,
-  selectedGroupIds,
-  onGroupsChange,
   sellers = [],
   sellerUserId = '',
   onSellerChange,
 }) {
-  const [filtersOpen, setFiltersOpen] = useState(false)
   const retentionMode = metaInfo?.groupsRetentionMode || 'rolling'
   const retention = metaInfo?.groupsRetentionDays ?? 2
   const groupsDataNote =
@@ -130,21 +124,6 @@ export function ReportToolbar({
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
-            className="inline-flex items-center gap-2 rounded-xl border border-brand-700/80 bg-brand-950/40 px-3.5 py-2 text-sm text-stone-300 hover:border-brand-600 transition"
-          >
-            <Filter className="h-4 w-4 text-stone-500" />
-            Filtros de grupo
-            {selectedGroupIds.length > 0 && (
-              <span className="rounded-full bg-accent-500/20 px-2 py-0.5 text-xs text-accent-300">
-                {selectedGroupIds.length}
-              </span>
-            )}
-            {filtersOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-
           {sellers.length > 0 && onSellerChange && (
             <div className="min-w-[180px]">
               <Select
@@ -172,12 +151,6 @@ export function ReportToolbar({
               maxDate={todayStr}
               onChange={({ start, end }) => onFiltersChange({ startDate: start, endDate: end })}
             />
-          </div>
-        )}
-
-        {filtersOpen && (
-          <div className="px-4 pb-4 border-t border-brand-800/40 pt-4">
-            <GroupFilterBar groups={groups} selectedIds={selectedGroupIds} onChange={onGroupsChange} embedded />
           </div>
         )}
       </div>

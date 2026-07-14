@@ -7,6 +7,7 @@ import {
   resetReportLayout,
   saveReportLayout,
   updateLayoutFilters,
+  updateLayoutFunnelSteps,
 } from '../lib/reportLayoutStorage.js'
 
 export function useReportLayout(userId) {
@@ -32,6 +33,13 @@ export function useReportLayout(userId) {
   const setFilters = useCallback(
     (filters) => {
       persist((prev) => updateLayoutFilters(prev, filters))
+    },
+    [persist],
+  )
+
+  const setFunnelSteps = useCallback(
+    (funnelSteps) => {
+      persist((prev) => updateLayoutFunnelSteps(prev, funnelSteps))
     },
     [persist],
   )
@@ -68,6 +76,7 @@ export function useReportLayout(userId) {
     editing,
     setEditing,
     setFilters,
+    setFunnelSteps,
     addWidget,
     removeWidget,
     moveWidget,

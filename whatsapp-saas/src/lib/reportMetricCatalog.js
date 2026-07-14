@@ -308,8 +308,8 @@ export const REPORT_METRIC_CATALOG = [
   },
   {
     id: 'meta.top_ads_clicks',
-    label: 'Top 5 anúncios (cliques)',
-    description: 'Anúncios com mais cliques no período',
+    label: 'Top 5 anúncios (leads e vendas)',
+    description: 'Anúncios que trouxeram mais leads e vendas no período',
     category: 'meta',
     chartType: 'list',
     defaultColSpan: 2,
@@ -317,7 +317,7 @@ export const REPORT_METRIC_CATALOG = [
   {
     id: 'meta.conversions',
     label: 'Funil de conversão',
-    description: 'Leads → qualificados → orçamentos → compras',
+    description: 'Etapas configuráveis por tags da conta',
     category: 'meta',
     chartType: 'conversions',
     defaultColSpan: 2,
@@ -564,19 +564,31 @@ export function resolveMetricData(metricId, data) {
       }
     case 'meta.spend':
       return { value: m?.summary?.spend ?? null, unavailable: !m?.summary }
-    case 'meta.top_ads_clicks':
+    case 'meta.top_ads_clicks': {
+      const ads = m?.topAds || m?.topAdsByClicks || []
       return {
-        items: (m?.topAdsByClicks || []).map((ad) => ({
-          id: ad.id,
-          label: ad.name,
-          sub: ad.campaignName !== '—' ? ad.campaignName : null,
-          value: `${ad.clicks} cliques`,
-          href: ad.adsManagerUrl,
-          thumbnail: ad.thumbnailUrl || null,
-          destinationUrl: ad.destinationUrl || null,
-        })),
+        items: ads.map((ad) => {
+          const leads = ad.leads ?? 0
+          const sales = ad.sales ?? 0
+          const hasConv = leads > 0 || sales > 0
+          const value = hasConv
+            ? `${leads} lead${leads === 1 ? '' : 's'} · ${sales} venda${sales === 1 ? '' : 's'}`
+            : `${ad.clicks ?? 0} cliques`
+          const href = ad.destinationUrl || ad.previewUrl || ad.adsManagerUrl || null
+          return {
+            id: ad.id,
+            label: ad.name,
+            sub: ad.campaignName !== '—' ? ad.campaignName : null,
+            value,
+            href,
+            thumbnail: ad.thumbnailUrl || null,
+            destinationUrl: ad.destinationUrl && ad.destinationUrl !== href ? ad.destinationUrl : null,
+            adsManagerUrl: ad.adsManagerUrl || null,
+          }
+        }),
         unavailable: !m?.summary,
       }
+    }
     case 'meta.clicks':
       return { value: m?.summary?.clicks ?? null, unavailable: !m?.summary }
     case 'meta.cpc':
@@ -602,6 +614,35 @@ export function resolveMetricData(metricId, data) {
       }
     case 'meta.conversions': {
       const conv = c?.conversions || m?.conversions || {}
+      const tagCounts = Array.isArray(c?.tagFunnelCounts) ? c.tagFunnelCounts : []
+      const groups = Array.isArray(c?.funnelTagGroups) ? c.funnelTagGroups : []
+      let tagCursor = 0
+
+      const configured = Array.isArray(data.funnelSteps) ? data.funnelSteps : null
+      if (configured?.length) {
+        const steps = configured.map((step) => {
+          if (step.tagIds?.length) {
+            const count = tagCounts[tagCursor] ?? 0
+            tagCursor += 1
+            return { label: step.label, value: count, tagIds: step.tagIds }
+          }
+          const systemMap = {
+            leads: data.leads?.total ?? conv.conversationStarted ?? 0,
+            qualified: conv.leadQualified ?? 0,
+            quote: conv.quote ?? c?.quotes?.count ?? 0,
+            purchase: conv.purchase ?? c?.sales?.summary?.count ?? 0,
+          }
+          return {
+            label: step.label,
+            value: systemMap[step.systemKey] ?? 0,
+            systemKey: step.systemKey,
+          }
+        })
+        return { steps, tags: c?.tags || [], configurable: true }
+      }
+
+      // Fallback se a API ainda não recebeu grupos mas o front montou contagens
+      void groups
       return {
         steps: [
           { label: 'Leads', value: data.leads?.total ?? conv.conversationStarted ?? 0 },
@@ -609,6 +650,8 @@ export function resolveMetricData(metricId, data) {
           { label: 'Orçamento', value: conv.quote ?? c?.quotes?.count ?? 0 },
           { label: 'Compra', value: conv.purchase ?? c?.sales?.summary?.count ?? 0 },
         ],
+        tags: c?.tags || [],
+        configurable: true,
       }
     }
     case 'attr.cost_per_lead': {
@@ -669,6 +712,12 @@ export function getMetricSourceNote(metricId, data) {
     return 'CRM: histórico completo no período selecionado.'
   }
   if (metricId.startsWith('meta.')) {
+    if (metricId === 'meta.top_ads_clicks') {
+      return 'Rankeado por leads (utm_content) e vendas atribuídas; se não houver, usa cliques.'
+    }
+    if (metricId === 'meta.conversions') {
+      return 'Etapas padrão do sistema ou tags da conta (contato com a tag no período).'
+    }
     if (!data?.meta?.summary) return data?.meta?.message || 'Meta Ads não conectado.'
     return 'Meta Ads: dados da Marketing API.'
   }

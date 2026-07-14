@@ -596,6 +596,7 @@ export async function getReportDashboard({
   groupIds = [],
   metaPeriod,
   sellerUserId,
+  funnelTagGroups = '',
 } = {}) {
   if (resolveUseRealApi()) {
     const params = { period }
@@ -604,6 +605,7 @@ export async function getReportDashboard({
     if (metaPeriod) params.metaPeriod = metaPeriod
     if (groupIds?.length) params.groupIds = groupIds.join(',')
     if (sellerUserId) params.sellerUserId = sellerUserId
+    if (funnelTagGroups) params.funnelTagGroups = funnelTagGroups
     return apiClient.get('/reports/dashboard', { params })
   }
   await delay()
