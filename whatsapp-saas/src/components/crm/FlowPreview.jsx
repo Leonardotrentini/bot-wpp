@@ -23,6 +23,7 @@ function renderTextWithLinks(text) {
 
 const ACTION_ICONS = {
   add_tag: TagIcon,
+  remove_tag: TagIcon,
   move_stage: Kanban,
   assign_ai: Bot,
   set_status: Zap,
@@ -32,6 +33,10 @@ function actionSummary(action, { tags, stages, agents }) {
   if (action.type === 'add_tag') {
     const tag = tags.find((t) => t.id === action.tagId)
     return tag ? `Adicionar tag “${tag.name}”` : 'Adicionar tag'
+  }
+  if (action.type === 'remove_tag') {
+    const tag = tags.find((t) => t.id === action.tagId)
+    return tag ? `Remover tag “${tag.name}”` : 'Remover tag'
   }
   if (action.type === 'move_stage') {
     const stage = stages.find((s) => s.id === action.stageId)

@@ -12,7 +12,7 @@ function flowIsTestable(flow) {
   if (!flow?.actions?.length) return false
   return flow.actions.every((a) => {
     if (a.type === 'send_message') return flowMessageHasContent(a)
-    if (a.type === 'add_tag') return Boolean(a.tagId)
+    if (a.type === 'add_tag' || a.type === 'remove_tag') return Boolean(a.tagId)
     if (a.type === 'move_stage') return Boolean(a.stageId)
     if (a.type === 'set_status') return Boolean(a.value)
     return true
