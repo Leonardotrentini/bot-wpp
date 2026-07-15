@@ -11,6 +11,7 @@ const {
   normalizeQuietHours,
   deliveryDelayMs,
   onTagAdded,
+  onCrmMessage,
   noReplyCandidateWhere,
 } = require("../src/lib/crmFlows")
 const { extractIndividualChats } = require("../src/lib/crmSync")
@@ -86,6 +87,79 @@ test("normalizeTrigger tag_added exige tagId", () => {
     type: "tag_added",
     tagId: "tag-1",
   })
+})
+
+test("normalizeTrigger contact_reply exige tagIds", () => {
+  assert.strictEqual(normalizeTrigger({ type: "contact_reply" }), null)
+  assert.strictEqual(normalizeTrigger({ type: "contact_reply", tagIds: [] }), null)
+  assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply", tagIds: ["t1", "t1", " t2 "] }), {
+    type: "contact_reply",
+    tagIds: ["t1", "t2"],
+  })
+  assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply", conditionTags: ["c1"] }).tagIds, ["c1"])
+})
+
+test("onCrmMessage contact_reply só dispara com tag e conversa existente", async () => {
+  const runs = []
+  const flows = [
+    {
+      id: "f-reply",
+      userId: "u1",
+      enabled: true,
+      trigger: { type: "contact_reply", tagIds: ["tag-fup"] },
+      conditions: [],
+      actions: [{ type: "remove_tag", tagId: "tag-fup" }],
+      cooldownPerContactHours: 24,
+      quietHours: null,
+    },
+  ]
+  const conversation = {
+    id: "c1",
+    userId: "u1",
+    contactId: "ct1",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    status: "open",
+    kanbanStageId: null,
+  }
+  let hasTag = true
+  const prisma = {
+    crmFlow: {
+      findMany: async ({ where }) => flows.filter((f) => f.userId === where.userId && f.enabled === where.enabled),
+    },
+    crmFlowRun: {
+      findFirst: async () => null,
+      create: async ({ data }) => {
+        runs.push(data)
+        return data
+      },
+      count: async () => 0,
+    },
+    crmContactTag: {
+      count: async ({ where }) => {
+        if (!hasTag) return 0
+        return where.tagId?.in?.includes("tag-fup") ? 1 : 0
+      },
+      deleteMany: async () => ({ count: 1 }),
+    },
+  }
+  const deps = { prisma, io: null, sendText: async () => {} }
+  const inbound = { id: "m1", fromMe: false, source: "webhook", body: "oi" }
+
+  runs.length = 0
+  await onCrmMessage(deps, { conversation, message: inbound, isNewConversation: true })
+  assert.strictEqual(runs.length, 0, "nova conversa não dispara contact_reply")
+
+  runs.length = 0
+  hasTag = false
+  await onCrmMessage(deps, { conversation, message: inbound, isNewConversation: false })
+  assert.strictEqual(runs.length, 0, "sem tag não dispara")
+
+  runs.length = 0
+  hasTag = true
+  await onCrmMessage(deps, { conversation, message: inbound, isNewConversation: false })
+  assert.strictEqual(runs.length, 1)
+  assert.ok(String(runs[0].detail).includes("contact_reply"))
+  assert.ok(String(runs[0].detail).includes("remove_tag"))
 })
 
 test("onTagAdded só roda fluxo com a tag correspondente", async () => {

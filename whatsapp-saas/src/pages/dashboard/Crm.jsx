@@ -532,11 +532,13 @@ const TRIGGER_LABELS = {
   no_reply: 'Sem resposta',
   stage_change: 'Mudança de estágio',
   tag_added: 'Tag adicionada',
+  contact_reply: 'Contato responde',
 }
 
 const ACTION_LABELS = {
   send_message: 'Enviar mensagem',
   add_tag: 'Adicionar tag',
+  remove_tag: 'Remover tag',
   move_stage: 'Mover no Kanban',
   assign_ai: 'Ativar IA',
   set_status: 'Mudar status',
@@ -576,13 +578,21 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
     flow.actions.length > 0 &&
     (flow.trigger.type !== 'keyword' || (flow.trigger.keywords || []).length > 0) &&
     (flow.trigger.type !== 'tag_added' || Boolean(flow.trigger.tagId)) &&
+    (flow.trigger.type !== 'contact_reply' || (flow.trigger.tagIds || []).length > 0) &&
     flow.actions.every((a) => {
       if (a.type === 'send_message') return flowMessageHasContent(a)
-      if (a.type === 'add_tag') return a.tagId
+      if (a.type === 'add_tag' || a.type === 'remove_tag') return a.tagId
       if (a.type === 'move_stage') return a.stageId
       if (a.type === 'set_status') return a.value
       return true
     })
+
+  const toggleContactReplyTag = (tagId) => {
+    const id = String(tagId)
+    const current = Array.isArray(flow.trigger.tagIds) ? flow.trigger.tagIds : []
+    const next = current.includes(id) ? current.filter((t) => t !== id) : [...current, id]
+    setTrigger({ tagIds: next })
+  }
 
   return (
     <Modal
@@ -619,6 +629,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             <option value="no_reply">Contato sem responder há um tempo</option>
             <option value="stage_change">Card movido no Kanban</option>
             <option value="tag_added">Quando a tag é adicionada</option>
+            <option value="contact_reply">Quando o contato responde</option>
           </Select>
           {flow.trigger.type === 'keyword' && (
             <div className="mt-2">
@@ -704,6 +715,38 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
               </p>
             </div>
           )}
+          {flow.trigger.type === 'contact_reply' && (
+            <div className="mt-2">
+              <p className="mb-1.5 text-sm font-medium text-stone-300">Somente se o contato tiver a(s) tag(s)</p>
+              <div className="max-h-40 space-y-1.5 overflow-y-auto rounded-xl border border-brand-700/70 bg-brand-950/40 p-2">
+                {tags.length === 0 ? (
+                  <p className="px-1 py-2 text-xs text-stone-500">Crie tags no CRM antes de usar este gatilho.</p>
+                ) : (
+                  tags.map((t) => {
+                    const checked = (flow.trigger.tagIds || []).includes(t.id)
+                    return (
+                      <label
+                        key={t.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-stone-200 hover:bg-white/5"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleContactReplyTag(t.id)}
+                          className="h-3.5 w-3.5 rounded border-brand-600 bg-brand-900 text-accent-500 focus:ring-accent-500/40"
+                        />
+                        <span className="truncate">{t.name}</span>
+                      </label>
+                    )
+                  })
+                )}
+              </div>
+              <p className="mt-1.5 text-[11px] text-stone-500">
+                Dispara na resposta do lead (conversa já existente) se tiver qualquer uma das tags. Obrigatório escolher ao
+                menos 1.
+              </p>
+            </div>
+          )}
         </div>
 
         <div>
@@ -718,7 +761,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
                   actions: [...f.actions, { type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
                 }))
               }
-              disabled={flow.actions.length >= 5}
+              disabled={flow.actions.length >= 10}
             >
               <Plus className="h-3.5 w-3.5" /> Ação
             </Button>
@@ -731,6 +774,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
                     <Select value={action.type} onChange={(e) => setAction(i, { type: e.target.value, body: '', tagId: '', stageId: '', value: '', ...emptyFlowMessageMedia() })}>
                       <option value="send_message">Enviar mensagem</option>
                       <option value="add_tag">Adicionar tag ao contato</option>
+                      <option value="remove_tag">Remover tag do contato</option>
                       <option value="move_stage">Mover no Kanban</option>
                       <option value="assign_ai">Ativar agente de IA</option>
                       <option value="set_status">Mudar status da conversa</option>
@@ -755,6 +799,16 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
                     />
                   )}
                   {action.type === 'add_tag' && (
+                    <Select value={action.tagId || ''} onChange={(e) => setAction(i, { tagId: e.target.value })}>
+                      <option value="">Escolha a tag…</option>
+                      {tags.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </Select>
+                  )}
+                  {action.type === 'remove_tag' && (
                     <Select value={action.tagId || ''} onChange={(e) => setAction(i, { tagId: e.target.value })}>
                       <option value="">Escolha a tag…</option>
                       {tags.map((t) => (
@@ -1778,6 +1832,16 @@ export function Crm() {
                           <span className="text-stone-400">
                             {' '}
                             ({tags.find((t) => t.id === flow.trigger.tagId)?.name || 'tag'})
+                          </span>
+                        )}
+                        {flow.trigger?.type === 'contact_reply' && (flow.trigger.tagIds || []).length > 0 && (
+                          <span className="text-stone-400">
+                            {' '}
+                            (
+                            {(flow.trigger.tagIds || [])
+                              .map((id) => tags.find((t) => t.id === id)?.name || 'tag')
+                              .join(', ')}
+                            )
                           </span>
                         )}
                       </p>

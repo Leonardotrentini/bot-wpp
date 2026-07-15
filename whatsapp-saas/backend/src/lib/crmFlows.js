@@ -1,9 +1,9 @@
 /**
  * FlowEngine — automações de conversa do CRM.
  *
- * Gatilhos: new_conversation | keyword | no_reply | stage_change | tag_added
+ * Gatilhos: new_conversation | keyword | no_reply | stage_change | tag_added | contact_reply
  * Condições: has_tag | not_has_tag | stage_is | status_is
- * Ações: send_message | add_tag | move_stage | assign_ai | set_status
+ * Ações: send_message | add_tag | remove_tag | move_stage | assign_ai | set_status
  *
  * Guard-rails anti-loop/anti-ban:
  * - Nunca reage a mensagens fromMe nem a mensagens geradas por fluxo/IA.
@@ -12,6 +12,7 @@
  * - Quiet hours opcionais por fluxo.
  * - tag_added só dispara quando o vínculo tag↔contato é criado de fato (não no re-add).
  * - no_reply ancora em noReplySinceAt (envio humano); flow/IA não reiniciam o timer.
+ * - contact_reply exige tagIds e só roda em conversa já existente (!isNewConversation).
  */
 
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
@@ -65,7 +66,11 @@ function isWithinQuietHours(quietHours, now = new Date()) {
 function normalizeTrigger(trigger) {
   if (!trigger || typeof trigger !== "object") return null
   const type = String(trigger.type || "")
-  if (!["new_conversation", "keyword", "no_reply", "stage_change", "tag_added"].includes(type)) return null
+  if (
+    !["new_conversation", "keyword", "no_reply", "stage_change", "tag_added", "contact_reply"].includes(type)
+  ) {
+    return null
+  }
   const out = { type }
   if (type === "keyword") {
     const keywords = Array.isArray(trigger.keywords)
@@ -92,7 +97,21 @@ function normalizeTrigger(trigger) {
     if (!tagId) return null
     out.tagId = tagId
   }
+  if (type === "contact_reply") {
+    const raw = Array.isArray(trigger.tagIds) ? trigger.tagIds : Array.isArray(trigger.conditionTags) ? trigger.conditionTags : []
+    const tagIds = [...new Set(raw.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 20)
+    if (!tagIds.length) return null
+    out.tagIds = tagIds
+  }
   return out
+}
+
+async function contactHasAnyTag(prisma, contactId, tagIds) {
+  if (!contactId || !Array.isArray(tagIds) || !tagIds.length) return false
+  const count = await prisma.crmContactTag.count({
+    where: { contactId, tagId: { in: tagIds.map(String) } },
+  })
+  return count > 0
 }
 
 function keywordMatches(trigger, body) {
@@ -153,6 +172,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
   const detail = []
   let stageChangedTo = null
   const newlyAddedTagIds = []
+  let tagsMutated = false
 
   for (const action of actions) {
     const type = String(action?.type || "")
@@ -195,6 +215,13 @@ async function executeActions(deps, flow, conversation, options = {}) {
           }
         }
         detail.push("add_tag")
+      } else if (type === "remove_tag" && action.tagId) {
+        const tagId = String(action.tagId)
+        const deleted = await prisma.crmContactTag.deleteMany({
+          where: { contactId: conversation.contactId, tagId },
+        })
+        if (deleted.count > 0) tagsMutated = true
+        detail.push("remove_tag")
       } else if (type === "move_stage" && action.stageId) {
         const stageId = String(action.stageId)
         await prisma.crmConversation.update({
@@ -221,7 +248,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
     }
   }
 
-  if ((stageChangedTo || newlyAddedTagIds.length) && io) {
+  if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
     const updated = await prisma.crmConversation.findUnique({
       where: { id: conversation.id },
       include: CONVERSATION_INCLUDE,
@@ -329,6 +356,18 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation }) 
       await runFlow(deps, flow, conversation, `keyword`).catch(() => {})
     }
   }
+
+  // Resposta do lead em conversa existente + filtro por tag (obrigatório).
+  if (!isNewConversation) {
+    for (const flow of await loadEnabledFlows(prisma, conversation.userId, "contact_reply")) {
+      const trigger = normalizeTrigger(flow.trigger)
+      if (!trigger?.tagIds?.length) continue
+      const ok = await contactHasAnyTag(prisma, conversation.contactId, trigger.tagIds)
+      if (ok) {
+        await runFlow(deps, flow, conversation, "contact_reply").catch(() => {})
+      }
+    }
+  }
 }
 
 /** Chamado quando um card muda de estágio no Kanban. */
@@ -411,6 +450,7 @@ module.exports = {
   notifyTagAddedForContact,
   processNoReplyFlows,
   noReplyCandidateWhere,
+  contactHasAnyTag,
   testFlowOnConversation,
   normalizeTrigger,
   keywordMatches,

@@ -1243,7 +1243,7 @@ function createCrmRouter({ io }) {
     name: z.string().min(1).max(80),
     enabled: z.boolean().optional().default(false),
     trigger: z.object({
-      type: z.enum(["new_conversation", "keyword", "no_reply", "stage_change", "tag_added"]),
+      type: z.enum(["new_conversation", "keyword", "no_reply", "stage_change", "tag_added", "contact_reply"]),
       keywords: z.array(z.string().min(1).max(60)).max(20).optional(),
       matchMode: z.enum(["contains", "exact"]).optional(),
       hours: z.number().int().min(1).max(720).optional(),
@@ -1252,6 +1252,7 @@ function createCrmRouter({ io }) {
       delayValue: z.number().int().min(1).max(43200).optional(),
       stageId: z.string().nullable().optional(),
       tagId: z.string().nullable().optional(),
+      tagIds: z.array(z.string().min(1)).max(20).optional(),
     }),
     conditions: z
       .array(
@@ -1266,7 +1267,7 @@ function createCrmRouter({ io }) {
     actions: z
       .array(
         z.object({
-          type: z.enum(["send_message", "add_tag", "move_stage", "assign_ai", "set_status"]),
+          type: z.enum(["send_message", "add_tag", "remove_tag", "move_stage", "assign_ai", "set_status"]),
           body: z.string().max(4096).optional(),
           mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional(),
           mediaBase64: z.string().optional().nullable(),
@@ -1298,6 +1299,12 @@ function createCrmRouter({ io }) {
     if (parsed.data.trigger.type === "tag_added" && !parsed.data.trigger.tagId) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione a tag do gatilho." })
     }
+    if (parsed.data.trigger.type === "contact_reply" && !parsed.data.trigger.tagIds?.length) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione ao menos uma tag para o gatilho de resposta.",
+      })
+    }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
     const flow = await prisma.crmFlow.create({ data: { userId: req.user.sub, ...parsed.data } })
@@ -1314,6 +1321,12 @@ function createCrmRouter({ io }) {
     }
     if (parsed.data.trigger.type === "tag_added" && !parsed.data.trigger.tagId) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione a tag do gatilho." })
+    }
+    if (parsed.data.trigger.type === "contact_reply" && !parsed.data.trigger.tagIds?.length) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione ao menos uma tag para o gatilho de resposta.",
+      })
     }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })

@@ -33,6 +33,7 @@ export function stripFlowActionForSave(action) {
     return rest
   }
   if (action.type === 'add_tag') return { type: 'add_tag', tagId: String(action.tagId || '') }
+  if (action.type === 'remove_tag') return { type: 'remove_tag', tagId: String(action.tagId || '') }
   if (action.type === 'move_stage') return { type: 'move_stage', stageId: String(action.stageId || '') }
   if (action.type === 'assign_ai') {
     const out = { type: 'assign_ai' }
@@ -67,6 +68,10 @@ function cleanFlowTrigger(trigger) {
   }
   if (type === 'tag_added' && trigger.tagId) {
     out.tagId = String(trigger.tagId)
+  }
+  if (type === 'contact_reply') {
+    const raw = Array.isArray(trigger.tagIds) ? trigger.tagIds : []
+    out.tagIds = [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))].slice(0, 20)
   }
   return out
 }
