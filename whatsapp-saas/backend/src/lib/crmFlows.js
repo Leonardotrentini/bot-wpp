@@ -1,7 +1,7 @@
 /**
  * FlowEngine — automações de conversa do CRM.
  *
- * Gatilhos: new_conversation | keyword | no_reply | stage_change
+ * Gatilhos: new_conversation | keyword | no_reply | stage_change | tag_added
  * Condições: has_tag | not_has_tag | stage_is | status_is
  * Ações: send_message | add_tag | move_stage | assign_ai | set_status
  *
@@ -10,6 +10,7 @@
  * - Cooldown por contato (default 24h) via CrmFlowRun.
  * - Envios entram na fila CrmDelivery (processada com delay + jitter).
  * - Quiet hours opcionais por fluxo.
+ * - tag_added só dispara quando o vínculo tag↔contato é criado de fato (não no re-add).
  */
 
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
@@ -63,7 +64,7 @@ function isWithinQuietHours(quietHours, now = new Date()) {
 function normalizeTrigger(trigger) {
   if (!trigger || typeof trigger !== "object") return null
   const type = String(trigger.type || "")
-  if (!["new_conversation", "keyword", "no_reply", "stage_change"].includes(type)) return null
+  if (!["new_conversation", "keyword", "no_reply", "stage_change", "tag_added"].includes(type)) return null
   const out = { type }
   if (type === "keyword") {
     const keywords = Array.isArray(trigger.keywords)
@@ -84,6 +85,11 @@ function normalizeTrigger(trigger) {
   }
   if (type === "stage_change") {
     out.stageId = trigger.stageId ? String(trigger.stageId) : null
+  }
+  if (type === "tag_added") {
+    const tagId = trigger.tagId ? String(trigger.tagId) : ""
+    if (!tagId) return null
+    out.tagId = tagId
   }
   return out
 }
@@ -145,6 +151,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
   const actions = Array.isArray(flow.actions) ? flow.actions : []
   const detail = []
   let stageChangedTo = null
+  const newlyAddedTagIds = []
 
   for (const action of actions) {
     const type = String(action?.type || "")
@@ -171,13 +178,21 @@ async function executeActions(deps, flow, conversation, options = {}) {
         })
         detail.push(hasMedia ? `send_message:${mediaType}` : "send_message")
       } else if (type === "add_tag" && action.tagId) {
-        await prisma.crmContactTag
-          .upsert({
-            where: { contactId_tagId: { contactId: conversation.contactId, tagId: String(action.tagId) } },
-            create: { contactId: conversation.contactId, tagId: String(action.tagId) },
-            update: {},
-          })
-          .catch(() => {})
+        const tagId = String(action.tagId)
+        const existing = await prisma.crmContactTag.findUnique({
+          where: { contactId_tagId: { contactId: conversation.contactId, tagId } },
+        })
+        if (!existing) {
+          try {
+            await prisma.crmContactTag.create({
+              data: { contactId: conversation.contactId, tagId },
+            })
+            newlyAddedTagIds.push(tagId)
+          } catch (err) {
+            // corrida rara no unique — trata como já existente
+            if (err?.code !== "P2002") throw err
+          }
+        }
         detail.push("add_tag")
       } else if (type === "move_stage" && action.stageId) {
         const stageId = String(action.stageId)
@@ -205,7 +220,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
     }
   }
 
-  if (stageChangedTo && io) {
+  if ((stageChangedTo || newlyAddedTagIds.length) && io) {
     const updated = await prisma.crmConversation.findUnique({
       where: { id: conversation.id },
       include: CONVERSATION_INCLUDE,
@@ -214,9 +229,16 @@ async function executeActions(deps, flow, conversation, options = {}) {
       emitCrmEvent(io, conversation.userId, "crm:conversation", {
         conversation: formatConversationRow(updated),
       })
-      onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: stageChangedTo }).catch((err) =>
-        console.error("[crm-flow] stage_change:", err?.message || err),
-      )
+      if (stageChangedTo) {
+        onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: stageChangedTo }).catch((err) =>
+          console.error("[crm-flow] stage_change:", err?.message || err),
+        )
+      }
+      for (const tagId of newlyAddedTagIds) {
+        onTagAdded({ prisma, io, sendText }, { conversation: updated, tagId }).catch((err) =>
+          console.error("[crm-flow] tag_added:", err?.message || err),
+        )
+      }
     }
   }
 
@@ -319,6 +341,33 @@ async function onStageChange(deps, { conversation, stageId }) {
   }
 }
 
+/** Chamado quando uma tag é vinculada de fato ao contato (não no re-add). */
+async function onTagAdded(deps, { conversation, tagId }) {
+  if (!conversation || !tagId) return
+  const { prisma } = deps
+  const wanted = String(tagId)
+  for (const flow of await loadEnabledFlows(prisma, conversation.userId, "tag_added")) {
+    const trigger = normalizeTrigger(flow.trigger)
+    if (trigger && trigger.tagId === wanted) {
+      await runFlow(deps, flow, conversation, "tag_added").catch(() => {})
+    }
+  }
+}
+
+/**
+ * Dispara fluxos tag_added a partir de contactId (rotas/CRM commerce).
+ * No-op se não houver conversa ou se tagId estiver vazio.
+ */
+async function notifyTagAddedForContact(deps, { userId, contactId, tagId }) {
+  if (!deps?.prisma || !userId || !contactId || !tagId) return
+  const conversation = await deps.prisma.crmConversation.findFirst({
+    where: { contactId, userId },
+    include: CONVERSATION_INCLUDE,
+  })
+  if (!conversation) return
+  await onTagAdded(deps, { conversation, tagId: String(tagId) })
+}
+
 /** Tick do scheduler: fluxos "sem resposta há X horas". */
 async function processNoReplyFlows(deps) {
   const { prisma } = deps
@@ -346,6 +395,8 @@ async function processNoReplyFlows(deps) {
 module.exports = {
   onCrmMessage,
   onStageChange,
+  onTagAdded,
+  notifyTagAddedForContact,
   processNoReplyFlows,
   testFlowOnConversation,
   normalizeTrigger,

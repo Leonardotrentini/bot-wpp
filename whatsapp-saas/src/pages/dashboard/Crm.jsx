@@ -48,6 +48,8 @@ import {
   DEFAULT_FLOW_COOLDOWN_HOURS,
 } from '../../lib/flowMedia.js'
 import { onSocketEvent } from '../../services/socket.js'
+import { useAuth } from '../../contexts/AuthContext.jsx'
+import { isConversationInScope } from '../../lib/crmConversationScope.js'
 import { getCrmBootstrapCache, setCrmBootstrapCache } from '../../lib/crmBootstrapCache.js'
 import {
   CRM_CONVERSATIONS_LIST_PARAMS,
@@ -529,6 +531,7 @@ const TRIGGER_LABELS = {
   keyword: 'Palavra-chave',
   no_reply: 'Sem resposta',
   stage_change: 'Mudança de estágio',
+  tag_added: 'Tag adicionada',
 }
 
 const ACTION_LABELS = {
@@ -572,6 +575,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
     flow.name.trim() &&
     flow.actions.length > 0 &&
     (flow.trigger.type !== 'keyword' || (flow.trigger.keywords || []).length > 0) &&
+    (flow.trigger.type !== 'tag_added' || Boolean(flow.trigger.tagId)) &&
     flow.actions.every((a) => {
       if (a.type === 'send_message') return flowMessageHasContent(a)
       if (a.type === 'add_tag') return a.tagId
@@ -614,6 +618,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             <option value="keyword">Contato envia palavra-chave</option>
             <option value="no_reply">Contato sem responder há um tempo</option>
             <option value="stage_change">Card movido no Kanban</option>
+            <option value="tag_added">Quando a tag é adicionada</option>
           </Select>
           {flow.trigger.type === 'keyword' && (
             <div className="mt-2">
@@ -681,6 +686,22 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
                   </option>
                 ))}
               </Select>
+            </div>
+          )}
+          {flow.trigger.type === 'tag_added' && (
+            <div className="mt-2">
+              <p className="mb-1.5 text-sm font-medium text-stone-300">Qual tag</p>
+              <Select value={flow.trigger.tagId || ''} onChange={(e) => setTrigger({ tagId: e.target.value || '' })}>
+                <option value="">Selecione a tag…</option>
+                {tags.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+              <p className="mt-1.5 text-[11px] text-stone-500">
+                Dispara quando essa tag é adicionada ao contato (manual, outro fluxo, orçamento/compra).
+              </p>
             </div>
           )}
         </div>
@@ -1378,6 +1399,9 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
 export function Crm() {
   const toast = useToast()
   const navigate = useNavigate()
+  const { user, isOrgOwner } = useAuth()
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner })
+  scopeRef.current = { userId: user?.id, isOrgOwner }
   const [tab, setTab] = useState('kanban')
   const initial = useMemo(() => readCrmInitialState(), [])
 
@@ -1510,11 +1534,15 @@ export function Crm() {
 
   useEffect(() => {
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
-      if (!conversation) return
-      setConversations((prev) => prev.map((c) => (c.id === conversation.id ? conversation : c)))
+      if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
+      setConversations((prev) => {
+        const exists = prev.some((c) => c.id === conversation.id)
+        if (!exists) return [conversation, ...prev]
+        return prev.map((c) => (c.id === conversation.id ? conversation : c))
+      })
     })
     const offMessage = onSocketEvent('crm:message', ({ conversation }) => {
-      if (!conversation) return
+      if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
       setConversations((prev) => {
         const exists = prev.some((c) => c.id === conversation.id)
         return exists ? prev.map((c) => (c.id === conversation.id ? conversation : c)) : [conversation, ...prev]
@@ -1745,6 +1773,12 @@ export function Crm() {
                         )}
                         {flow.trigger?.type === 'no_reply' && (
                           <span className="text-stone-400"> ({formatNoReplyDelay(flow.trigger)})</span>
+                        )}
+                        {flow.trigger?.type === 'tag_added' && flow.trigger.tagId && (
+                          <span className="text-stone-400">
+                            {' '}
+                            ({tags.find((t) => t.id === flow.trigger.tagId)?.name || 'tag'})
+                          </span>
                         )}
                       </p>
                       <p className="mt-0.5 text-xs text-stone-500">

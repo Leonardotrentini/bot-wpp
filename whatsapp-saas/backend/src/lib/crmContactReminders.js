@@ -147,6 +147,7 @@ function formatReminderAlert(row, contact, conversationId) {
   return {
     id: row.id,
     reminderId: row.id,
+    userId: row.userId || null,
     contactId: row.contactId,
     conversationId: conversationId || null,
     contactName,

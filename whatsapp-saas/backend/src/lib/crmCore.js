@@ -225,6 +225,7 @@ function formatConversationRow(convo) {
   if (!convo) return null
   return {
     id: convo.id,
+    userId: convo.userId || null,
     remoteJid: convo.remoteJid,
     status: convo.status,
     unreadCount: convo.unreadCount,
@@ -527,7 +528,10 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   return { message, conversation: updatedConversation, created, isNewConversation }
 }
 
-/** Emite eventos socket para o usuário dono da conversa e para a sala da empresa. */
+/**
+ * Emite eventos CRM para o dono da inbox (`user:`) e, se houver org,
+ * para a sala `org:` (somente OWNER entra nela — vendedores não recebem inbox alheia).
+ */
 function emitCrmEvent(io, userId, event, payload) {
   if (!io) return
   io.to(`user:${userId}`).emit(event, payload)

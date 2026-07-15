@@ -35,7 +35,7 @@ const {
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw } = require("../lib/crmMedia")
-const { onStageChange, testFlowOnConversation } = require("../lib/crmFlows")
+const { onStageChange, notifyTagAddedForContact, testFlowOnConversation } = require("../lib/crmFlows")
 const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
@@ -729,17 +729,21 @@ function createCrmRouter({ io }) {
     const tag = await prisma.crmTag.findFirst({ where: { id: tagId, userId } })
     if (!tag) return res.status(404).json({ error: "NOT_FOUND", message: "Contato ou tag não encontrados." })
 
-    await prisma.crmContactTag.upsert({
+    const existingLink = await prisma.crmContactTag.findUnique({
       where: { contactId_tagId: { contactId: contact.id, tagId: tag.id } },
-      create: { contactId: contact.id, tagId: tag.id },
-      update: {},
     })
-    logContactActivity(prisma, {
-      userId,
-      contactId: contact.id,
-      type: "tag_added",
-      payload: { tagId: tag.id, tagName: tag.name },
-    }).catch((err) => console.error("[crm-activity] tag_added:", err?.message || err))
+    const tagWasCreated = !existingLink
+    if (tagWasCreated) {
+      await prisma.crmContactTag.create({
+        data: { contactId: contact.id, tagId: tag.id },
+      })
+      logContactActivity(prisma, {
+        userId,
+        contactId: contact.id,
+        type: "tag_added",
+        payload: { tagId: tag.id, tagName: tag.name },
+      }).catch((err) => console.error("[crm-activity] tag_added:", err?.message || err))
+    }
 
     const updated = await prisma.crmContact.findUnique({
       where: { id: contact.id },
@@ -747,8 +751,14 @@ function createCrmRouter({ io }) {
     })
 
     let metaTracking = null
-    if (isQualifiedTagName(tag.name) || isQuoteTagName(tag.name) || tag.name === "Comprou") {
+    if (tagWasCreated && (isQualifiedTagName(tag.name) || isQuoteTagName(tag.name) || tag.name === "Comprou")) {
       metaTracking = await trackMetaForContactTag(prisma, { userId, contact: updated, tagName: tag.name })
+    }
+
+    if (tagWasCreated) {
+      notifyTagAddedForContact({ prisma, io, sendText }, { userId, contactId: contact.id, tagId: tag.id }).catch(
+        (err) => console.error("[crm-flow] tag_added:", err?.message || err),
+      )
     }
 
     const refreshed = await prisma.crmContact.findUnique({
@@ -1232,7 +1242,7 @@ function createCrmRouter({ io }) {
     name: z.string().min(1).max(80),
     enabled: z.boolean().optional().default(false),
     trigger: z.object({
-      type: z.enum(["new_conversation", "keyword", "no_reply", "stage_change"]),
+      type: z.enum(["new_conversation", "keyword", "no_reply", "stage_change", "tag_added"]),
       keywords: z.array(z.string().min(1).max(60)).max(20).optional(),
       matchMode: z.enum(["contains", "exact"]).optional(),
       hours: z.number().int().min(1).max(720).optional(),
@@ -1240,6 +1250,7 @@ function createCrmRouter({ io }) {
       delayUnit: z.enum(["hours", "minutes"]).optional(),
       delayValue: z.number().int().min(1).max(43200).optional(),
       stageId: z.string().nullable().optional(),
+      tagId: z.string().nullable().optional(),
     }),
     conditions: z
       .array(
@@ -1283,6 +1294,9 @@ function createCrmRouter({ io }) {
     if (parsed.data.trigger.type === "keyword" && !parsed.data.trigger.keywords?.length) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe pelo menos uma palavra-chave." })
     }
+    if (parsed.data.trigger.type === "tag_added" && !parsed.data.trigger.tagId) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione a tag do gatilho." })
+    }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
     const flow = await prisma.crmFlow.create({ data: { userId: req.user.sub, ...parsed.data } })
@@ -1296,6 +1310,9 @@ function createCrmRouter({ io }) {
     if (!flow) return res.status(404).json({ error: "NOT_FOUND", message: "Fluxo não encontrado." })
     if (parsed.data.trigger.type === "keyword" && !parsed.data.trigger.keywords?.length) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe pelo menos uma palavra-chave." })
+    }
+    if (parsed.data.trigger.type === "tag_added" && !parsed.data.trigger.tagId) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione a tag do gatilho." })
     }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })

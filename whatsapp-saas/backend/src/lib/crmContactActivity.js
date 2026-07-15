@@ -97,11 +97,24 @@ async function removeContactTagsByPrefix(prisma, contactId, prefix) {
 }
 
 async function addContactTagLink(prisma, contactId, tagId) {
-  await prisma.crmContactTag.upsert({
+  const existing = await prisma.crmContactTag.findUnique({
     where: { contactId_tagId: { contactId, tagId } },
-    create: { contactId, tagId },
-    update: {},
   })
+  if (existing) return { created: false, link: existing }
+  const link = await prisma.crmContactTag.create({
+    data: { contactId, tagId },
+  })
+  return { created: true, link }
+}
+
+function fireTagAddedFlows(prisma, io, { userId, contactId, tagId }) {
+  if (!prisma || !io || !userId || !contactId || !tagId) return
+  // lazy require evita ciclo com crmFlows
+  const { notifyTagAddedForContact } = require("./crmFlows")
+  const { sendText } = require("./evolution")
+  notifyTagAddedForContact({ prisma, io, sendText }, { userId, contactId, tagId }).catch((err) =>
+    console.error("[crm-flow] tag_added:", err?.message || err),
+  )
 }
 
 async function findPurchaseStage(prisma, userId) {
@@ -415,7 +428,10 @@ async function saveContactQuote(prisma, io, { userId, contactId, amount, actorUs
   await removeContactTagsByPrefix(prisma, contact.id, QUOTE_TAG_NAME)
 
   const tag = await ensureTag(prisma, userId, QUOTE_TAG_NAME, "#fbbf24")
-  await addContactTagLink(prisma, contact.id, tag.id)
+  const tagLink = await addContactTagLink(prisma, contact.id, tag.id)
+  if (tagLink.created) {
+    fireTagAddedFlows(prisma, io, { userId, contactId: contact.id, tagId: tag.id })
+  }
 
   const custom = parseCustomFields(contact.customFields)
   const savedAt = new Date().toISOString()
@@ -475,7 +491,10 @@ async function confirmContactPurchase(
   if (!Number.isFinite(value) || value <= 0) return { error: "INVALID_AMOUNT" }
 
   const tag = await ensureTag(prisma, userId, PURCHASE_TAG_NAME, "#34d399")
-  await addContactTagLink(prisma, contact.id, tag.id)
+  const tagLink = await addContactTagLink(prisma, contact.id, tag.id)
+  if (tagLink.created) {
+    fireTagAddedFlows(prisma, io, { userId, contactId: contact.id, tagId: tag.id })
+  }
 
   const custom = parseCustomFields(contact.customFields)
   const confirmedAt = new Date().toISOString()

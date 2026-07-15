@@ -65,6 +65,9 @@ function cleanFlowTrigger(trigger) {
   if (type === 'stage_change' && trigger.stageId) {
     out.stageId = String(trigger.stageId)
   }
+  if (type === 'tag_added' && trigger.tagId) {
+    out.tagId = String(trigger.tagId)
+  }
   return out
 }
 

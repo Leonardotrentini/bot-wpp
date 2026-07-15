@@ -10,6 +10,7 @@ const {
   isWithinQuietHours,
   normalizeQuietHours,
   deliveryDelayMs,
+  onTagAdded,
 } = require("../src/lib/crmFlows")
 const { extractIndividualChats } = require("../src/lib/crmSync")
 const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, pickAvatarFromPicturePayload, contactNeedsProfile, contactNeedsAvatar, lookupDirectoryInfo } = require("../src/lib/crmProfile")
@@ -75,6 +76,69 @@ test("normalizeTrigger valida tipos e exige keywords", () => {
   const kw = normalizeTrigger({ type: "keyword", keywords: [" Preço ", "ORÇAMENTO"] })
   assert.deepStrictEqual(kw.keywords, ["preço", "orçamento"])
   assert.strictEqual(kw.matchMode, "contains")
+})
+
+test("normalizeTrigger tag_added exige tagId", () => {
+  assert.strictEqual(normalizeTrigger({ type: "tag_added" }), null)
+  assert.strictEqual(normalizeTrigger({ type: "tag_added", tagId: "" }), null)
+  assert.deepStrictEqual(normalizeTrigger({ type: "tag_added", tagId: "tag-1" }), {
+    type: "tag_added",
+    tagId: "tag-1",
+  })
+})
+
+test("onTagAdded só roda fluxo com a tag correspondente", async () => {
+  const runs = []
+  const flows = [
+    {
+      id: "f1",
+      userId: "u1",
+      enabled: true,
+      trigger: { type: "tag_added", tagId: "tag-follow" },
+      conditions: [],
+      actions: [{ type: "send_message", body: "oi" }],
+      cooldownPerContactHours: 24,
+      quietHours: null,
+    },
+    {
+      id: "f2",
+      userId: "u1",
+      enabled: true,
+      trigger: { type: "tag_added", tagId: "outra" },
+      conditions: [],
+      actions: [{ type: "send_message", body: "nao" }],
+      cooldownPerContactHours: 24,
+      quietHours: null,
+    },
+  ]
+  const conversation = {
+    id: "c1",
+    userId: "u1",
+    contactId: "ct1",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    status: "open",
+    kanbanStageId: null,
+  }
+  const prisma = {
+    crmFlow: {
+      findMany: async ({ where }) => flows.filter((f) => f.userId === where.userId && f.enabled === where.enabled),
+    },
+    crmFlowRun: {
+      findFirst: async () => null,
+      create: async ({ data }) => {
+        runs.push(data)
+        return data
+      },
+      count: async () => 0,
+    },
+    crmDelivery: {
+      create: async ({ data }) => data,
+    },
+  }
+  await onTagAdded({ prisma, io: null, sendText: async () => {} }, { conversation, tagId: "tag-follow" })
+  assert.strictEqual(runs.length, 1)
+  assert.ok(String(runs[0].detail).includes("tag_added"))
+  assert.strictEqual(runs[0].flowId, "f1")
 })
 
 test("normalizeTrigger no_reply aceita horas e minutos", () => {

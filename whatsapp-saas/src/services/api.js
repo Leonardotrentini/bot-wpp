@@ -935,14 +935,21 @@ export async function dismissCrmReminderAlert(reminderId) {
   return mockResponse({ ok: true })
 }
 
+let mockCrmTags = [
+  { id: 'tag-follow', name: 'Follow-up', color: '#f59e0b' },
+  { id: 'tag-quente', name: 'Lead quente', color: '#ef4444' },
+]
+
 export async function getCrmTags() {
   if (resolveUseRealApi()) return apiClient.get('/crm/tags')
-  return mockResponse({ tags: [] })
+  return mockResponse({ tags: mockCrmTags })
 }
 
 export async function createCrmTag(payload) {
   if (resolveUseRealApi()) return apiClient.post('/crm/tags', payload)
-  return mockResponse({ tag: { id: `tag-${Date.now()}`, ...payload } })
+  const tag = { id: `tag-${Date.now()}`, color: '#38bdf8', ...payload }
+  mockCrmTags = [...mockCrmTags, tag]
+  return mockResponse({ tag })
 }
 
 export async function updateCrmTag(id, payload) {

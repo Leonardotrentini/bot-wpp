@@ -154,14 +154,18 @@ const io = new Server(httpServer, {
   },
 })
 
-// Autentica o socket via JWT e entra na sala do usuário e da empresa.
+// Autentica o socket via JWT.
+// SELLER: só sala do próprio user (inbox do seu WhatsApp).
+// OWNER: user + org (vê atualizações da equipe em tempo real).
 io.on("connection", (socket) => {
   const token = socket.handshake?.auth?.token || null
   if (!token) return
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET)
     if (payload?.sub) socket.join(`user:${payload.sub}`)
-    if (payload?.orgId) socket.join(`org:${payload.orgId}`)
+    if (payload?.orgId && payload?.orgRole === "OWNER") {
+      socket.join(`org:${payload.orgId}`)
+    }
   } catch {
     /* socket sem sala privada */
   }

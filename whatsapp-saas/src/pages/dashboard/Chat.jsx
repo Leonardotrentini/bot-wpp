@@ -33,6 +33,7 @@ import { Spinner } from '../../components/common/Spinner.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { onSocketEvent } from '../../services/socket.js'
+import { isConversationInScope } from '../../lib/crmConversationScope.js'
 import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
 import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
 import { runBackgroundAvatarSweep } from '../../lib/crmAvatarEnqueue.js'
@@ -217,7 +218,9 @@ export function Chat() {
   const toastApi = useToast()
   const toastRef = useRef(toastApi)
   toastRef.current = toastApi
-  const { user, isImpersonating } = useAuth()
+  const { user, isImpersonating, isOrgOwner } = useAuth()
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner })
+  scopeRef.current = { userId: user?.id, isOrgOwner }
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [conversations, setConversations] = useState([])
@@ -655,6 +658,7 @@ export function Chat() {
 
   useEffect(() => {
     const offMessage = onSocketEvent('crm:message', ({ conversationId, message, conversation }) => {
+      if (conversation && !isConversationInScope(conversation, scopeRef.current)) return
       if (conversation) {
         setConversations((prev) => {
           const rest = prev.filter((c) => c.id !== conversation.id)
@@ -662,6 +666,11 @@ export function Chat() {
         })
       }
       if (conversationId === activeIdRef.current && message) {
+        // Sem conversation no payload: só aplica se o chat ativo já está na lista do usuário.
+        if (!conversation) {
+          const activeKnown = conversationsRef.current.some((c) => c.id === conversationId)
+          if (!activeKnown) return
+        }
         scrollToEndRef.current = true
         setMessages((prev) => {
           if (prev.some((m) => m.id === message.id)) return prev
@@ -672,8 +681,12 @@ export function Chat() {
       }
     })
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
-      if (!conversation) return
-      setConversations((prev) => prev.map((c) => (c.id === conversation.id ? conversation : c)))
+      if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
+      setConversations((prev) => {
+        const exists = prev.some((c) => c.id === conversation.id)
+        if (!exists) return [conversation, ...prev]
+        return prev.map((c) => (c.id === conversation.id ? conversation : c))
+      })
     })
     const offSync = onSocketEvent('crm:sync', ({ job }) => {
       setSyncJob(job)

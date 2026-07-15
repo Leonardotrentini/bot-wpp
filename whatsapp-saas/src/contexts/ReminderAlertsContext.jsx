@@ -26,7 +26,7 @@ function alertKey(alert) {
 }
 
 export function ReminderAlertsProvider({ children }) {
-  const { user } = useAuth()
+  const { user, isOrgOwner } = useAuth()
   const navigate = useNavigate()
   const [alerts, setAlerts] = useState([])
   const [popupAlert, setPopupAlert] = useState(null)
@@ -34,6 +34,17 @@ export function ReminderAlertsProvider({ children }) {
   const seenRef = useRef(new Set())
   const popupQueueRef = useRef([])
   const permissionAskedRef = useRef(false)
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner })
+  scopeRef.current = { userId: user?.id, isOrgOwner }
+
+  const alertInScope = useCallback((alert) => {
+    if (!alert) return false
+    const { userId, isOrgOwner: owner } = scopeRef.current
+    if (!userId) return true
+    if (!alert.userId) return true
+    if (alert.userId === userId) return true
+    return Boolean(owner)
+  }, [])
 
   const mergeAlerts = useCallback((incoming) => {
     if (!incoming?.length) return
@@ -62,6 +73,7 @@ export function ReminderAlertsProvider({ children }) {
 
   const notifyReminder = useCallback(
     (alert, { showPopup = true } = {}) => {
+      if (!alertInScope(alert)) return
       const key = alertKey(alert)
       if (!key || seenRef.current.has(key)) return
       seenRef.current.add(key)
@@ -84,7 +96,7 @@ export function ReminderAlertsProvider({ children }) {
 
       if (showPopup) openPopup(alert)
     },
-    [mergeAlerts, navigate, openPopup],
+    [alertInScope, mergeAlerts, navigate, openPopup],
   )
 
   const refreshAlerts = useCallback(async () => {
