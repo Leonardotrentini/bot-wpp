@@ -11,6 +11,7 @@ const {
   normalizeQuietHours,
   deliveryDelayMs,
   onTagAdded,
+  noReplyCandidateWhere,
 } = require("../src/lib/crmFlows")
 const { extractIndividualChats } = require("../src/lib/crmSync")
 const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, pickAvatarFromPicturePayload, contactNeedsProfile, contactNeedsAvatar, lookupDirectoryInfo } = require("../src/lib/crmProfile")
@@ -139,6 +140,21 @@ test("onTagAdded só roda fluxo com a tag correspondente", async () => {
   assert.strictEqual(runs.length, 1)
   assert.ok(String(runs[0].detail).includes("tag_added"))
   assert.strictEqual(runs[0].flowId, "f1")
+})
+
+test("noReplyCandidateWhere prioriza noReplySinceAt e ignora lastMessageAt recente (flow)", () => {
+  const threshold = new Date("2026-07-14T12:00:00Z")
+  const where = noReplyCandidateWhere("u1", threshold)
+  assert.strictEqual(where.lastMessageFromMe, true)
+  assert.ok(Array.isArray(where.OR))
+  assert.deepStrictEqual(where.OR[0], { noReplySinceAt: { lt: threshold } })
+  assert.deepStrictEqual(where.OR[1], { noReplySinceAt: null, lastMessageAt: { lt: threshold } })
+  // Cenário: humano enviou às 10h (âncora), flow às 15h atualizou lastMessageAt —
+  // conversa com noReplySinceAt=10h ainda é candidata se threshold=12h.
+  const humanAnchor = new Date("2026-07-14T10:00:00Z")
+  assert.strictEqual(humanAnchor < threshold, true)
+  const flowLastMsg = new Date("2026-07-14T15:00:00Z")
+  assert.strictEqual(flowLastMsg < threshold, false)
 })
 
 test("normalizeTrigger no_reply aceita horas e minutos", () => {

@@ -423,6 +423,7 @@ function createCrmRouter({ io }) {
           lastMessageAt: now,
           lastMessagePreview: previewFromBody(content.body, content.mediaType === "none" ? "text" : content.mediaType),
           lastMessageFromMe: true,
+          noReplySinceAt: now,
           status: convo.status === "resolved" ? "open" : convo.status,
         },
         include: CONVERSATION_INCLUDE,

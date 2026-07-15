@@ -11,6 +11,7 @@
  * - Envios entram na fila CrmDelivery (processada com delay + jitter).
  * - Quiet hours opcionais por fluxo.
  * - tag_added só dispara quando o vínculo tag↔contato é criado de fato (não no re-add).
+ * - no_reply ancora em noReplySinceAt (envio humano); flow/IA não reiniciam o timer.
  */
 
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
@@ -368,7 +369,24 @@ async function notifyTagAddedForContact(deps, { userId, contactId, tagId }) {
   await onTagAdded(deps, { conversation, tagId: String(tagId) })
 }
 
-/** Tick do scheduler: fluxos "sem resposta há X horas". */
+/** Where do scheduler no_reply — âncora humana com fallback legado. */
+function noReplyCandidateWhere(userId, threshold) {
+  return {
+    userId,
+    status: "open",
+    lastMessageFromMe: true,
+    OR: [
+      { noReplySinceAt: { lt: threshold } },
+      { noReplySinceAt: null, lastMessageAt: { lt: threshold } },
+    ],
+  }
+}
+
+/**
+ * Tick do scheduler: fluxos "sem resposta há X tempo".
+ * Usa `noReplySinceAt` (último outbound humano). Envios de flow/IA atualizam
+ * lastMessageAt mas NÃO reiniciam este timer — só resposta do lead zera a âncora.
+ */
 async function processNoReplyFlows(deps) {
   const { prisma } = deps
   const flows = await prisma.crmFlow.findMany({ where: { enabled: true } })
@@ -376,14 +394,8 @@ async function processNoReplyFlows(deps) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger?.type !== "no_reply") continue
     const threshold = new Date(Date.now() - trigger.minutes * 60 * 1000)
-    // conversas abertas onde a ÚLTIMA mensagem é do usuário (fromMe) e está sem resposta
     const candidates = await prisma.crmConversation.findMany({
-      where: {
-        userId: flow.userId,
-        status: "open",
-        lastMessageFromMe: true,
-        lastMessageAt: { lt: threshold },
-      },
+      where: noReplyCandidateWhere(flow.userId, threshold),
       take: 20,
     })
     for (const conversation of candidates) {
@@ -398,6 +410,7 @@ module.exports = {
   onTagAdded,
   notifyTagAddedForContact,
   processNoReplyFlows,
+  noReplyCandidateWhere,
   testFlowOnConversation,
   normalizeTrigger,
   keywordMatches,

@@ -103,6 +103,8 @@ async function processOneDelivery(deps, delivery) {
       },
     })
 
+    // Atualiza preview/listagem, mas NÃO toca noReplySinceAt —
+    // follow-up de fluxo/IA não reinicia o gatilho "sem resposta".
     const updatedConversation = await prisma.crmConversation.update({
       where: { id: conversation.id },
       data: {

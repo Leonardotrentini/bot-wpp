@@ -410,6 +410,9 @@ model CrmConversation {
   lastMessageAt      DateTime?
   lastMessagePreview String?
   lastMessageFromMe  Boolean         @default(false)
+  /// Âncora do gatilho no_reply: última mensagem fromMe humana (manual/WhatsApp).
+  /// Mensagens de fluxo/IA NÃO atualizam este campo — o timer só reinicia com resposta do lead + novo envio humano.
+  noReplySinceAt     DateTime?
   assignedTo         String          @default("human") // human | ai
   aiAgentId          String?
   aiEnabled          Boolean         @default(false)
@@ -426,6 +429,7 @@ model CrmConversation {
   @@unique([userId, remoteJid])
   @@index([userId, status])
   @@index([userId, lastMessageAt])
+  @@index([userId, noReplySinceAt])
   @@index([kanbanStageId])
 }
 
