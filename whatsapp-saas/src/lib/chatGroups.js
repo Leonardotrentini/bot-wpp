@@ -25,6 +25,7 @@ export function groupToListItem(group) {
     kind: 'group',
     groupJid: group.id,
     remoteJid: group.id,
+    ownerUserId: group.ownerUserId || group.userId || null,
     lastMessageAt,
     lastMessagePreview: group.lastMessage || 'Grupo ativo',
     lastMessageFromMe: false,

@@ -24,6 +24,10 @@ export function ChatConversationFilters({
   onTagFilterChange,
   stageFilter,
   onStageFilterChange,
+  sellerFilter,
+  onSellerFilterChange,
+  members = [],
+  showSellerFilter = false,
   tags,
   stages,
   groupsOnly,
@@ -44,6 +48,24 @@ export function ChatConversationFilters({
           className="w-full rounded-xl border border-brand-700/80 bg-brand-900/50 py-2.5 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/20"
         />
       </div>
+
+      {showSellerFilter ? (
+        <Select
+          className="min-w-0 w-full"
+          value={sellerFilter || ''}
+          onChange={(e) => onSellerFilterChange?.(e.target.value)}
+          aria-label="Filtrar por membro da empresa"
+          menuClassName="max-h-56"
+        >
+          <option value="">Todos os membros</option>
+          {members.map((m) => (
+            <option key={m.userId} value={m.userId}>
+              {m.name || m.email}
+              {m.role === 'OWNER' ? ' (dono)' : ''}
+            </option>
+          ))}
+        </Select>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2">
         <Select

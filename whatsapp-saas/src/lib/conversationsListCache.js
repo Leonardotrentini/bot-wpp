@@ -10,6 +10,12 @@ function paramsKey(params) {
   return JSON.stringify(params || {})
 }
 
+/** Lista com filtro de membro não pode virar cache "global" da inbox. */
+function isNarrowListParams(params) {
+  if (!params || typeof params !== 'object') return false
+  return Boolean(params.sellerUserId || params.tagId || params.stageId || params.q)
+}
+
 export function getCachedConversationsList(params) {
   const entry = cache.get(paramsKey(params))
   if (!entry) return null
@@ -18,17 +24,18 @@ export function getCachedConversationsList(params) {
 }
 
 export function setCachedConversationsList(params, conversations) {
-  cache.set(paramsKey(params), { conversations, fetchedAt: Date.now() })
+  cache.set(paramsKey(params), { conversations, fetchedAt: Date.now(), narrow: isNarrowListParams(params) })
   if (cache.size > 12) {
     const oldest = cache.keys().next().value
     if (oldest != null) cache.delete(oldest)
   }
 }
 
-/** Grava a mesma lista em chaves usadas pelo Chat e pelo CRM. */
+/** Grava a mesma lista em chaves usadas pelo Chat e pelo CRM (só se for lista ampla). */
 export function mirrorConversationsListCache(conversations, sourceParams) {
   if (!conversations?.length) return
   setCachedConversationsList(sourceParams, conversations)
+  if (isNarrowListParams(sourceParams)) return
   setCachedConversationsList(CRM_CONVERSATIONS_LIST_PARAMS, conversations)
   setCachedConversationsList(CHAT_CONVERSATIONS_LIST_PARAMS, conversations)
 }
@@ -42,6 +49,7 @@ export function getBestCachedConversationsList(preferredParams = CRM_CONVERSATIO
   let bestAt = 0
   for (const entry of cache.values()) {
     if (!entry.conversations?.length) continue
+    if (entry.narrow) continue
     if (Date.now() - entry.fetchedAt > FRESH_MS) continue
     if (entry.fetchedAt > bestAt) {
       best = entry.conversations
@@ -49,4 +57,8 @@ export function getBestCachedConversationsList(preferredParams = CRM_CONVERSATIO
     }
   }
   return best
+}
+
+export function clearConversationsListCache() {
+  cache.clear()
 }

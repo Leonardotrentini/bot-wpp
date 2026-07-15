@@ -140,3 +140,8 @@ export function prefetchConversationMessages(conversationId, fetchFn) {
   if (inflight.has(conversationId)) return
   fetchConversationMessagesCached(conversationId, fetchFn).catch(() => {})
 }
+
+export function clearConversationMessagesCache() {
+  cache.clear()
+  inflight.clear()
+}

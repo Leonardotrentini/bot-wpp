@@ -70,6 +70,7 @@ import {
   getGroups,
   getGroupMessages,
   sendMessage,
+  fetchOrgMembers,
 } from '../../services/api.js'
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
@@ -219,19 +220,23 @@ export function Chat() {
   const toastRef = useRef(toastApi)
   toastRef.current = toastApi
   const { user, isImpersonating, isOrgOwner } = useAuth()
-  const scopeRef = useRef({ userId: user?.id, isOrgOwner })
-  scopeRef.current = { userId: user?.id, isOrgOwner }
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [conversations, setConversations] = useState([])
   const [monitoredGroups, setMonitoredGroups] = useState([])
+  const [allMonitoredGroups, setAllMonitoredGroups] = useState([])
   const [loadingList, setLoadingList] = useState(true)
   const [refreshingList, setRefreshingList] = useState(false)
   const [query, setQuery] = useState('')
   const [tagFilter, setTagFilter] = useState('')
   const [stageFilter, setStageFilter] = useState('')
+  const [sellerFilter, setSellerFilter] = useState('')
+  const [orgMembers, setOrgMembers] = useState([])
   const [groupsOnly, setGroupsOnly] = useState(false)
   const [unidentifiedOnly, setUnidentifiedOnly] = useState(false)
+
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '' })
+  scopeRef.current = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
 
   const [activeId, setActiveId] = useState(() => {
     const raw = searchParams.get('c')
@@ -300,8 +305,9 @@ export function Chat() {
     if (query.trim()) params.q = query.trim()
     if (tagFilter) params.tagId = tagFilter
     if (stageFilter) params.stageId = stageFilter
+    if (isOrgOwner && sellerFilter) params.sellerUserId = sellerFilter
     return params
-  }, [query, tagFilter, stageFilter])
+  }, [query, tagFilter, stageFilter, sellerFilter, isOrgOwner])
 
   const markReadDebounced = useCallback((conversationId) => {
     if (isGroupChatId(conversationId)) return
@@ -332,8 +338,10 @@ export function Chat() {
 
   const displayedConversations = useMemo(() => {
     const term = query.trim().toLowerCase()
+    const scope = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
 
     const filterGroup = (c) => {
+      if (sellerFilter && c.ownerUserId && c.ownerUserId !== sellerFilter) return false
       if (!term) return true
       const name = (c.contact?.name || '').toLowerCase()
       const preview = (c.lastMessagePreview || '').toLowerCase()
@@ -344,14 +352,14 @@ export function Chat() {
       return sortChatListItems(monitoredGroups.map(groupToListItem).filter(filterGroup))
     }
 
-    let direct = conversations
+    let direct = conversations.filter((c) => isConversationInScope(c, scope))
     if (unidentifiedOnly) {
       direct = direct.filter((c) => contactNeedsIdentification(c.contact))
     }
 
     const groups = monitoredGroups.map(groupToListItem).filter(filterGroup)
     return sortChatListItems([...groups, ...direct])
-  }, [monitoredGroups, conversations, groupsOnly, unidentifiedOnly, query])
+  }, [monitoredGroups, conversations, groupsOnly, unidentifiedOnly, query, sellerFilter, user?.id, isOrgOwner])
 
   const unidentifiedCount = useMemo(
     () => conversations.filter((c) => contactNeedsIdentification(c.contact)).length,
@@ -379,7 +387,7 @@ export function Chat() {
         mirrorConversationsListCache(rows, listParams)
       }
       if (groupsRes.status === 'fulfilled') {
-        setMonitoredGroups((groupsRes.value.data.groups || []).filter(isMonitoredGroup))
+        setAllMonitoredGroups((groupsRes.value.data.groups || []).filter(isMonitoredGroup))
       }
       if (convRes.status === 'rejected') throw convRes.reason
     } catch {
@@ -402,13 +410,51 @@ export function Chat() {
   useEffect(() => {
     const refreshGroups = () => {
       getGroups()
-        .then(({ data }) => setMonitoredGroups((data.groups || []).filter(isMonitoredGroup)))
+        .then(({ data }) => setAllMonitoredGroups((data.groups || []).filter(isMonitoredGroup)))
         .catch(() => {})
     }
     refreshGroups()
     const id = setInterval(refreshGroups, 30000)
     return () => clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    if (!sellerFilter) {
+      setMonitoredGroups(allMonitoredGroups)
+      return
+    }
+    // Sem ownerUserId não mistura — só grupos daquele membro
+    setMonitoredGroups(allMonitoredGroups.filter((g) => g.ownerUserId === sellerFilter))
+  }, [allMonitoredGroups, sellerFilter])
+
+  useEffect(() => {
+    if (!isOrgOwner) {
+      setOrgMembers([])
+      setSellerFilter('')
+      return
+    }
+    let cancelled = false
+    fetchOrgMembers()
+      .then((res) => {
+        if (cancelled) return
+        setOrgMembers(res?.members || [])
+      })
+      .catch(() => {
+        if (!cancelled) setOrgMembers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOrgOwner])
+
+  // Troca de membro/tag/estágio: zera lista e thread (não na digitação da busca)
+  useEffect(() => {
+    setConversations([])
+    setActiveId(null)
+    setMessages([])
+    setSearchParams({}, { replace: true })
+    setLoadingList(true)
+  }, [sellerFilter, tagFilter, stageFilter, setSearchParams])
 
   useEffect(() => {
     const cached = getCachedConversationsList(listParams)
@@ -504,7 +550,7 @@ export function Chat() {
   }, [])
 
   const refreshGroupInList = useCallback((groupJid, patch) => {
-    setMonitoredGroups((prev) =>
+    setAllMonitoredGroups((prev) =>
       prev.map((g) => (g.id === groupJid ? { ...g, ...patch } : g)),
     )
   }, [])
@@ -1166,6 +1212,10 @@ export function Chat() {
           onTagFilterChange={setTagFilter}
           stageFilter={stageFilter}
           onStageFilterChange={setStageFilter}
+          sellerFilter={sellerFilter}
+          onSellerFilterChange={setSellerFilter}
+          members={orgMembers}
+          showSellerFilter={isOrgOwner && orgMembers.length > 0}
           tags={tags}
           stages={stages}
           groupsOnly={groupsOnly}

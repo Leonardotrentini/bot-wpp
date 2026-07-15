@@ -56,12 +56,16 @@ export async function login(email, password) {
     sessionUser = data.user
     localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
     localStorage.setItem('vg_auth_token', data.token)
+    const { resetRealtimeAndCaches } = await import('../lib/sessionIsolation.js')
+    resetRealtimeAndCaches()
     return { data }
   }
   await delay()
   if (!email || !password) throw new Error('E-mail e senha são obrigatórios')
   sessionUser = { ...mockUser, email }
   localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+  const { clearSessionScopedCaches } = await import('../lib/sessionIsolation.js')
+  clearSessionScopedCaches()
   return mockResponse({ user: sessionUser, token: 'mock-jwt-token' })
 }
 
@@ -71,12 +75,16 @@ export async function register(name, email, password) {
     sessionUser = data.user
     localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
     localStorage.setItem('vg_auth_token', data.token)
+    const { resetRealtimeAndCaches } = await import('../lib/sessionIsolation.js')
+    resetRealtimeAndCaches()
     return { data }
   }
   await delay()
   if (!name || !email || !password) throw new Error('Preencha todos os campos')
   sessionUser = { ...mockUser, name, email }
   localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+  const { clearSessionScopedCaches } = await import('../lib/sessionIsolation.js')
+  clearSessionScopedCaches()
   return mockResponse({ user: sessionUser, token: 'mock-jwt-token' })
 }
 
@@ -230,6 +238,9 @@ export async function impersonateAdminUser(userId) {
   sessionUser = data.user
   localStorage.setItem('vg_auth', JSON.stringify(data.user))
   localStorage.setItem('vg_auth_token', data.token)
+  // Troca de conta: zera caches + reconnect socket com o token do alvo
+  const { resetRealtimeAndCaches } = await import('../lib/sessionIsolation.js')
+  resetRealtimeAndCaches()
   return data
 }
 
@@ -252,6 +263,7 @@ export function exitImpersonation() {
     localStorage.removeItem('vg_auth')
     sessionUser = null
   }
+  import('../lib/sessionIsolation.js').then(({ resetRealtimeAndCaches }) => resetRealtimeAndCaches()).catch(() => {})
   return sessionUser
 }
 
@@ -300,6 +312,7 @@ export function logout() {
   sessionStorage.removeItem('vg_admin_token')
   sessionStorage.removeItem('vg_admin_auth')
   sessionStorage.removeItem('vg_impersonating')
+  import('../lib/sessionIsolation.js').then(({ resetRealtimeAndCaches }) => resetRealtimeAndCaches()).catch(() => {})
 }
 
 export async function getGroups() {
@@ -1155,7 +1168,14 @@ export async function fetchOrg() {
 
 export async function fetchOrgMembers() {
   if (resolveUseRealApi()) return (await apiClient.get('/org/members')).data
-  return { members: [], pendingInvites: [] }
+  return {
+    members: [
+      { userId: mockUser.id, name: mockUser.name, email: mockUser.email, role: 'OWNER' },
+      { userId: 'u-seller-1', name: 'Alessandra', email: 'alessandra@empresa.com.br', role: 'SELLER' },
+      { userId: 'u-seller-2', name: 'Luis Baseset', email: 'luis@baseset.com.br', role: 'SELLER' },
+    ],
+    pendingInvites: [],
+  }
 }
 
 export async function fetchOrgSellers() {

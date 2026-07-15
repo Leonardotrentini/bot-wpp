@@ -35,3 +35,12 @@ export function markProfilesRefreshDone() {
     /* ignore */
   }
 }
+
+export function clearCrmBootstrapCache() {
+  store.tags = null
+  store.stages = null
+  store.agents = null
+  store.quickReplies = null
+  store.waConnected = null
+  store.fetchedAt = 0
+}

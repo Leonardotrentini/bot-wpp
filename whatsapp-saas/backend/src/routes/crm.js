@@ -212,13 +212,30 @@ function createCrmRouter({ io }) {
 
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || "100", 10) || 100))
     const offset = Math.max(0, parseInt(req.query.offset || "0", 10) || 0)
-    const { status, stageId, tagId, q } = req.query
+    const { status, stageId, tagId, q, sellerUserId } = req.query
 
     const where = scopeWhere(req)
     if (status && ["open", "pending", "resolved", "archived"].includes(status)) where.status = status
     if (stageId === "none") where.kanbanStageId = null
     else if (stageId) where.kanbanStageId = String(stageId)
     if (tagId) where.contact = { tags: { some: { tagId: String(tagId) } } }
+    // Dono/admin: filtrar inbox por membro da empresa (vendedor ou dono).
+    if (sellerUserId && String(sellerUserId).trim()) {
+      const sid = String(sellerUserId).trim()
+      if (!req.dataScope?.isOwner) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Apenas o dono da empresa pode filtrar por membro.",
+        })
+      }
+      if (!assertUserInScope(req.dataScope, sid)) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Membro fora do escopo da empresa.",
+        })
+      }
+      where.userId = sid
+    }
     if (q && String(q).trim()) {
       const term = String(q).trim()
       where.OR = [
