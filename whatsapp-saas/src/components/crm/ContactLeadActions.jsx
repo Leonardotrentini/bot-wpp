@@ -190,11 +190,12 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
 
   useEffect(() => {
     if (purchaseOpen) {
-      const base = contact?.purchase?.amount ?? contact?.quote?.amount
+      // Nova venda: sugere orçamento aberto, não a compra anterior
+      const base = contact?.quote?.amount
       setPurchaseAmount(base != null ? String(base).replace('.', ',') : '')
-      setPurchaseTicket(contact?.purchase?.ticket || '')
+      setPurchaseTicket('')
     }
-  }, [purchaseOpen, contact?.purchase, contact?.quote?.amount])
+  }, [purchaseOpen, contact?.quote?.amount])
 
   useEffect(() => {
     if (reminderOpen) {
@@ -560,28 +561,21 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       <Modal
         isOpen={purchaseOpen}
         onClose={() => setPurchaseOpen(false)}
-        title={contact.purchase?.amount != null ? 'Atualizar compra' : 'Confirmar compra'}
+        title="Confirmar compra"
         footer={
           <>
             <Button variant="ghost" onClick={() => setPurchaseOpen(false)}>
               Cancelar
             </Button>
             <Button onClick={handleConfirmPurchase} disabled={confirmingPurchase}>
-              {confirmingPurchase ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : contact.purchase?.amount != null ? (
-                'Atualizar'
-              ) : (
-                'Confirmar'
-              )}
+              {confirmingPurchase ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirmar'}
             </Button>
           </>
         }
       >
         <p className="mb-3 text-sm text-stone-400">
-          {contact.purchase?.amount != null
-            ? 'Atualiza o valor no card e no registro de vendas (sem duplicar a linha). Purchase na Meta só envia 1x.'
-            : 'Registra a compra, aplica a tag "Comprou" e move para o estágio Fechado quando existir.'}
+          Registra uma nova venda neste lead (pode haver várias). Aplica a tag &quot;Comprou&quot; e move para
+          Fechado quando existir. O evento Purchase na Meta continua enviando só 1x por lead.
         </p>
         <label className="mb-1 block text-xs font-medium text-stone-500">Valor da compra (R$)</label>
         <input

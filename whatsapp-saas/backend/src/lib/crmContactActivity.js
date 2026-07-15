@@ -536,37 +536,13 @@ async function confirmContactPurchase(
     actorName: actorName || null,
   }
 
-  const existingPurchase = await prisma.crmContactActivity.findFirst({
-    where: { contactId: contact.id, userId, type: "purchase_confirmed" },
-    orderBy: { createdAt: "desc" },
+  // Sempre cria um novo registro de venda (mesmo lead pode ter várias compras).
+  await logContactActivity(prisma, {
+    userId,
+    contactId: contact.id,
+    type: "purchase_confirmed",
+    payload: purchasePayload,
   })
-  if (existingPurchase) {
-    const prev =
-      existingPurchase.payload &&
-      typeof existingPurchase.payload === "object" &&
-      !Array.isArray(existingPurchase.payload)
-        ? existingPurchase.payload
-        : {}
-    await prisma.crmContactActivity.update({
-      where: { id: existingPurchase.id },
-      data: {
-        payload: {
-          ...prev,
-          ...purchasePayload,
-          actorUserId: prev.actorUserId || purchasePayload.actorUserId,
-          actorName: prev.actorName || purchasePayload.actorName,
-        },
-        createdAt: new Date(confirmedAt),
-      },
-    })
-  } else {
-    await logContactActivity(prisma, {
-      userId,
-      contactId: contact.id,
-      type: "purchase_confirmed",
-      payload: purchasePayload,
-    })
-  }
 
   const updated = await reloadContact(prisma, contact.id)
   if (conversation) {
