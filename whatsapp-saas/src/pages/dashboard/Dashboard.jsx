@@ -86,8 +86,11 @@ export function Dashboard() {
   const handleFiltersChange = useCallback(
     (patch) => {
       const next = { ...layout.filters, ...patch }
-      if (patch.period && patch.period !== 'custom') {
+      if (patch.period) {
         next.metaPeriod = mapPeriodToMetaPeriod(patch.period)
+      } else if (patch.startDate || patch.endDate) {
+        // Personalizado: garante metaPeriod=custom e o backend usa since/until
+        next.metaPeriod = 'custom'
       }
       setFilters(next)
     },

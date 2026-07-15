@@ -13,6 +13,38 @@ const DATE_PRESETS = {
   month: "this_month",
 }
 
+/** YYYY-MM-DD válido para time_range da Graph API. */
+function normalizeInsightDate(value) {
+  const s = String(value || "").trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  return null
+}
+
+/**
+ * Resolve date_preset OU time_range (nunca os dois).
+ * Períodos custom/2d usam since/until do painel para bater com o Ads Manager.
+ */
+function resolveInsightsDateParams({ period = "7d", startDate, endDate } = {}) {
+  const since = normalizeInsightDate(startDate)
+  const until = normalizeInsightDate(endDate) || since
+  const useRange = period === "custom" || period === "2d" || (since && until && !DATE_PRESETS[period])
+
+  if (useRange && since && until) {
+    return {
+      mode: "time_range",
+      params: { time_range: JSON.stringify({ since, until }) },
+      label: `${since}/${until}`,
+    }
+  }
+
+  const datePreset = DATE_PRESETS[period] || DATE_PRESETS["7d"]
+  return {
+    mode: "date_preset",
+    params: { date_preset: datePreset },
+    label: datePreset,
+  }
+}
+
 function formatMetaError(json) {
   const err = json?.error
   if (!err) return "Erro desconhecido na API da Meta"
@@ -182,7 +214,7 @@ async function recordAdsSyncResult(prisma, userId, { error } = {}) {
     .catch(() => {})
 }
 
-async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d" } = {}) {
+async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d", startDate, endDate } = {}) {
   const adAccountId = normalizeAdAccountId(integration.adAccountId)
   const token = resolveAdsToken(integration)
 
@@ -190,7 +222,7 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
     return { error: "NOT_CONFIGURED", message: "Configure o ID da conta de anúncios e o token com permissão ads_read." }
   }
 
-  const datePreset = DATE_PRESETS[period] || DATE_PRESETS["7d"]
+  const dateQuery = resolveInsightsDateParams({ period, startDate, endDate })
 
   try {
     const account = await graphGet(adAccountId, token, {
@@ -199,14 +231,14 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
 
     const accountInsights = await graphGet(`${adAccountId}/insights`, token, {
       fields: "spend,impressions,clicks,cpc,cpm,reach,ctr",
-      date_preset: datePreset,
+      ...dateQuery.params,
     })
     const insightRow = accountInsights.data?.[0] || {}
 
     const campaignInsights = await graphGet(`${adAccountId}/insights`, token, {
       fields: "campaign_id,campaign_name,spend,impressions,clicks,cpc,ctr",
       level: "campaign",
-      date_preset: datePreset,
+      ...dateQuery.params,
       limit: 25,
     })
 
@@ -239,7 +271,7 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
       const adInsights = await graphGet(`${adAccountId}/insights`, token, {
         fields: "ad_id,ad_name,campaign_name,clicks,spend,ctr,impressions",
         level: "ad",
-        date_preset: datePreset,
+        ...dateQuery.params,
         limit: 100,
       })
       const accountDigits = adAccountId.replace(/^act_/, "")
@@ -271,7 +303,8 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
     return {
       ok: true,
       period,
-      datePreset,
+      datePreset: dateQuery.mode === "date_preset" ? dateQuery.label : null,
+      timeRange: dateQuery.mode === "time_range" ? dateQuery.label : null,
       account: {
         id: account.id,
         name: account.name,
@@ -334,5 +367,6 @@ module.exports = {
   formatAdsFields,
   fetchMetaAdsDashboard,
   testMetaAdsConnection,
+  resolveInsightsDateParams,
   DATE_PRESETS,
 }

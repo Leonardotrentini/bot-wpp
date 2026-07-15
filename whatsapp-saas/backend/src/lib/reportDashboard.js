@@ -25,6 +25,10 @@ const {
 } = require("./attributionMetrics")
 const { buildUnifiedLeadsMetrics } = require("./reportLeadsMetrics")
 
+function toSpDateStr(date) {
+  return new Date(date).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" })
+}
+
 function reportPeriodToRange(period, startDate, endDate) {
   const now = new Date()
   const end = endDate ? new Date(`${endDate}T23:59:59.999-03:00`) : now
@@ -32,6 +36,8 @@ function reportPeriodToRange(period, startDate, endDate) {
 
   if (period === "hoje") {
     start = todayStartInSp(end)
+  } else if (period === "2d") {
+    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
   } else if (period === "7d") {
     start = new Date(end.getTime() - 7 * 86400000)
   } else if (period === "30d") {
@@ -46,10 +52,12 @@ function reportPeriodToRange(period, startDate, endDate) {
   return { start, end }
 }
 
+/** Alinha metaPeriod ao filtro do painel (custom/2d usam time_range na Meta). */
 function mapPeriodToMetaPeriod(period) {
   if (period === "hoje") return "today"
+  if (period === "2d") return "2d"
   if (period === "30d") return "30d"
-  if (period === "custom") return "30d"
+  if (period === "custom") return "custom"
   return "7d"
 }
 
@@ -116,6 +124,10 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
 
   const { start, end } = reportPeriodToRange(period, startDate, endDate)
   const partialErrors = []
+  const metaStartDate = startDate || toSpDateStr(start)
+  const metaEndDate = endDate || toSpDateStr(end)
+  // Sempre deriva do período do painel (evita metaPeriod antigo "30d" em filtro custom).
+  const resolvedMetaPeriod = mapPeriodToMetaPeriod(period)
 
   const groupsPromise = buildOverview(userIds, {
     groupJids,
@@ -153,7 +165,11 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
 
   const metaPromise =
     metaIntegration && adsFields.adsConnected
-      ? fetchMetaAdsDashboard(prisma, metaUserId, metaIntegration, { period: metaPeriod }).catch((err) => {
+      ? fetchMetaAdsDashboard(prisma, metaUserId, metaIntegration, {
+          period: resolvedMetaPeriod,
+          startDate: metaStartDate,
+          endDate: metaEndDate,
+        }).catch((err) => {
           partialErrors.push({ source: "meta", message: err?.message || "Falha ao carregar Meta Ads." })
           return { error: "META_FETCH_FAILED", message: err?.message }
         })
@@ -316,8 +332,10 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
       period,
       periodStart: start.toISOString(),
       periodEnd: end.toISOString(),
+      startDate: metaStartDate,
+      endDate: metaEndDate,
       groupIds: groupJids || [],
-      metaPeriod,
+      metaPeriod: resolvedMetaPeriod,
     },
     groups,
     crm,

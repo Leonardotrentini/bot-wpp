@@ -1,6 +1,7 @@
 /**
- * Meta Pixel no navegador — LP (PageView, Contact) e dashboard (PageView).
+ * Meta Pixel no navegador — LP (PageView, Contact).
  * Eventos de funil CRM (ConversationStarted, LeadQualified, Quote, Purchase) são só CAPI.
+ * Não usar no dashboard admin (polui o dataset).
  */
 
 export const CRM_FUNNEL_CAPI_ONLY_EVENTS = new Set([
@@ -16,7 +17,7 @@ export function isCrmFunnelCapiOnlyEvent(eventName) {
 
 let loadedPixelId = null
 
-export function initMetaPixel(pixelId) {
+export function initMetaPixel(pixelId, advancedMatching = null) {
   if (typeof window === 'undefined' || !pixelId) return
   const id = String(pixelId).trim()
   if (!id || loadedPixelId === id) return
@@ -40,7 +41,11 @@ export function initMetaPixel(pixelId) {
     first.parentNode.insertBefore(script, first)
   }
 
-  window.fbq('init', id)
+  if (advancedMatching && typeof advancedMatching === 'object') {
+    window.fbq('init', id, advancedMatching)
+  } else {
+    window.fbq('init', id)
+  }
   window.fbq('track', 'PageView')
   loadedPixelId = id
 }
@@ -51,6 +56,7 @@ export function trackMetaPixel(eventName, params = {}, eventId) {
   const standardEvents = new Set([
     'PageView',
     'Lead',
+    'Contact',
     'Purchase',
     'AddToCart',
     'InitiateCheckout',

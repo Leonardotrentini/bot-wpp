@@ -49,13 +49,13 @@ const navSections = [
     ],
   },
   {
-    label: 'Conta',
-    items: [{ to: '/dashboard/settings', label: 'Configurações', icon: Settings }],
-  },
-  {
     label: 'Integrações',
     ownerOnly: true,
     items: [{ to: '/dashboard/integrations', label: 'Meta / Facebook', icon: Plug, beta: true }],
+  },
+  {
+    label: 'Conta',
+    items: [{ to: '/dashboard/settings', label: 'Configurações', icon: Settings }],
   },
 ]
 

@@ -9,8 +9,16 @@ const { storeContactMetaAttribution, parseCustomFields } = require("./metaMessag
 
 const REF_PATTERN = /\(?\s*(vst_[a-z0-9]{6,16})\s*\)?/i
 const ATTRIBUTION_TTL_DAYS = 14
-/** Janela para ligar clique LP → 1ª mensagem sem código na saudação. */
-const PENDING_LEAD_MAX_AGE_MS = 48 * 60 * 60 * 1000
+/** Janela curta para fallback “último clique” sem vst_ na mensagem (evita cruzar leads). */
+const PENDING_LEAD_MAX_AGE_MS = 2 * 60 * 60 * 1000
+
+function buildContactEventIdFromRef(ref) {
+  const clean = String(ref || "")
+    .trim()
+    .toLowerCase()
+  if (!validateRef(clean)) return null
+  return `vst_contact_${clean}`
+}
 
 function generateVestoPublicKey() {
   return `vpk_${crypto.randomBytes(16).toString("hex")}`
@@ -96,6 +104,17 @@ async function createAttributionLead(prisma, userId, payload) {
     fbp: payload.fbp ? String(payload.fbp).slice(0, 512) : null,
     clickAt,
     pageUrl: payload.pageUrl ? String(payload.pageUrl).slice(0, 2048) : null,
+    clientIp: payload.clientIp ? String(payload.clientIp).slice(0, 64) : null,
+    userAgent: payload.userAgent ? String(payload.userAgent).slice(0, 512) : null,
+    contactEventId: payload.contactEventId
+      ? String(payload.contactEventId).slice(0, 120)
+      : buildContactEventIdFromRef(ref),
+    email: payload.email
+      ? String(payload.email)
+          .trim()
+          .toLowerCase()
+          .slice(0, 320)
+      : null,
     utmSource: payload.utm_source ? String(payload.utm_source).slice(0, 120) : null,
     utmMedium: payload.utm_medium ? String(payload.utm_medium).slice(0, 120) : null,
     utmCampaign: payload.utm_campaign ? String(payload.utm_campaign).slice(0, 120) : null,
@@ -113,6 +132,10 @@ async function createAttributionLead(prisma, userId, payload) {
       fbp: data.fbp,
       clickAt: data.clickAt,
       pageUrl: data.pageUrl,
+      clientIp: data.clientIp,
+      userAgent: data.userAgent,
+      contactEventId: data.contactEventId,
+      email: data.email,
       utmSource: data.utmSource,
       utmMedium: data.utmMedium,
       utmCampaign: data.utmCampaign,
@@ -125,7 +148,7 @@ async function createAttributionLead(prisma, userId, payload) {
     throw err
   })
 
-  return { ok: true, ref }
+  return { ok: true, ref, contactEventId: data.contactEventId }
 }
 
 function attributionToMetaFields(lead) {
@@ -143,6 +166,10 @@ function attributionToMetaFields(lead) {
       term: lead.utmTerm || undefined,
     },
     pageUrl: lead.pageUrl || undefined,
+    clientIp: lead.clientIp || undefined,
+    userAgent: lead.userAgent || undefined,
+    contactEventId: lead.contactEventId || buildContactEventIdFromRef(lead.ref) || undefined,
+    email: lead.email || undefined,
     attributionRef: lead.ref,
   }
 }
@@ -235,13 +262,17 @@ async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact }) {
   return next
 }
 
+/**
+ * Fallback só quando a mensagem não traz vst_ e há exatamente 1 clique pendente
+ * na janela curta — evita cruzar atribuição sob volume concurrente.
+ */
 async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact }) {
   if (!contact?.id) return contact
   if (contactHasLpAttribution(contact)) return contact
 
   const minClickAt = new Date(Date.now() - PENDING_LEAD_MAX_AGE_MS)
 
-  const lead = await prisma.metaAttributionLead.findFirst({
+  const candidates = await prisma.metaAttributionLead.findMany({
     where: {
       userId,
       contactId: null,
@@ -249,10 +280,19 @@ async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, conta
       clickAt: { gte: minClickAt },
     },
     orderBy: { clickAt: "desc" },
+    take: 2,
   })
-  if (!lead) return contact
 
-  return applyAttributionLeadToContact(prisma, { userId, contact, lead })
+  if (candidates.length !== 1) return contact
+
+  const lead = candidates[0]
+  const claimed = await prisma.metaAttributionLead.updateMany({
+    where: { id: lead.id, contactId: null },
+    data: { contactId: contact.id },
+  })
+  if (claimed.count === 0) return contact
+
+  return applyAttributionLeadToContact(prisma, { userId, contact, lead: { ...lead, contactId: contact.id } })
 }
 
 async function resolveAndApplyAttributionFromMessage(prisma, { userId, contact, messageBody }) {
@@ -292,6 +332,7 @@ module.exports = {
   isOriginAllowed,
   validateRef,
   extractVstRefFromText,
+  buildContactEventIdFromRef,
   getIntegrationByPublicKey,
   createAttributionLead,
   applyAttributionLeadToContact,
@@ -305,4 +346,5 @@ module.exports = {
   cleanupExpiredAttributionLeads,
   getStoredClickAt,
   REF_PATTERN,
+  PENDING_LEAD_MAX_AGE_MS,
 }

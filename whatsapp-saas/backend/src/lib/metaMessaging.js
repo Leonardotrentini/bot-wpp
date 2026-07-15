@@ -69,7 +69,7 @@ function resolveFbp(contact) {
   return fbp ? String(fbp).trim() : null
 }
 
-/** Monta fbc para CAPI — usa timestamp do clique na LP quando disponível. */
+/** Monta fbc para CAPI — usa timestamp do clique na LP quando disponível (ms, conforme Meta). */
 function resolveFbc(contact) {
   const custom = parseCustomFields(contact?.customFields)
   const stored = custom.meta?.fbc || custom.fbc
@@ -79,11 +79,49 @@ function resolveFbc(contact) {
   if (!fbclid) return null
 
   const clickAt = custom.meta?.clickAt
-  const clickSec =
+  const clickMs =
     clickAt != null && Number.isFinite(Number(clickAt))
-      ? Math.floor(Number(clickAt) / 1000)
-      : Math.floor(Date.now() / 1000)
-  return `fb.1.${clickSec}.${fbclid}`
+      ? Math.floor(Number(clickAt))
+      : Date.now()
+  return `fb.1.${clickMs}.${fbclid}`
+}
+
+function resolvePageUrl(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const url = custom.meta?.pageUrl || custom.pageUrl
+  return url ? String(url).trim().slice(0, 2048) : null
+}
+
+function resolveClientIp(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const ip = custom.meta?.clientIp || custom.clientIp
+  return ip ? String(ip).trim().slice(0, 64) : null
+}
+
+function resolveClientUserAgent(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const ua = custom.meta?.userAgent || custom.userAgent
+  return ua ? String(ua).trim().slice(0, 512) : null
+}
+
+function resolveContactEmail(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const candidates = [custom.email, custom.Email, custom.meta?.email, custom.em]
+  for (const value of candidates) {
+    const email = String(value || "")
+      .trim()
+      .toLowerCase()
+    if (email && email.includes("@") && email.includes(".")) return email
+  }
+  return null
+}
+
+function resolveContactEventId(contact) {
+  const custom = parseCustomFields(contact?.customFields)
+  const meta = custom.meta || {}
+  if (meta.contactEventId) return String(meta.contactEventId).trim().slice(0, 120)
+  if (meta.attributionRef) return `vst_contact_${String(meta.attributionRef).trim()}`
+  return null
 }
 
 function extractCtwaClidFromRecord(record) {
@@ -124,7 +162,20 @@ function extractCtwaClidFromRecord(record) {
 async function storeContactMetaAttribution(
   prisma,
   contact,
-  { ctwaClid, fbclid, fbc, fbp, clickAt, utm, pageUrl, attributionRef } = {},
+  {
+    ctwaClid,
+    fbclid,
+    fbc,
+    fbp,
+    clickAt,
+    utm,
+    pageUrl,
+    attributionRef,
+    clientIp,
+    userAgent,
+    contactEventId,
+    email,
+  } = {},
 ) {
   if (!contact?.id) return contact
 
@@ -146,6 +197,13 @@ async function storeContactMetaAttribution(
   if (clickAt != null) set("clickAt", Number(clickAt))
   if (pageUrl) set("pageUrl", String(pageUrl).slice(0, 2048))
   if (attributionRef) set("attributionRef", attributionRef)
+  if (clientIp) set("clientIp", String(clientIp).slice(0, 64))
+  if (userAgent) set("userAgent", String(userAgent).slice(0, 512))
+  if (contactEventId) set("contactEventId", String(contactEventId).slice(0, 120))
+  if (email) {
+    const normalized = String(email).trim().toLowerCase()
+    if (normalized.includes("@")) set("email", normalized.slice(0, 320))
+  }
 
   if (utm && typeof utm === "object") {
     custom.meta.utm = { ...(custom.meta.utm || {}) }
@@ -177,6 +235,11 @@ module.exports = {
   resolveFbclid,
   resolveFbp,
   resolveFbc,
+  resolvePageUrl,
+  resolveClientIp,
+  resolveClientUserAgent,
+  resolveContactEmail,
+  resolveContactEventId,
   extractCtwaClidFromRecord,
   storeContactCtwaClid,
   storeContactMetaAttribution,

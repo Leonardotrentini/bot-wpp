@@ -7,6 +7,7 @@ export const mockUser = {
   name: 'Carlos Mendes',
   email: 'carlos.mendes@empresa.com.br',
   role: 'USER',
+  orgRole: 'OWNER',
   phone: '+55 (11) 99876-5432',
   avatar: avatar('Carlos Mendes'),
   plan: 'Pro',

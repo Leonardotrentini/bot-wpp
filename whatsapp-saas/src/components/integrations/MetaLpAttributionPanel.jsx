@@ -48,7 +48,7 @@ function phoneFieldStatus(phone, showErrors) {
   return { status: 'error', normalized, message: 'Formato inválido' }
 }
 
-export function MetaLpAttributionPanel({ form, setForm, meta, gtm, showSellerErrors = false, onSaveLp, savingLp = false }) {
+export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors = false, onSaveLp, savingLp = false }) {
   const toast = useToast()
   const [copied, setCopied] = useState(null)
 
@@ -75,10 +75,8 @@ export function MetaLpAttributionPanel({ form, setForm, meta, gtm, showSellerErr
       sellers: savedSellers,
       message: savedMessage,
       rotatorMode,
-      gtmContainerId: gtm?.enabled !== false ? gtm?.containerId || '' : '',
-      gtmConversionTags: gtm?.enabled !== false ? gtm?.conversionTags || [] : [],
     })
-  }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers, gtm?.containerId, gtm?.enabled, gtm?.conversionTags])
+  }, [backendOrigin, pixelId, publicKey, rotatorMode, savedDomains, savedMessage, savedSellers])
 
   const promptReady = Boolean(publicKey && domainCount > 0 && savedSellers.length > 0 && pixelId)
 

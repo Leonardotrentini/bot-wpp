@@ -171,6 +171,8 @@ function formatContactMetaFunnel(contact) {
     conversationStarted: Boolean(contact.conversationStartedEventSentAt),
     leadQualified: Boolean(contact.qualifiedEventSentAt),
     quote: Boolean(contact.quoteEventSentAt),
+    contact: Boolean(contact.contactEventSentAt),
+    purchase: Boolean(contact.purchaseEventSentAt),
     hasAttribution: contactHasLpAttribution(contact),
   }
 }
@@ -368,7 +370,21 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
 
 const { unwrapBaileysMessage, mergeInboundMessageRaw } = require("./crmMedia")
 const { extractCtwaClidFromRecord, storeContactCtwaClid } = require("./metaMessaging")
-const { resolveAndApplyAttributionFromMessage, resolveAndApplyAttributionFromPendingLead, extractVstRefFromText } = require("./metaAttributionLead")
+const {
+  resolveAndApplyAttributionFromMessage,
+  resolveAndApplyAttributionFromPendingLead,
+  extractVstRefFromText,
+} = require("./metaAttributionLead")
+
+function maybeTrackContactAfterAttribution(prisma, userId, contactBefore, contactAfter) {
+  if (!contactAfter?.id) return
+  if (!contactHasLpAttribution(contactAfter) || contactAfter.contactEventSentAt) return
+  // Lazy require evita ciclo crmCore ↔ metaConversions
+  const { trackContactEvent } = require("./metaConversions")
+  trackContactEvent(prisma, { userId, contact: contactAfter }).catch((err) => {
+    console.error("[trackContactEvent]", err?.message || err)
+  })
+}
 
 function extractMediaMime(record) {
   const m = unwrapBaileysMessage(record?.message) || record?.message || {}
@@ -425,6 +441,7 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     }
     if (mapped.body) {
       let contact = conversation.contact
+      const contactBefore = contact
       contact =
         (await resolveAndApplyAttributionFromMessage(prisma, {
           userId,
@@ -440,7 +457,10 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
           }).catch(() => contact)) || contact
       }
 
-      if (contact?.id) conversation.contact = contact
+      if (contact?.id) {
+        conversation.contact = contact
+        maybeTrackContactAfterAttribution(prisma, userId, contactBefore, contact)
+      }
     }
   }
 

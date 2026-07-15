@@ -281,6 +281,15 @@ export function loadSessionFromStorage() {
   } catch {
     sessionUser = null
   }
+  // Demo local: sessão antiga sem orgRole não via Integrações (ownerOnly)
+  if (!resolveUseRealApi() && sessionUser && !sessionUser.orgRole) {
+    sessionUser = { ...sessionUser, orgRole: mockUser.orgRole || 'OWNER' }
+    try {
+      localStorage.setItem('vg_auth', JSON.stringify(sessionUser))
+    } catch {
+      /* ignore */
+    }
+  }
   return sessionUser
 }
 
@@ -628,34 +637,7 @@ export async function getIntegrations() {
         connected: false,
         provider: 'meta',
       },
-      {
-        id: 'gtm',
-        name: 'Google Tag Manager',
-        description: 'Container GTM para tags na landing page.',
-        connected: false,
-        provider: 'gtm',
-      },
     ],
-  })
-}
-
-export async function getGtmIntegration() {
-  if (resolveUseRealApi()) return apiClient.get('/integrations/gtm')
-  return mockResponse({ integration: null })
-}
-
-export async function saveGtmIntegration(payload) {
-  if (resolveUseRealApi()) return apiClient.put('/integrations/gtm', payload)
-  return mockResponse({
-    integration: {
-      containerId: String(payload.containerId || '').toUpperCase(),
-      enabled: payload.enabled !== false,
-      connected: Boolean(payload.containerId && payload.enabled !== false),
-      conversionTags: payload.conversionTags || [],
-      linkedTagsCount: (payload.conversionTags || []).filter((t) => t.enabled).length,
-      ga4MeasurementId: payload.ga4MeasurementId || '',
-      hasGa4ApiSecret: Boolean(payload.ga4ApiSecret),
-    },
   })
 }
 

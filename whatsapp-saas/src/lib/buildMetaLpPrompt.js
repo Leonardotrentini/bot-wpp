@@ -41,8 +41,6 @@ export function buildMetaLpPrompt({
   sellers = [],
   message = '',
   rotatorMode = 'sequential',
-  gtmContainerId = '',
-  gtmConversionTags = [],
 }) {
   const key = publicKey || 'vpk_SALVE_NO_VESTO'
   const origin = (backendOrigin || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, '')
@@ -64,42 +62,6 @@ export function buildMetaLpPrompt({
     rotatorMode === 'sequential'
       ? `SEQUENCIAL no SERVIDOR (${sellerCount || 'N'} vendedor(es)): contador global compartilhado — NÃO localStorage.`
       : `Modo ${rotatorMode} no SERVIDOR — NÃO localStorage.`
-
-  const gtmId = String(gtmContainerId || '')
-    .trim()
-    .toUpperCase()
-  const linkedGtmTags = (gtmConversionTags || []).filter((t) => t?.enabled && t?.eventName)
-  const gtmTagsBlock = linkedGtmTags.length
-    ? linkedGtmTags
-        .map(
-          (t) =>
-            `- ${t.label || t.key}: evento personalizado "${t.eventName}"${t.tagName ? ` (tag GTM: ${t.tagName})` : ''}`,
-        )
-        .join('\n')
-    : ''
-  const gtmBlock = gtmId
-    ? `
-GOOGLE TAG MANAGER — container ${gtmId}
-1. Cole no <head> (logo após <head> ou antes do Pixel Meta):
-<!-- Google Tag Manager -->
-<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
-new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
-j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
-})(window,document,'script','dataLayer','${gtmId}');</script>
-<!-- End Google Tag Manager -->
-
-2. Cole logo após abrir <body>:
-<!-- Google Tag Manager (noscript) -->
-<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=${gtmId}"
-height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
-<!-- End Google Tag Manager (noscript) -->
-
-3. No tagmanager.google.com → Adicionar tag → tipo GA4 Event / Google Ads conversão.
-   Gatilho: Evento personalizado. O handler da LP dispara dataLayer.push({ event: 'whatsapp_contact' }) no clique.
-${gtmTagsBlock ? `\nTAGS VINCULADAS NO VESTO (crie no GTM com estes gatilhos):\n${gtmTagsBlock}\n` : ''}
-4. GTM NÃO substitui o POST de atribuição Vesto nem o /api/next-seller.`
-    : ''
 
   const sellersJson = sellers.length ? formatSellerJson(sellers) : '[]'
   const rotationExample = formatSellerRotationExample(sellers)
@@ -126,7 +88,7 @@ PIXEL META — ID ${pixel}
 1. Pixel base oficial no <head>.
 2. PageView: fbq('init', '${pixel}'); fbq('track', 'PageView');
 3. No clique WhatsApp: fbq('track','Contact') — NÃO usar fbq('track','Lead').
-${gtmBlock}
+
 SCRIPTS — layout raiz (antes de </body>), nesta ordem
 1) Script Vesto (só captura fbclid/_fbc/_fbp/UTMs em sessionStorage "vesto_meta" — NÃO trata o clique):
 ${scriptLine}
@@ -156,16 +118,15 @@ MENSAGEM WHATSAPP (texto limpo — exatamente assim no wa.me)
 
 FLUXO DO CLIQUE (obrigatório, nesta ordem)
 1. Clique em [data-vesto-whatsapp] → preventDefault + stopPropagation (+ stopImmediatePropagation).
-2. dataLayer.push({ event: 'whatsapp_contact' }) se usar GTM.
-3. fbq('track','Contact').
-4. Ler sessionStorage "vesto_meta" (preenchido pelo script Vesto no load).
-5. Gerar ref interno "vst_" + 8 chars (NÃO colocar na mensagem do WhatsApp).
-6. Em paralelo:
+2. fbq('track','Contact').
+3. Ler sessionStorage "vesto_meta" (preenchido pelo script Vesto no load).
+4. Gerar ref interno "vst_" + 8 chars (NÃO colocar na mensagem do WhatsApp).
+5. Em paralelo:
    a) GET /api/next-seller (host da LP) → { phone, message }
    b) POST ${apiBase}/public/meta/attribution?key=${key}
       headers: Content-Type: application/json, X-Vesto-Key: ${key}
       body: { vestoPublicKey, ref, fbclid, fbc, fbp, clickAt, pageUrl, utm_source, utm_medium, utm_campaign, utm_content, utm_term }
-7. Abrir https://wa.me/{phone}?text={encodeURIComponent(message limpa)}
+6. Abrir https://wa.me/{phone}?text={encodeURIComponent(message limpa)}
 
 API /api/next-seller (na hospedagem da LP — Vercel/Node)
 - Contador GLOBAL atômico no servidor (KV / DB / Redis). NÃO cookie, NÃO localStorage.
@@ -235,8 +196,6 @@ HANDLER DE REFERÊNCIA (cole como /src/js/vesto-global-rotator.js)
     e.stopPropagation();
     if (e.stopImmediatePropagation) e.stopImmediatePropagation();
     busy = true;
-    window.dataLayer = window.dataLayer || [];
-    window.dataLayer.push({ event: 'whatsapp_contact' });
     if (typeof fbq === 'function') fbq('track', 'Contact');
     var meta = readMeta();
     var ref = buildRef();
@@ -272,7 +231,7 @@ CHECKLIST
 [ ] Script Vesto com data-selector="[data-vesto-skip]" + chave ${key}
 [ ] Domínio da LP autorizado no Vesto
 [ ] Pixel ${pixel} + PageView
-${gtmId ? `[ ] GTM ${gtmId} no <head> + noscript no <body>\n` : ''}[ ] Botões com data-vesto-whatsapp
+[ ] Botões com data-vesto-whatsapp
 [ ] /api/next-seller no host da LP com contador global + mesma lista de vendedores
 [ ] Network no clique: GET /api/next-seller → 200 (phones diferentes a cada clique / aba anônima)
 [ ] Network no clique: POST ${apiBase}/public/meta/attribution → 200 (com fbc ou fbclid + UTMs)

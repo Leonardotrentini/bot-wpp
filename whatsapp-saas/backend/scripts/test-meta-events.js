@@ -5,6 +5,7 @@
  */
 
 const {
+  CONTACT_EVENT,
   CONVERSATION_STARTED_EVENT,
   LEAD_QUALIFIED_EVENT,
   QUOTE_EVENT,
@@ -12,6 +13,7 @@ const {
   CONTENT_CATEGORY,
   VESTO_EVENT_SOURCE_URL,
   resolveTrackingMode,
+  buildContactEvent,
   buildConversationStartedEvent,
   buildLeadQualifiedEvent,
   buildQuoteEvent,
@@ -22,7 +24,17 @@ const mockContactCrm = {
   id: "contact-crm-1",
   phone: "554796747378",
   pushName: "Lead LP",
-  customFields: { meta: { fbclid: "IwARtestFbclid123" } },
+  customFields: {
+    meta: {
+      fbclid: "IwARtestFbclid123",
+      pageUrl: "https://lp.exemplo.com.br/?fbclid=IwARtestFbclid123",
+      clientIp: "189.1.2.3",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
+      attributionRef: "vst_abc12345",
+      contactEventId: "vst_contact_vst_abc12345",
+      email: "lead@exemplo.com.br",
+    },
+  },
 }
 
 const mockContactCtwa = {
@@ -47,6 +59,25 @@ function testPayloads() {
   const crmMode = resolveTrackingMode(mockContactCrm)
   assert(crmMode.mode === "crm", "CRM contact should use crm mode")
 
+  const contactEvent = buildContactEvent({
+    contact: mockContactCrm,
+    eventId: "vst_contact_vst_abc12345",
+    userId: "user-1",
+    integration: mockIntegration,
+    mode: crmMode,
+  })
+  assert(contactEvent.event_name === CONTACT_EVENT, "Contact event_name")
+  assert(contactEvent.action_source === "website", "Contact LP → website")
+  assert(contactEvent.event_id === "vst_contact_vst_abc12345", "Contact event_id estável")
+  assert(
+    contactEvent.event_source_url === "https://lp.exemplo.com.br/?fbclid=IwARtestFbclid123",
+    "Contact usa pageUrl da LP",
+  )
+  assert(contactEvent.user_data.client_ip_address === "189.1.2.3", "Contact client_ip_address")
+  assert(contactEvent.user_data.client_user_agent.includes("Chrome"), "Contact client_user_agent")
+  assert(contactEvent.user_data.em?.length === 1, "Contact inclui em hasheado")
+  assert(contactEvent.user_data.fbc, "Contact inclui fbc")
+
   const conversationStarted = buildConversationStartedEvent({
     contact: mockContactCrm,
     eventId: "test-conversation-1",
@@ -60,8 +91,13 @@ function testPayloads() {
     conversationStarted.custom_data.content_category === CONTENT_CATEGORY.CONVERSATION_STARTED,
     "conversation_started category",
   )
-  assert(conversationStarted.event_source_url === VESTO_EVENT_SOURCE_URL, "ConversationStarted event_source_url")
+  assert(
+    conversationStarted.event_source_url === "https://lp.exemplo.com.br/?fbclid=IwARtestFbclid123",
+    "ConversationStarted event_source_url da LP",
+  )
   assert(conversationStarted.user_data.fbc, "CRM should include fbc when fbclid stored")
+  assert(conversationStarted.user_data.client_ip_address === "189.1.2.3", "ConversationStarted client_ip")
+  assert(conversationStarted.user_data.em?.length === 1, "ConversationStarted inclui em")
 
   const leadQualified = buildLeadQualifiedEvent({
     contact: mockContactCrm,
@@ -72,7 +108,10 @@ function testPayloads() {
   })
   assert(leadQualified.event_name === LEAD_QUALIFIED_EVENT, "LeadQualified event_name")
   assert(leadQualified.custom_data.content_category === CONTENT_CATEGORY.QUALIFIED_LEAD, "qualified_lead category")
-  assert(leadQualified.event_source_url === VESTO_EVENT_SOURCE_URL, "LeadQualified event_source_url")
+  assert(
+    leadQualified.event_source_url === "https://lp.exemplo.com.br/?fbclid=IwARtestFbclid123",
+    "LeadQualified event_source_url da LP",
+  )
   assert(leadQualified.action_source === "website", "LeadQualified LP → website")
 
   const quote = buildQuoteEvent({
@@ -88,7 +127,10 @@ function testPayloads() {
   assert(quote.custom_data.event_source === "crm", "Quote CRM event_source")
   assert(quote.custom_data.content_category === CONTENT_CATEGORY.QUOTE, "Quote content_category")
   assert(quote.custom_data.lead_event_source === "Vesto", "Quote lead_event_source")
-  assert(quote.event_source_url === VESTO_EVENT_SOURCE_URL, "Quote event_source_url")
+  assert(
+    quote.event_source_url === "https://lp.exemplo.com.br/?fbclid=IwARtestFbclid123",
+    "Quote event_source_url da LP",
+  )
   assert(!quote.messaging_channel, "CRM should not have messaging_channel")
 
   const ctwaMode = resolveTrackingMode(mockContactCtwa)
@@ -144,9 +186,27 @@ function testPayloads() {
   assert(crmPurchase.event_name === PURCHASE_EVENT, "CRM purchase event")
   assert(crmPurchase.action_source === "website", "CRM purchase LP → website")
   assert(crmPurchase.custom_data.content_category === CONTENT_CATEGORY.PURCHASE, "Purchase content_category")
-  assert(crmPurchase.event_source_url === VESTO_EVENT_SOURCE_URL, "Purchase event_source_url")
+  assert(
+    crmPurchase.event_source_url === "https://lp.exemplo.com.br/?fbclid=IwARtestFbclid123",
+    "Purchase event_source_url da LP",
+  )
 
-  console.log("✓ Payload tests passed (CRM + CTWA custom funnel)")
+  // Sem pageUrl → fallback dashboard URL
+  const bare = {
+    id: "c-bare",
+    phone: "5547999999999",
+    customFields: { meta: { fbclid: "IwARx" } },
+  }
+  const bareEvt = buildLeadQualifiedEvent({
+    contact: bare,
+    eventId: "bare-1",
+    userId: "u1",
+    integration: mockIntegration,
+    mode: { mode: "crm" },
+  })
+  assert(bareEvt.event_source_url === VESTO_EVENT_SOURCE_URL, "Fallback VESTO_EVENT_SOURCE_URL sem pageUrl")
+
+  console.log("✓ Payload tests passed (CRM + CTWA custom funnel + Contact EMQ)")
 }
 
 async function testLiveApi() {

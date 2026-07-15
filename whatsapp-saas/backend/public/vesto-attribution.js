@@ -21,7 +21,7 @@
   var waMsg = script.getAttribute("data-whatsapp-msg") || ""
   var sellers = []
   var rotatorMode = "sequential"
-  var gtmConversionTags = []
+  var pixelId = ""
 
   if (!apiBase) {
     try {
@@ -38,14 +38,28 @@
     return m ? decodeURIComponent(m[1]) : null
   }
 
+  function resolveAdvancedMatchingEmail() {
+    var fromAttr = script.getAttribute("data-email")
+    if (fromAttr && fromAttr.indexOf("@") > 0) {
+      return String(fromAttr).trim().toLowerCase()
+    }
+    var el = document.querySelector("[data-vesto-email]")
+    if (el) {
+      var v = el.value || el.getAttribute("data-vesto-email") || el.textContent || ""
+      if (v && String(v).indexOf("@") > 0) return String(v).trim().toLowerCase()
+    }
+    return null
+  }
+
   function captureMeta() {
     var params = new URLSearchParams(window.location.search)
     var fbclid = params.get("fbclid")
     var fbp = getCookie("_fbp")
     var fbc = getCookie("_fbc")
     if (!fbc && fbclid) {
-      fbc = "fb.1." + Math.floor(Date.now() / 1000) + "." + fbclid
-      document.cookie = "_fbc=" + fbc + "; path=/; max-age=7776000; SameSite=Lax"
+      // Meta exige creationTime em milissegundos no fbc
+      fbc = "fb.1." + Date.now() + "." + fbclid
+      document.cookie = "_fbc=" + encodeURIComponent(fbc) + "; path=/; max-age=7776000; SameSite=Lax"
     }
     var meta = {
       fbclid: fbclid,
@@ -53,11 +67,13 @@
       fbp: fbp,
       clickAt: Date.now(),
       pageUrl: window.location.href,
+      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
       utm_source: params.get("utm_source") || "",
       utm_medium: params.get("utm_medium") || "",
       utm_campaign: params.get("utm_campaign") || "",
       utm_content: params.get("utm_content") || "",
       utm_term: params.get("utm_term") || "",
+      email: resolveAdvancedMatchingEmail(),
     }
     try {
       sessionStorage.setItem("vesto_meta", JSON.stringify(meta))
@@ -72,7 +88,11 @@
     return "vst_" + suffix
   }
 
-  function sendAttribution(meta, ref) {
+  function buildContactEventId(ref) {
+    return "vst_contact_" + String(ref || "").toLowerCase()
+  }
+
+  function sendAttribution(meta, ref, contactEventId) {
     if (!key) return Promise.resolve()
     var body = {
       vestoPublicKey: key,
@@ -82,6 +102,9 @@
       fbp: meta.fbp,
       clickAt: meta.clickAt,
       pageUrl: meta.pageUrl,
+      userAgent: meta.userAgent,
+      contactEventId: contactEventId,
+      email: meta.email || undefined,
       utm_source: meta.utm_source,
       utm_medium: meta.utm_medium,
       utm_campaign: meta.utm_campaign,
@@ -138,50 +161,30 @@
     return pickRotatorPhone()
   }
 
-  function pushGtmConversion(key, extra) {
-    if (!gtmConversionTags.length) return
-    var tag = null
-    for (var i = 0; i < gtmConversionTags.length; i++) {
-      if (gtmConversionTags[i].key === key) {
-        tag = gtmConversionTags[i]
-        break
-      }
-    }
-    if (!tag || !tag.eventName) return
+  function trackPixelContact(contactEventId, meta) {
+    if (typeof window.fbq !== "function") return
     try {
-      window.dataLayer = window.dataLayer || []
-      var payload = {
-        event: tag.eventName,
-        vesto_event: key,
-        vesto_tag: tag.tagName || key,
+      var advanced = {}
+      if (meta && meta.email) advanced.em = meta.email
+      if (meta && meta.fbp) advanced.fbp = meta.fbp
+      if (pixelId && Object.keys(advanced).length) {
+        window.fbq("init", pixelId, advanced)
       }
-      if (extra && typeof extra === "object") {
-        for (var k in extra) {
-          if (Object.prototype.hasOwnProperty.call(extra, k)) payload[k] = extra[k]
-        }
-      }
-      window.dataLayer.push(payload)
+      window.fbq("track", "Contact", {}, { eventID: contactEventId })
     } catch (e) {}
   }
 
   function handleWhatsAppClick(ev, opts) {
     if (ev && ev.preventDefault) ev.preventDefault()
-    if (typeof window.fbq === "function") {
-      try {
-        window.fbq("track", "Contact")
-      } catch (e) {}
-    }
     var meta = captureMeta()
-    pushGtmConversion("contact", {
-      page_url: meta.pageUrl,
-      utm_source: meta.utm_source,
-      utm_campaign: meta.utm_campaign,
-    })
     var ref = buildRef()
+    var contactEventId = buildContactEventId(ref)
+    trackPixelContact(contactEventId, meta)
     try {
       sessionStorage.setItem("vesto_ref", ref)
+      sessionStorage.setItem("vesto_contact_event_id", contactEventId)
     } catch (e) {}
-    sendAttribution(meta, ref)
+    sendAttribution(meta, ref, contactEventId)
     var target = ev && ev.currentTarget ? ev.currentTarget : null
     var phone = resolvePhone(target, opts)
     if (!phone) return
@@ -210,9 +213,7 @@
     if (!waMsg && cfg.whatsappMsg) waMsg = cfg.whatsappMsg
     if (Array.isArray(cfg.sellers) && cfg.sellers.length) sellers = cfg.sellers
     if (cfg.rotatorMode) rotatorMode = cfg.rotatorMode
-    if (cfg.gtm && Array.isArray(cfg.gtm.conversionTags)) {
-      gtmConversionTags = cfg.gtm.conversionTags
-    }
+    if (cfg.pixelId) pixelId = String(cfg.pixelId)
   }
 
   function loadConfig() {

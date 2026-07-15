@@ -18,9 +18,18 @@ const crypto = require("crypto")
 const { formatAdsFields, normalizeAdAccountId } = require("./metaAds")
 const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttributionLead")
 const { parseSellersInput, normalizeBrazilPhone, isValidBrazilWhatsapp } = require("./lpSellers")
-const { parseFacebookPageId, resolveCtwaClid, resolveFbc, resolveFbp } = require("./metaMessaging")
-const { getStoredClickAt, ensureAttributionBeforeMetaEvent } = require("./metaAttributionLead")
-const { trackGtmForMetaEvent } = require("./gtmConversions")
+const {
+  parseFacebookPageId,
+  resolveCtwaClid,
+  resolveFbc,
+  resolveFbp,
+  resolvePageUrl,
+  resolveClientIp,
+  resolveClientUserAgent,
+  resolveContactEmail,
+  resolveContactEventId,
+} = require("./metaMessaging")
+const { getStoredClickAt, ensureAttributionBeforeMetaEvent, contactHasLpAttribution } = require("./metaAttributionLead")
 
 const GRAPH_API_VERSION = "v22.0"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
@@ -32,6 +41,7 @@ const WABA_DATASET_CACHE_MS = 60 * 60 * 1000
 /** cache em memória: wabaId → { datasetId, expiresAt } */
 const wabaDatasetCache = new Map()
 
+const CONTACT_EVENT = "Contact"
 const CONVERSATION_STARTED_EVENT = "ConversationStarted"
 const LEAD_QUALIFIED_EVENT = "LeadQualified"
 const QUOTE_EVENT = "Quote"
@@ -64,7 +74,7 @@ const FUNNEL_STAGES = Object.freeze({
     eventName: PURCHASE_EVENT,
     contentCategory: "purchase",
     eventIdPrefix: "vesto-purchase",
-    idempotencyField: null,
+    idempotencyField: "purchaseEventSentAt",
     stableEventId: false,
   },
 })
@@ -178,6 +188,10 @@ function buildUserData(contact, { userId, clientIp, clientUserAgent } = {}) {
   const hashedPhone = hashPhoneForMeta(phone)
   if (hashedPhone) userData.ph = [hashedPhone]
 
+  const email = resolveContactEmail(contact)
+  const hashedEmail = hashMetaValue(email)
+  if (hashedEmail) userData.em = [hashedEmail]
+
   const { first, last } = splitContactName(contact)
   const hashedFn = hashMetaValue(first)
   if (hashedFn) userData.fn = [hashedFn]
@@ -193,10 +207,16 @@ function buildUserData(contact, { userId, clientIp, clientUserAgent } = {}) {
     if (hashedExternal) userData.external_id = [hashedExternal]
   }
 
-  if (clientIp) userData.client_ip_address = String(clientIp)
-  if (clientUserAgent) userData.client_user_agent = String(clientUserAgent)
+  const ip = clientIp || resolveClientIp(contact)
+  const ua = clientUserAgent || resolveClientUserAgent(contact)
+  if (ip) userData.client_ip_address = String(ip)
+  if (ua) userData.client_user_agent = String(ua)
 
   return userData
+}
+
+function resolveEventSourceUrl(contact) {
+  return resolvePageUrl(contact) || VESTO_EVENT_SOURCE_URL
 }
 
 function ensureUserData(contact, options = {}) {
@@ -253,12 +273,12 @@ function buildActionSourceFields(mode, contact = null) {
   if (mode.mode === "crm" && hasLpClick) {
     return {
       action_source: "website",
-      event_source_url: VESTO_EVENT_SOURCE_URL,
+      event_source_url: resolveEventSourceUrl(contact),
     }
   }
   return {
     action_source: "system_generated",
-    event_source_url: VESTO_EVENT_SOURCE_URL,
+    event_source_url: resolveEventSourceUrl(contact),
   }
 }
 
@@ -310,6 +330,38 @@ function attachLpAttributionToUserData(userData, contact) {
   if (fbc) userData.fbc = fbc
   const fbp = resolveFbp(contact)
   if (fbp) userData.fbp = fbp
+
+  if (!userData.client_ip_address) {
+    const ip = resolveClientIp(contact)
+    if (ip) userData.client_ip_address = ip
+  }
+  if (!userData.client_user_agent) {
+    const ua = resolveClientUserAgent(contact)
+    if (ua) userData.client_user_agent = ua
+  }
+}
+
+function buildContactEvent({ contact, eventId, userId, integration, mode, eventTime }) {
+  const sourceFields = buildActionSourceFields(mode, contact)
+  // Contact do clique LP deve ser website quando temos cookies/URL
+  if (resolveFbc(contact) || resolveFbp(contact) || resolvePageUrl(contact)) {
+    sourceFields.action_source = "website"
+    sourceFields.event_source_url = resolveEventSourceUrl(contact)
+  }
+
+  const clickSec = getStoredClickAt(contact)
+  return {
+    event_name: CONTACT_EVENT,
+    event_time: eventTime != null ? eventTime : clickSec || Math.floor(Date.now() / 1000),
+    event_id: eventId,
+    ...sourceFields,
+    user_data: buildCrmUserData(contact, { userId }),
+    custom_data: {
+      lead_event_source: CRM_EVENT_SOURCE,
+      event_source: "crm",
+      content_category: "contact",
+    },
+  }
 }
 
 function buildFunnelEvent({
@@ -776,8 +828,6 @@ async function dispatchMetaEvent(prisma, {
     const result = await sendMetaEvent(integration, payload, { eventTargetId })
     await recordIntegrationResult(prisma, userId, { eventName, eventsReceived: result.events_received })
 
-    trackGtmForMetaEvent(prisma, userId, eventName, { contact, amount }).catch(() => {})
-
     return {
       sent: true,
       eventId,
@@ -859,11 +909,81 @@ async function getEnabledIntegration(prisma, userId) {
   return { integration }
 }
 
+async function trackContactEvent(prisma, { userId, contact }) {
+  const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
+  if (skipped) return { sent: false, skipped: true, reason }
+  if (!integration?.pixelId || !integration?.accessToken) {
+    return { sent: false, skipped: true, reason: "not_configured" }
+  }
+  if (!contactHasLpAttribution(contact)) {
+    return { sent: false, skipped: true, reason: "no_lp_attribution" }
+  }
+
+  const eventId = resolveContactEventId(contact)
+  if (!eventId) {
+    return { sent: false, skipped: true, reason: "missing_contact_event_id" }
+  }
+  if (contact.contactEventSentAt) {
+    return { sent: false, skipped: true, reason: "already_sent", eventName: CONTACT_EVENT }
+  }
+
+  const mode = resolveTrackingMode(contact)
+  // Contact do LP usa pathway CRM (website), mesmo se depois veio CTWA
+  const crmMode = { mode: "crm" }
+
+  try {
+    const payload = buildContactEvent({
+      contact,
+      eventId,
+      userId,
+      integration,
+      mode: crmMode,
+    })
+    // Contact não é evento de funil contável — envia sem assert de content_category do funil
+    const eventTargetId = await resolveEventTargetId(integration, crmMode)
+    const result = await sendMetaEvent(integration, payload, { eventTargetId })
+    await recordIntegrationResult(prisma, userId, { eventName: CONTACT_EVENT, eventsReceived: result.events_received })
+
+    const claim = await prisma.crmContact.updateMany({
+      where: { id: contact.id, contactEventSentAt: null },
+      data: { contactEventSentAt: new Date() },
+    })
+    if (claim.count === 0) {
+      return { sent: false, skipped: true, reason: "already_sent", eventName: CONTACT_EVENT, race: true }
+    }
+
+    return {
+      sent: true,
+      eventId,
+      eventName: CONTACT_EVENT,
+      trackingMode: mode.mode,
+      eventsReceived: result.events_received,
+      metaTargetId: eventTargetId,
+      metaResponse: result,
+      payload,
+    }
+  } catch (err) {
+    await recordIntegrationResult(prisma, userId, { eventName: CONTACT_EVENT, error: err.message })
+    return {
+      sent: false,
+      eventId,
+      eventName: CONTACT_EVENT,
+      error: err.message,
+      metaResponse: err.metaResponse,
+    }
+  }
+}
+
 async function trackConversationStartedEvent(prisma, { userId, contact }) {
   const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
 
   const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+
+  // Twin CAPI do Contact da LP (mesmo event_id do Pixel), se atribuição ainda não disparou
+  if (contactHasLpAttribution(contactReady) && !contactReady.contactEventSentAt) {
+    await trackContactEvent(prisma, { userId, contact: contactReady }).catch(() => {})
+  }
 
   return dispatchIdempotentMetaEvent(prisma, {
     userId,
@@ -930,26 +1050,29 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
 
   const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
 
-  return dispatchMetaEvent(prisma, {
+  const result = await dispatchIdempotentMetaEvent(prisma, {
     userId,
     contact: contactReady,
     integration,
     eventName: PURCHASE_EVENT,
     eventIdPrefix: getFunnelStage(PURCHASE_EVENT).eventIdPrefix,
-    stableEventId: false,
-    ticket,
+    idempotencyField: "purchaseEventSentAt",
     amount,
+    ticket,
     buildPayload: ({ eventId, mode }) =>
       buildPurchaseEvent({ contact: contactReady, amount, ticket, eventId, userId, integration, mode }),
-    extraReturn: {
-      hasAdsAttribution: Boolean(
-        contactReady?.customFields?.meta?.ctwaClid ||
-          contactReady?.customFields?.meta?.fbc ||
-          contactReady?.customFields?.meta?.fbp ||
-          contactReady?.customFields?.meta?.fbclid,
-      ),
-    },
+    gate: true,
   })
+
+  return {
+    ...result,
+    hasAdsAttribution: Boolean(
+      contactReady?.customFields?.meta?.ctwaClid ||
+        contactReady?.customFields?.meta?.fbc ||
+        contactReady?.customFields?.meta?.fbp ||
+        contactReady?.customFields?.meta?.fbclid,
+    ),
+  }
 }
 
 async function testMetaIntegration(prisma, userId) {
@@ -1153,6 +1276,7 @@ async function trackMetaForContactTag(prisma, { userId, contact, tagName }) {
 }
 
 module.exports = {
+  CONTACT_EVENT,
   CONVERSATION_STARTED_EVENT,
   LEAD_QUALIFIED_EVENT,
   QUOTE_EVENT,
@@ -1173,6 +1297,7 @@ module.exports = {
   buildOccurrenceEventId,
   upsertMetaIntegration,
   updateMetaLpIntegration,
+  trackContactEvent,
   trackConversationStartedEvent,
   trackLeadQualifiedEvent,
   trackCrmQuoteEvent,
@@ -1180,6 +1305,7 @@ module.exports = {
   testMetaIntegration,
   sendMetaEvent,
   resolveTrackingMode,
+  buildContactEvent,
   buildConversationStartedEvent,
   buildLeadQualifiedEvent,
   buildQuoteEvent,
@@ -1188,6 +1314,7 @@ module.exports = {
   buildCrmUserData,
   buildCtwaUserData,
   attachLpAttributionToUserData,
+  resolveEventSourceUrl,
   trackMetaForContactTag,
   CTWA_META_EVENT_NAMES,
   resolveMetaPayloadEventName,
