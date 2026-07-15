@@ -239,9 +239,17 @@ export function Chat() {
   scopeRef.current = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
 
   const [activeId, setActiveId] = useState(() => {
+    // URLSearchParams já devolve decodificado — não usar encodeURIComponent ao gravar
     const raw = searchParams.get('c')
-    return raw ? decodeURIComponent(raw) : null
+    if (!raw) return null
+    try {
+      return decodeURIComponent(raw)
+    } catch {
+      return raw
+    }
   })
+  /** Evita limpar a thread na 1ª montagem (só ao trocar filtro de membro/tag/estágio). */
+  const filtersMountedRef = useRef(false)
   const [messages, setMessages] = useState([])
   const [hasMore, setHasMore] = useState(false)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -447,14 +455,28 @@ export function Chat() {
     }
   }, [isOrgOwner])
 
-  // Troca de membro/tag/estágio: zera lista e thread (não na digitação da busca)
+  // Troca de membro/tag/estágio: zera lista e thread (não na digitação da busca).
+  // Não depende de setSearchParams — no RR7 a referência muda com a URL e re-disparava
+  // este efeito ao abrir conversa (limpava activeId e a lista 1:1; sobravam só grupos).
   useEffect(() => {
+    if (!filtersMountedRef.current) {
+      filtersMountedRef.current = true
+      return
+    }
     setConversations([])
     setActiveId(null)
     setMessages([])
-    setSearchParams({}, { replace: true })
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('c')
+        return next
+      },
+      { replace: true },
+    )
     setLoadingList(true)
-  }, [sellerFilter, tagFilter, stageFilter, setSearchParams])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setSearchParams propositalmente omitido
+  }, [sellerFilter, tagFilter, stageFilter])
 
   useEffect(() => {
     const cached = getCachedConversationsList(listParams)
@@ -566,7 +588,16 @@ export function Chat() {
   const openConversation = useCallback(
     async (id) => {
       setActiveId(id)
-      setSearchParams(id ? { c: encodeURIComponent(id) } : {}, { replace: true })
+      // Passar o id cru: o router codifica uma vez. encodeURIComponent duplo quebrava o ?c=
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          if (id) next.set('c', id)
+          else next.delete('c')
+          return next
+        },
+        { replace: true },
+      )
 
       if (isGroupChatId(id)) {
         const groupJid = parseGroupChatId(id)
@@ -637,12 +668,25 @@ export function Chat() {
 
   const closeMobileThread = useCallback(() => {
     setActiveId(null)
-    setSearchParams({}, { replace: true })
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('c')
+        return next
+      },
+      { replace: true },
+    )
   }, [setSearchParams])
 
   useEffect(() => {
     const raw = searchParams.get('c')
-    const fromUrl = raw ? decodeURIComponent(raw) : null
+    if (!raw) return
+    let fromUrl = raw
+    try {
+      fromUrl = decodeURIComponent(raw)
+    } catch {
+      /* raw já ok */
+    }
     if (fromUrl && fromUrl !== activeIdRef.current) openConversation(fromUrl)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
