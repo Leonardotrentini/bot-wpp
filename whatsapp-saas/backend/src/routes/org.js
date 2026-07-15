@@ -4,7 +4,28 @@ const bcrypt = require("bcryptjs")
 const { z } = require("zod")
 const { prisma } = require("../lib/prisma")
 const { authMiddleware, signToken } = require("../lib/auth")
-const { requireOrgOwner, readUserFilter, assertUserInScope } = require("../lib/orgScope")
+const { requireOrgOwner } = require("../lib/orgScope")
+const { validateMediaContentSize } = require("../lib/mediaLimits")
+
+function formatMaterialRow(row) {
+  const hasMedia = Boolean(row.mediaBase64)
+  return {
+    id: row.id,
+    title: row.title,
+    kind: row.kind,
+    body: row.body || "",
+    url: row.url || null,
+    shortcut: row.shortcut || null,
+    sortOrder: row.sortOrder ?? 0,
+    mediaType: hasMedia ? "document" : "none",
+    mediaMime: row.mediaMime || null,
+    mediaName: row.mediaName || null,
+    hasMedia,
+    createdByUserId: row.createdByUserId || null,
+    createdAt: row.createdAt?.toISOString?.() || row.createdAt,
+    updatedAt: row.updatedAt?.toISOString?.() || row.updatedAt,
+  }
+}
 
 function createOrgRouter() {
   const router = express.Router()
@@ -14,17 +35,205 @@ function createOrgRouter() {
     const scope = req.dataScope
     const org = await prisma.organization.findUnique({
       where: { id: scope.orgId },
-      select: { id: true, name: true, createdAt: true },
+      select: { id: true, name: true, dailySalesGoal: true, createdAt: true },
     })
     if (!org) return res.status(404).json({ error: "NOT_FOUND", message: "Empresa não encontrada." })
 
     return res.json({
       organization: {
         ...org,
+        dailySalesGoal: org.dailySalesGoal != null ? Number(org.dailySalesGoal) : null,
         createdAt: org.createdAt.toISOString(),
       },
       role: scope.orgRole,
       isOwner: scope.isOwner,
+    })
+  })
+
+  router.patch("/", requireOrgOwner, async (req, res) => {
+    const schema = z.object({
+      name: z.string().trim().min(2).max(120).optional(),
+      dailySalesGoal: z.union([z.number().nonnegative(), z.null()]).optional(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
+    }
+    const data = {}
+    if (parsed.data.name != null) data.name = parsed.data.name
+    if (parsed.data.dailySalesGoal !== undefined) data.dailySalesGoal = parsed.data.dailySalesGoal
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Nada para atualizar." })
+    }
+    const org = await prisma.organization.update({
+      where: { id: req.dataScope.orgId },
+      data,
+      select: { id: true, name: true, dailySalesGoal: true, createdAt: true },
+    })
+    return res.json({
+      organization: {
+        ...org,
+        dailySalesGoal: org.dailySalesGoal != null ? Number(org.dailySalesGoal) : null,
+        createdAt: org.createdAt.toISOString(),
+      },
+    })
+  })
+
+  // ------------------------- Materiais da loja -------------------------
+
+  router.get("/materials", async (req, res) => {
+    if (!req.dataScope?.orgId) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Empresa não encontrada." })
+    }
+    const rows = await prisma.orgMaterial.findMany({
+      where: { organizationId: req.dataScope.orgId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    })
+    return res.json({ materials: rows.map(formatMaterialRow) })
+  })
+
+  const materialSchema = z.object({
+    title: z.string().trim().min(1).max(120),
+    kind: z.enum(["document", "link"]),
+    body: z.string().max(4096).optional().default(""),
+    url: z.string().url().max(2000).optional().nullable(),
+    shortcut: z
+      .string()
+      .max(30)
+      .regex(/^[a-z0-9_-]*$/i)
+      .optional()
+      .nullable(),
+    sortOrder: z.number().int().min(0).max(9999).optional(),
+    mediaBase64: z.string().optional().nullable(),
+    mediaMime: z.string().max(120).optional().nullable(),
+    mediaName: z.string().max(255).optional().nullable(),
+  })
+
+  router.post("/materials", requireOrgOwner, async (req, res) => {
+    const parsed = materialSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Material inválido." })
+    }
+    const data = parsed.data
+    if (data.kind === "link" && !data.url) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe o link do material." })
+    }
+    if (data.kind === "document") {
+      if (!data.mediaBase64) {
+        return res.status(400).json({ error: "VALIDATION_ERROR", message: "Envie o PDF do material." })
+      }
+      const mediaError = validateMediaContentSize({
+        body: data.body || "",
+        mediaType: "document",
+        mediaBase64: data.mediaBase64,
+        mediaMime: data.mediaMime || "application/pdf",
+        mediaName: data.mediaName || "catalogo.pdf",
+      })
+      if (mediaError) return res.status(400).json({ error: "VALIDATION_ERROR", message: mediaError })
+    }
+
+    const mediaB64 =
+      data.kind === "document" && data.mediaBase64
+        ? String(data.mediaBase64).replace(/^data:[^;]+;base64,/, "")
+        : null
+
+    const row = await prisma.orgMaterial.create({
+      data: {
+        organizationId: req.dataScope.orgId,
+        title: data.title,
+        kind: data.kind,
+        body: data.body || "",
+        url: data.kind === "link" ? data.url : null,
+        shortcut: data.shortcut ? data.shortcut.toLowerCase() : null,
+        sortOrder: data.sortOrder ?? 0,
+        mediaBase64: mediaB64,
+        mediaMime: data.kind === "document" ? data.mediaMime || "application/pdf" : null,
+        mediaName: data.kind === "document" ? data.mediaName || "catalogo.pdf" : null,
+        createdByUserId: req.user.sub,
+      },
+    })
+    return res.status(201).json({ material: formatMaterialRow(row) })
+  })
+
+  router.put("/materials/:id", requireOrgOwner, async (req, res) => {
+    const existing = await prisma.orgMaterial.findFirst({
+      where: { id: req.params.id, organizationId: req.dataScope.orgId },
+    })
+    if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Material não encontrado." })
+
+    const parsed = materialSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Material inválido." })
+    }
+    const data = parsed.data
+    if (data.kind === "link" && !data.url) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe o link do material." })
+    }
+
+    let mediaB64 = existing.mediaBase64
+    let mediaMime = existing.mediaMime
+    let mediaName = existing.mediaName
+    if (data.kind === "document") {
+      if (data.mediaBase64) {
+        const mediaError = validateMediaContentSize({
+          body: data.body || "",
+          mediaType: "document",
+          mediaBase64: data.mediaBase64,
+          mediaMime: data.mediaMime || "application/pdf",
+          mediaName: data.mediaName || "catalogo.pdf",
+        })
+        if (mediaError) return res.status(400).json({ error: "VALIDATION_ERROR", message: mediaError })
+        mediaB64 = String(data.mediaBase64).replace(/^data:[^;]+;base64,/, "")
+        mediaMime = data.mediaMime || "application/pdf"
+        mediaName = data.mediaName || "catalogo.pdf"
+      } else if (!mediaB64) {
+        return res.status(400).json({ error: "VALIDATION_ERROR", message: "Envie o PDF do material." })
+      }
+    } else {
+      mediaB64 = null
+      mediaMime = null
+      mediaName = null
+    }
+
+    const row = await prisma.orgMaterial.update({
+      where: { id: existing.id },
+      data: {
+        title: data.title,
+        kind: data.kind,
+        body: data.body || "",
+        url: data.kind === "link" ? data.url : null,
+        shortcut: data.shortcut ? data.shortcut.toLowerCase() : null,
+        sortOrder: data.sortOrder ?? existing.sortOrder,
+        mediaBase64: mediaB64,
+        mediaMime,
+        mediaName,
+      },
+    })
+    return res.json({ material: formatMaterialRow(row) })
+  })
+
+  router.delete("/materials/:id", requireOrgOwner, async (req, res) => {
+    const existing = await prisma.orgMaterial.findFirst({
+      where: { id: req.params.id, organizationId: req.dataScope.orgId },
+    })
+    if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Material não encontrado." })
+    await prisma.orgMaterial.delete({ where: { id: existing.id } })
+    return res.json({ ok: true })
+  })
+
+  router.get("/materials/:id/content", async (req, res) => {
+    if (!req.dataScope?.orgId) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Empresa não encontrada." })
+    }
+    const row = await prisma.orgMaterial.findFirst({
+      where: { id: req.params.id, organizationId: req.dataScope.orgId },
+    })
+    if (!row) return res.status(404).json({ error: "NOT_FOUND", message: "Material não encontrado." })
+    return res.json({
+      material: {
+        ...formatMaterialRow(row),
+        mediaBase64: row.mediaBase64 || null,
+      },
     })
   })
 
@@ -39,7 +248,7 @@ function createOrgRouter() {
             email: true,
             createdAt: true,
             whatsappConnection: {
-              select: { status: true, phone: true, qrCode: true, updatedAt: true },
+              select: { connected: true, status: true, phone: true, qrCode: true, updatedAt: true },
             },
           },
         },
@@ -72,9 +281,12 @@ function createOrgRouter() {
         organizationId: req.dataScope.orgId,
         expiresAt: { gt: new Date() },
       },
-      select: { id: true, email: true, name: true, role: true, expiresAt: true, createdAt: true },
+      select: { id: true, email: true, name: true, role: true, expiresAt: true, createdAt: true, token: true },
       orderBy: { createdAt: "desc" },
     })
+
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || "http://localhost:5173"
+    const inviteBase = baseUrl.replace(/\/$/, "")
 
     return res.json({
       members: sellers,
@@ -85,6 +297,7 @@ function createOrgRouter() {
         role: i.role,
         expiresAt: i.expiresAt.toISOString(),
         createdAt: i.createdAt.toISOString(),
+        inviteUrl: `${inviteBase}/accept-invite?token=${i.token}`,
       })),
     })
   })

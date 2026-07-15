@@ -9,6 +9,8 @@ import {
   mockAnalytics,
   mockWhatsAppStatus,
   mockGroupSettings,
+  mockOrgMembers,
+  mockOrgPendingInvites,
 } from '../utils/mockData.js'
 import { resolveApiBaseURL, resolveUseRealApi } from '../lib/runtimeEnv.js'
 
@@ -754,6 +756,7 @@ export async function getWhatsAppStatus() {
 
 export async function getCrmConversations(params = {}) {
   if (resolveUseRealApi()) return apiClient.get('/crm/conversations', { params })
+  await ensureMockAtacadoPack()
   return mockResponse({ conversations: [], total: 0, limit: 100, offset: 0 })
 }
 
@@ -930,6 +933,17 @@ export async function dismissCrmReminderAlert(reminderId) {
   return mockResponse({ ok: true })
 }
 
+let mockOrgMembersState = null
+let mockOrgPendingInvitesState = null
+
+function getMockOrgTeamState() {
+  if (!mockOrgMembersState) {
+    mockOrgMembersState = mockOrgMembers.map((member) => ({ ...member, whatsapp: member.whatsapp ? { ...member.whatsapp } : undefined }))
+    mockOrgPendingInvitesState = mockOrgPendingInvites.map((invite) => ({ ...invite }))
+  }
+  return { members: mockOrgMembersState, pendingInvites: mockOrgPendingInvitesState }
+}
+
 let mockCrmTags = [
   { id: 'tag-follow', name: 'Follow-up', color: '#f59e0b' },
   { id: 'tag-quente', name: 'Lead quente', color: '#ef4444' },
@@ -943,9 +957,47 @@ let mockCrmStages = [
 ]
 
 let mockCrmFlows = []
+let mockCrmQuickReplies = []
+
+const MOCK_ATACADO_PACK_KEY = 'vg_mock_atacado_pack_applied'
+let mockAtacadoPackPromise = null
+
+async function ensureMockAtacadoPack() {
+  if (resolveUseRealApi()) return
+  try {
+    if (localStorage.getItem(MOCK_ATACADO_PACK_KEY) === '1') return
+  } catch {
+    /* ignore private mode */
+  }
+  const { importCrmPackLocal, isGenericDefaultSetup } = await import('../lib/crmPackImportLocal.js')
+  if (!isGenericDefaultSetup(mockCrmStages, mockCrmFlows.length)) return
+  if (!mockAtacadoPackPromise) {
+    mockAtacadoPackPromise = (async () => {
+      const pack = (await import('../../examples/crm-pack-atacado-vestuario.json')).default
+      const store = {
+        tags: mockCrmTags,
+        stages: mockCrmStages,
+        flows: mockCrmFlows,
+        quickReplies: mockCrmQuickReplies,
+      }
+      importCrmPackLocal(pack, store)
+      mockCrmTags = store.tags
+      mockCrmStages = store.stages
+      mockCrmFlows = store.flows
+      mockCrmQuickReplies = store.quickReplies
+      try {
+        localStorage.setItem(MOCK_ATACADO_PACK_KEY, '1')
+      } catch {
+        /* ignore */
+      }
+    })()
+  }
+  await mockAtacadoPackPromise
+}
 
 export async function getCrmTags() {
   if (resolveUseRealApi()) return apiClient.get('/crm/tags')
+  await ensureMockAtacadoPack()
   return mockResponse({ tags: mockCrmTags })
 }
 
@@ -970,6 +1022,7 @@ export async function deleteCrmTag(id) {
 
 export async function getCrmStages() {
   if (resolveUseRealApi()) return apiClient.get('/crm/stages')
+  await ensureMockAtacadoPack()
   return mockResponse({ stages: mockCrmStages })
 }
 
@@ -1007,12 +1060,15 @@ export async function deleteCrmStage(id) {
 
 export async function getCrmQuickReplies() {
   if (resolveUseRealApi()) return apiClient.get('/crm/quick-replies')
-  return mockResponse({ quickReplies: [] })
+  await ensureMockAtacadoPack()
+  return mockResponse({ quickReplies: mockCrmQuickReplies })
 }
 
 export async function createCrmQuickReply(payload) {
   if (resolveUseRealApi()) return apiClient.post('/crm/quick-replies', payload, { timeout: 120000 })
-  return mockResponse({ quickReply: { id: `qr-${Date.now()}`, ...payload } })
+  const quickReply = { id: `qr-${Date.now()}`, hasMedia: false, mediaType: 'none', ...payload }
+  mockCrmQuickReplies = [...mockCrmQuickReplies, quickReply]
+  return mockResponse({ quickReply })
 }
 
 export async function updateCrmQuickReply(id, payload) {
@@ -1032,6 +1088,7 @@ export async function getCrmQuickReplyContent(id) {
 
 export async function getCrmFlows() {
   if (resolveUseRealApi()) return apiClient.get('/crm/flows')
+  await ensureMockAtacadoPack()
   return mockResponse({ flows: mockCrmFlows })
 }
 
@@ -1066,11 +1123,12 @@ export async function importCrmPack(pack) {
   }
   const { importCrmPackLocal } = await import('../lib/crmPackImportLocal.js')
   try {
-    const store = { tags: mockCrmTags, stages: mockCrmStages, flows: mockCrmFlows }
+    const store = { tags: mockCrmTags, stages: mockCrmStages, flows: mockCrmFlows, quickReplies: mockCrmQuickReplies }
     const result = importCrmPackLocal(pack, store)
     mockCrmTags = store.tags
     mockCrmStages = store.stages
     mockCrmFlows = store.flows
+    mockCrmQuickReplies = store.quickReplies
     return mockResponse(result)
   } catch (err) {
     throw new Error(err?.message || 'Pack inválido.')
@@ -1161,20 +1219,16 @@ export async function getCrmOverview() {
   return mockResponse({ open: 0, pending: 0, resolved: 0, unread: 0, contacts: 0, aiConfigured: false })
 }
 
-export async function fetchOrg() {
-  if (resolveUseRealApi()) return (await apiClient.get('/org')).data
-  return { organization: { id: 'mock-org', name: 'Minha empresa' }, role: 'OWNER', isOwner: true }
-}
-
 export async function fetchOrgMembers() {
   if (resolveUseRealApi()) return (await apiClient.get('/org/members')).data
+  await delay()
+  const { members, pendingInvites } = getMockOrgTeamState()
   return {
-    members: [
-      { userId: mockUser.id, name: mockUser.name, email: mockUser.email, role: 'OWNER' },
-      { userId: 'u-seller-1', name: 'Alessandra', email: 'alessandra@empresa.com.br', role: 'SELLER' },
-      { userId: 'u-seller-2', name: 'Luis Baseset', email: 'luis@baseset.com.br', role: 'SELLER' },
-    ],
-    pendingInvites: [],
+    members: members.map((member) => ({
+      ...member,
+      whatsapp: member.whatsapp ? { ...member.whatsapp } : undefined,
+    })),
+    pendingInvites: pendingInvites.map((invite) => ({ ...invite })),
   }
 }
 
@@ -1185,15 +1239,300 @@ export async function fetchOrgSellers() {
 
 export async function inviteOrgMember({ name, email }) {
   if (resolveUseRealApi()) return (await apiClient.post('/org/members/invite', { name, email })).data
-  return { invite: { inviteUrl: 'https://example.com/accept-invite?token=mock' } }
+  await delay()
+  const trimmedName = String(name || '').trim()
+  const normalizedEmail = String(email || '').trim().toLowerCase()
+  if (trimmedName.length < 2) {
+    throw Object.assign(new Error('Nome e e-mail válidos são obrigatórios.'), {
+      response: { data: { message: 'Nome e e-mail válidos são obrigatórios.' } },
+    })
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    throw Object.assign(new Error('Informe um e-mail válido.'), {
+      response: { data: { message: 'Informe um e-mail válido.' } },
+    })
+  }
+
+  const { members, pendingInvites } = getMockOrgTeamState()
+  if (members.some((member) => member.email.toLowerCase() === normalizedEmail)) {
+    throw Object.assign(new Error('Este e-mail já pertence a uma empresa.'), {
+      response: { data: { message: 'Este e-mail já pertence a uma empresa.' } },
+    })
+  }
+  if (pendingInvites.some((invite) => invite.email.toLowerCase() === normalizedEmail)) {
+    throw Object.assign(new Error('Já existe um convite pendente para este e-mail.'), {
+      response: { data: { message: 'Já existe um convite pendente para este e-mail.' } },
+    })
+  }
+
+  const token = `mock-${Date.now().toString(36)}`
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'
+  const invite = {
+    id: `inv-${Date.now()}`,
+    email: normalizedEmail,
+    name: trimmedName,
+    role: 'SELLER',
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    createdAt: new Date().toISOString(),
+    inviteUrl: `${origin}/accept-invite?token=${token}`,
+  }
+  pendingInvites.unshift(invite)
+  return { invite }
 }
 
 export async function removeOrgMember(userId) {
   if (resolveUseRealApi()) return (await apiClient.delete(`/org/members/${userId}`)).data
+  await delay()
+  const { members } = getMockOrgTeamState()
+  const index = members.findIndex((member) => member.userId === userId)
+  if (index === -1) {
+    throw Object.assign(new Error('Membro não encontrado nesta empresa.'), {
+      response: { data: { message: 'Membro não encontrado nesta empresa.' } },
+    })
+  }
+  if (members[index].role === 'OWNER') {
+    throw Object.assign(new Error('Não é possível remover o dono da empresa.'), {
+      response: { data: { message: 'Não é possível remover o dono da empresa.' } },
+    })
+  }
+  members.splice(index, 1)
   return { ok: true }
 }
 
 export async function acceptOrgInvite({ token, password }) {
   if (resolveUseRealApi()) return (await apiClient.post('/auth/accept-invite', { token, password })).data
   return { user: mockUser, token: 'mock-jwt-token' }
+}
+
+// ------------------------- Materiais da loja + Operação -------------------------
+
+let mockOrgMaterialsState = null
+let mockDailySalesGoal = 5000
+
+function getMockOrgMaterials() {
+  if (!mockOrgMaterialsState) {
+    mockOrgMaterialsState = [
+      {
+        id: 'mat-1',
+        title: 'Catálogo verão',
+        kind: 'link',
+        body: 'Segue o catálogo da coleção verão ☀️',
+        url: 'https://exemplo.com/catalogo-verao.pdf',
+        shortcut: 'catalogo',
+        sortOrder: 0,
+        mediaType: 'none',
+        mediaMime: null,
+        mediaName: null,
+        hasMedia: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      {
+        id: 'mat-2',
+        title: 'Tabela de preços',
+        kind: 'link',
+        body: 'Tabela atacado atualizada:',
+        url: 'https://exemplo.com/tabela.pdf',
+        shortcut: 'tabela',
+        sortOrder: 1,
+        mediaType: 'none',
+        mediaMime: null,
+        mediaName: null,
+        hasMedia: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    ]
+  }
+  return mockOrgMaterialsState
+}
+
+export async function fetchOrg() {
+  if (resolveUseRealApi()) return (await apiClient.get('/org')).data
+  return {
+    organization: {
+      id: 'mock-org',
+      name: 'Minha empresa',
+      dailySalesGoal: mockDailySalesGoal,
+    },
+    role: 'OWNER',
+    isOwner: true,
+  }
+}
+
+export async function updateOrg(payload) {
+  if (resolveUseRealApi()) return (await apiClient.patch('/org', payload)).data
+  await delay()
+  if (payload?.dailySalesGoal !== undefined) mockDailySalesGoal = payload.dailySalesGoal
+  return {
+    organization: {
+      id: 'mock-org',
+      name: 'Minha empresa',
+      dailySalesGoal: mockDailySalesGoal,
+    },
+  }
+}
+
+export async function getOrgMaterials() {
+  if (resolveUseRealApi()) return (await apiClient.get('/org/materials')).data
+  await delay(200)
+  return { materials: getMockOrgMaterials().map((m) => ({ ...m })) }
+}
+
+export async function createOrgMaterial(payload) {
+  if (resolveUseRealApi()) return (await apiClient.post('/org/materials', payload)).data
+  await delay()
+  const list = getMockOrgMaterials()
+  const row = {
+    id: `mat-${Date.now()}`,
+    title: payload.title,
+    kind: payload.kind,
+    body: payload.body || '',
+    url: payload.url || null,
+    shortcut: payload.shortcut || null,
+    sortOrder: payload.sortOrder ?? list.length,
+    mediaType: payload.mediaBase64 ? 'document' : 'none',
+    mediaMime: payload.mediaMime || null,
+    mediaName: payload.mediaName || null,
+    hasMedia: Boolean(payload.mediaBase64),
+    _mediaBase64: payload.mediaBase64 || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }
+  list.push(row)
+  const { _mediaBase64, ...publicRow } = row
+  return { material: publicRow }
+}
+
+export async function updateOrgMaterial(id, payload) {
+  if (resolveUseRealApi()) return (await apiClient.put(`/org/materials/${id}`, payload)).data
+  await delay()
+  const list = getMockOrgMaterials()
+  const idx = list.findIndex((m) => m.id === id)
+  if (idx === -1) throw new Error('Material não encontrado.')
+  const prev = list[idx]
+  list[idx] = {
+    ...prev,
+    ...payload,
+    hasMedia: payload.mediaBase64 != null ? Boolean(payload.mediaBase64) : prev.hasMedia,
+    mediaType: payload.mediaBase64 || prev.hasMedia ? 'document' : 'none',
+    _mediaBase64: payload.mediaBase64 != null ? payload.mediaBase64 : prev._mediaBase64,
+    updatedAt: new Date().toISOString(),
+  }
+  const { _mediaBase64, ...publicRow } = list[idx]
+  return { material: publicRow }
+}
+
+export async function deleteOrgMaterial(id) {
+  if (resolveUseRealApi()) return (await apiClient.delete(`/org/materials/${id}`)).data
+  await delay()
+  const list = getMockOrgMaterials()
+  const idx = list.findIndex((m) => m.id === id)
+  if (idx !== -1) list.splice(idx, 1)
+  return { ok: true }
+}
+
+export async function getOrgMaterialContent(id) {
+  if (resolveUseRealApi()) return apiClient.get(`/org/materials/${id}/content`)
+  await delay(150)
+  const row = getMockOrgMaterials().find((m) => m.id === id)
+  if (!row) throw new Error('Material não encontrado.')
+  return {
+    data: {
+      material: {
+        ...row,
+        mediaBase64: row._mediaBase64 || null,
+      },
+    },
+  }
+}
+
+export async function getCrmOpsToday(sellerUserId) {
+  if (resolveUseRealApi()) {
+    const params = sellerUserId ? { sellerUserId } : undefined
+    return (await apiClient.get('/crm/ops/today', { params })).data
+  }
+  await delay(250)
+  return {
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }),
+    unanswered: {
+      count: 2,
+      items: [
+        {
+          conversationId: 'c1',
+          contactId: 'ct1',
+          contactName: 'Loja Estilo SP',
+          lastMessagePreview: 'Tem no P?',
+          lastMessageAt: new Date(Date.now() - 3600000).toISOString(),
+          unreadCount: 2,
+          userId: 'u-seller-1',
+          sellerName: 'Alessandra',
+        },
+        {
+          conversationId: 'c2',
+          contactId: 'ct2',
+          contactName: 'Maria Revenda',
+          lastMessagePreview: 'Pode mandar o PIX?',
+          lastMessageAt: new Date(Date.now() - 7200000).toISOString(),
+          unreadCount: 1,
+          userId: 'u-seller-2',
+          sellerName: 'Luis Baseset',
+        },
+      ],
+    },
+    openQuotes: {
+      count: 1,
+      totalAmount: 890,
+      items: [
+        {
+          contactId: 'ct3',
+          conversationId: 'c3',
+          contactName: 'Boutique Norte',
+          amount: 890,
+          savedAt: new Date(Date.now() - 86400000).toISOString(),
+          userId: 'u-seller-1',
+          sellerName: 'Alessandra',
+        },
+      ],
+    },
+    salesToday: { count: 3, totalAmount: 2450 },
+    remindersDue: {
+      count: 1,
+      items: [
+        {
+          id: 'rem-1',
+          contactId: 'ct2',
+          conversationId: 'c2',
+          contactName: 'Maria Revenda',
+          note: 'Cobrar confirmação do pedido',
+          remindAt: new Date().toISOString(),
+          status: 'pending',
+          userId: 'u-seller-2',
+          sellerName: 'Luis Baseset',
+        },
+      ],
+    },
+    goal: {
+      targetAmount: mockDailySalesGoal,
+      achievedAmount: 2450,
+    },
+    bySeller: [
+      {
+        userId: 'u-seller-1',
+        name: 'Alessandra',
+        salesCount: 2,
+        salesAmount: 1600,
+        unansweredCount: 1,
+        openQuotesCount: 1,
+      },
+      {
+        userId: 'u-seller-2',
+        name: 'Luis Baseset',
+        salesCount: 1,
+        salesAmount: 850,
+        unansweredCount: 1,
+        openQuotesCount: 0,
+      },
+    ],
+  }
 }

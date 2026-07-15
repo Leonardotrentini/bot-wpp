@@ -1,4 +1,5 @@
-import { Bell, ChevronDown, LogOut, User } from 'lucide-react'
+import { Bell, ChevronDown, LogOut, Menu, User } from 'lucide-react'
+import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useState, useRef, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -18,6 +19,7 @@ function formatWhen(iso) {
 
 export function DashboardHeader({ title }) {
   const { user, logout } = useAuth()
+  const { isDesktop, setMobileOpen } = useSidebar()
   const { alerts, unreadCount, dismissAlert, goToConversation, loading } = useReminderAlerts()
   const [open, setOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -36,7 +38,19 @@ export function DashboardHeader({ title }) {
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-brand-800 bg-brand-950/90 px-4 backdrop-blur-md lg:px-6">
-      <h1 className="text-lg font-semibold text-stone-100 font-heading truncate">{title || 'Painel'}</h1>
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {!isDesktop && (
+          <button
+            type="button"
+            onClick={() => setMobileOpen(true)}
+            className="shrink-0 rounded-xl p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+            aria-label="Abrir menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        )}
+        <h1 className="truncate text-lg font-semibold text-stone-100 font-heading">{title || 'Painel'}</h1>
+      </div>
       <div className="flex items-center gap-2">
         <div className="relative" ref={notifRef}>
           <button

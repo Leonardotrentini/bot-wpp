@@ -58,7 +58,8 @@ const {
   processDueContactReminders,
 } = require("../lib/crmContactReminders")
 const { listCrmSales } = require("../lib/crmSales")
-const { ensureDefaultTags, isQualifiedTagName } = require("../lib/crmDefaults")
+const { buildOpsToday } = require("../lib/crmOpsToday")
+const { ensureAtacadoPack, isQualifiedTagName } = require("../lib/crmDefaults")
 const { trackMetaForContactTag } = require("../lib/metaConversions")
 
 function isQuoteTagName(name) {
@@ -66,21 +67,8 @@ function isQuoteTagName(name) {
   return n === "Orçamento" || n.startsWith("Orçamento ")
 }
 
-const DEFAULT_STAGES = [
-  { name: "Novo", color: "#38bdf8", isDefault: true },
-  { name: "Em atendimento", color: "#fbbf24" },
-  { name: "Negociando", color: "#a78bfa" },
-  { name: "Fechado", color: "#34d399" },
-]
-
 async function ensureDefaultStages(userId) {
-  const count = await prisma.crmKanbanStage.count({ where: { userId } })
-  if (count === 0) {
-    await prisma.crmKanbanStage.createMany({
-      data: DEFAULT_STAGES.map((s, i) => ({ userId, sortOrder: i, ...s })),
-    })
-  }
-  await ensureDefaultTags(userId)
+  await ensureAtacadoPack(userId)
 }
 
 function formatStageRow(stage) {
@@ -854,6 +842,26 @@ function createCrmRouter({ io }) {
     }
     const result = await listCrmSales(prisma, req.dataScope.userIds, parsed.data)
     return res.json(result)
+  })
+
+  router.get("/ops/today", async (req, res) => {
+    const sellerUserId = req.query.sellerUserId ? String(req.query.sellerUserId).trim() : null
+    if (sellerUserId && !req.dataScope?.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono pode filtrar por vendedor." })
+    }
+    if (sellerUserId && !assertUserInScope(req.dataScope, sellerUserId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Vendedor fora do escopo da empresa." })
+    }
+    try {
+      const payload = await buildOpsToday(prisma, req.dataScope, { sellerUserId })
+      return res.json(payload)
+    } catch (err) {
+      if (err?.code === "FORBIDDEN") {
+        return res.status(403).json({ error: "FORBIDDEN", message: "Vendedor fora do escopo da empresa." })
+      }
+      console.error("[crm] ops/today:", err)
+      return res.status(500).json({ error: "OPS_FAILED", message: "Falha ao carregar operação de hoje." })
+    }
   })
 
   router.delete("/contacts/:id/activity/:activityId", async (req, res) => {

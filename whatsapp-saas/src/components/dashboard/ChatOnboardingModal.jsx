@@ -111,15 +111,21 @@ export function ChatOnboardingModal({ isOpen, user, onComplete }) {
 
         <Section icon={Zap} title="Atalhos e produtividade">
           <p>
-            Digite <strong className="text-stone-300">/</strong> no campo de mensagem para usar atalhos salvos no CRM.
-            Configure tags, estágios e atalhos em <strong className="text-stone-300">CRM → Configurações</strong>.
+            Já deixamos <strong className="text-stone-300">funil de atacado</strong>,{' '}
+            <strong className="text-stone-300">FUP automático</strong> e{' '}
+            <strong className="text-stone-300">atalhos prontos</strong> na sua conta. Digite{' '}
+            <strong className="text-stone-300">/</strong> no campo de mensagem (ex.: <code className="text-stone-300">/pix</code>,{' '}
+            <code className="text-stone-300">/catalogo</code>) para responder mais rápido.
+          </p>
+          <p>
+            Tags, estágios e atalhos extras ficam em <strong className="text-stone-300">CRM → Configurações</strong>.
           </p>
         </Section>
 
         <Section icon={Kanban} title="CRM e Kanban">
           <p>
             Cada conversa vira um card no <strong className="text-stone-300">CRM → Kanban</strong>. Arraste entre estágios
-            (Novo, Em atendimento, etc.) para organizar seu funil de vendas ou suporte.
+            (Novo, Qualificando, Orçamento enviado, etc.) para organizar seu funil de atacado.
           </p>
         </Section>
 

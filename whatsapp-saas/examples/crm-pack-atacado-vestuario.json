@@ -1,0 +1,101 @@
+{
+  "version": 2,
+  "kind": "vesto_crm_pack",
+  "name": "Atacado pronto — vestuário",
+  "description": "Funil de atacado, tags de FUP, fluxos automáticos e atalhos de texto para loja de vestuário.",
+  "tags": [
+    { "key": "qualificado", "name": "QUALIFICADO", "color": "#3b82f6" },
+    { "key": "orcamento", "name": "Orçamento", "color": "#8b5cf6" },
+    { "key": "fup_24h", "name": "FUP 24h", "color": "#fbbf24" },
+    { "key": "fup_48h", "name": "FUP 48h", "color": "#f59e0b" },
+    { "key": "revenda", "name": "Revenda", "color": "#22c55e" },
+    { "key": "uso_proprio", "name": "Uso próprio", "color": "#64748b" },
+    { "key": "comprou", "name": "Comprou", "color": "#34d399" },
+    { "key": "perdido", "name": "Perdido", "color": "#ef4444" }
+  ],
+  "stages": [
+    { "key": "novo", "name": "Novo", "color": "#38bdf8", "isDefault": true, "sortOrder": 0 },
+    { "key": "qualificando", "name": "Qualificando", "color": "#60a5fa", "sortOrder": 1 },
+    { "key": "orcamento_enviado", "name": "Orçamento enviado", "color": "#a78bfa", "sortOrder": 2 },
+    { "key": "negociando", "name": "Negociando", "color": "#c084fc", "sortOrder": 3 },
+    { "key": "pedido_fechado", "name": "Pedido fechado", "color": "#34d399", "sortOrder": 4 },
+    { "key": "perdido", "name": "Perdido", "color": "#f87171", "sortOrder": 5 }
+  ],
+  "flows": [
+    {
+      "name": "FUP 24h",
+      "enabled": true,
+      "cooldownPerContactHours": 24,
+      "trigger": {
+        "type": "no_reply",
+        "delayUnit": "hours",
+        "delayValue": 24
+      },
+      "actions": [
+        { "type": "add_tag", "tagKey": "fup_24h" },
+        {
+          "type": "send_message",
+          "body": "Oi! Vi que ainda não conseguimos falar. Posso te ajudar com catálogo, tabela ou condições de atacado?"
+        }
+      ]
+    },
+    {
+      "name": "FUP 48h",
+      "enabled": true,
+      "cooldownPerContactHours": 48,
+      "trigger": {
+        "type": "no_reply",
+        "delayUnit": "hours",
+        "delayValue": 48
+      },
+      "actions": [
+        { "type": "add_tag", "tagKey": "fup_48h" },
+        {
+          "type": "send_message",
+          "body": "Passando para saber se ainda tem interesse no atacado. Se quiser, te mando a tabela atualizada e as formas de pagamento."
+        }
+      ]
+    },
+    {
+      "name": "Respondeu FUP",
+      "enabled": true,
+      "cooldownPerContactHours": 24,
+      "trigger": {
+        "type": "contact_reply",
+        "tagKeys": ["fup_24h", "fup_48h"]
+      },
+      "actions": [
+        { "type": "remove_tag", "tagKey": "fup_24h" },
+        { "type": "remove_tag", "tagKey": "fup_48h" },
+        { "type": "move_stage", "stageKey": "negociando" }
+      ]
+    }
+  ],
+  "quickReplies": [
+    {
+      "shortcut": "catalogo",
+      "title": "Catálogo",
+      "body": "Segue nosso catálogo de atacado! Me avisa se quer ver alguma linha específica ou tamanhos disponíveis."
+    },
+    {
+      "shortcut": "tabela",
+      "title": "Tabela de preços",
+      "body": "Te envio a tabela de preços do atacado. Qual linha ou coleção você quer ver primeiro?"
+    },
+    {
+      "shortcut": "frete",
+      "title": "Frete",
+      "body": "Sobre frete: trabalhamos com transportadora e Correios. Me passa seu CEP que calculo o valor e o prazo pra você."
+    },
+    {
+      "shortcut": "pedido-minimo",
+      "title": "Pedido mínimo",
+      "body": "Nosso pedido mínimo no atacado é de R$ 500 em peças variadas. Posso montar um mix pra você chegar nesse valor."
+    },
+    {
+      "shortcut": "pix",
+      "title": "PIX",
+      "body": "Para pagamento via PIX, me confirma o valor do pedido que te envio a chave e os dados na hora."
+    }
+  ]
+}

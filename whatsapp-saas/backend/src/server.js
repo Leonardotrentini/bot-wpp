@@ -3263,7 +3263,7 @@ async function updateConnectionFromWebhook(instanceName, body) {
   const status = nextStatus && nextStatus !== "unknown" ? nextStatus.toUpperCase() : existing.status
   const phone = pickPhone(payload) || pickPhone(body)
 
-  const conn = await prisma.whatsAppConnection.update({
+  let conn = await prisma.whatsAppConnection.update({
     where: { instanceName },
     data: {
       connected,
@@ -3273,6 +3273,20 @@ async function updateConnectionFromWebhook(instanceName, body) {
       lastSync: new Date(),
     },
   })
+
+  if (phone) {
+    const { enforceUniqueOrgPhone } = require("./lib/whatsappConnection")
+    const enforced = await enforceUniqueOrgPhone(prisma, conn, phone)
+    conn = enforced.conn
+    if (enforced.conflict?.message) {
+      emitWhatsAppToUser(conn.userId, "whatsapp:status", {
+        ...formatConnectionPayload(conn),
+        error: enforced.conflict.message,
+        phoneConflict: true,
+      })
+      return conn
+    }
+  }
 
   emitWhatsAppToUser(conn.userId, "whatsapp:status", formatConnectionPayload(conn))
   if (conn.qrCode) emitWhatsAppToUser(conn.userId, "whatsapp:qr", { qr: conn.qrCode })

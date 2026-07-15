@@ -42,7 +42,9 @@ import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
 import { ChatConversationFilters } from '../../components/dashboard/ChatConversationFilters.jsx'
 import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
+import { ChatMaterialsMenu } from '../../components/crm/ChatMaterialsMenu.jsx'
 import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
+import { useMediaQuery } from '../../hooks/useMediaQuery.js'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
 import {
   getCrmConversations,
@@ -61,6 +63,7 @@ import {
   getCrmStages,
   getCrmQuickReplies,
   getCrmQuickReplyContent,
+  getOrgMaterials,
   getCrmAgents,
   startCrmSync,
   getCrmSyncStatus,
@@ -257,6 +260,7 @@ export function Chat() {
   const [stages, setStages] = useState([])
   const [agents, setAgents] = useState([])
   const [quickReplies, setQuickReplies] = useState([])
+  const [orgMaterials, setOrgMaterials] = useState([])
   const [qrOpen, setQrOpen] = useState(false)
   const [qrFilter, setQrFilter] = useState('')
 
@@ -268,7 +272,15 @@ export function Chat() {
   const listLoadSeq = useRef(0)
   const listErrorAt = useRef(0)
 
-  const [showPanel, setShowPanel] = useState(true)
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const [showPanel, setShowPanel] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true,
+  )
+  const leadActionsRef = useRef(null)
+  const [leadPanelEl, setLeadPanelEl] = useState(null)
+  useEffect(() => {
+    if (!isDesktop) setShowPanel(false)
+  }, [isDesktop])
   const [notesDraft, setNotesDraft] = useState('')
   const [nameDraft, setNameDraft] = useState('')
   const [savingContact, setSavingContact] = useState(false)
@@ -447,14 +459,24 @@ export function Chat() {
     }
   }, [isOrgOwner])
 
-  // Troca de membro/tag/estágio: zera lista e thread (não na digitação da busca)
+  // Troca de membro/tag/estágio: zera lista e thread (não na digitação da busca).
+  // NÃO depende de setSearchParams — no React Router a referência muda e re-disparava
+  // o effect com loadingList=true sem novo load (spinner eterno em SELLER).
+  const setSearchParamsRef = useRef(setSearchParams)
+  setSearchParamsRef.current = setSearchParams
+
   useEffect(() => {
     setConversations([])
     setActiveId(null)
     setMessages([])
-    setSearchParams({}, { replace: true })
+    setSearchParamsRef.current({}, { replace: true })
     setLoadingList(true)
-  }, [sellerFilter, tagFilter, stageFilter, setSearchParams])
+    // Garante fetch mesmo se listParams não mudar (ex.: filtrar e limpar para o mesmo valor).
+    const t = setTimeout(() => {
+      loadConversationsRef.current?.()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [sellerFilter, tagFilter, stageFilter])
 
   useEffect(() => {
     const cached = getCachedConversationsList(listParams)
@@ -466,6 +488,16 @@ export function Chat() {
     return () => clearTimeout(t)
   }, [loadConversations, query, listParams])
 
+  // Safety: nunca deixar spinner preso mais de 20s
+  useEffect(() => {
+    if (!loadingList) return undefined
+    const t = setTimeout(() => {
+      setLoadingList(false)
+      setRefreshingList(false)
+    }, 20000)
+    return () => clearTimeout(t)
+  }, [loadingList])
+
   useEffect(() => {
     const boot = getCrmBootstrapCache()
     if (boot) {
@@ -475,34 +507,43 @@ export function Chat() {
       if (boot.quickReplies) setQuickReplies(boot.quickReplies)
       if (boot.waConnected != null) setWaConnected(boot.waConnected)
     }
-    Promise.allSettled([getCrmTags(), getCrmStages(), getCrmAgents(), getCrmQuickReplies(), getCrmSyncStatus(), getWhatsAppStatus()]).then(
-      ([t, s, a, q, sync, wa]) => {
-        const next = {}
-        if (t.status === 'fulfilled') {
-          setTags(t.value.data.tags || [])
-          next.tags = t.value.data.tags || []
-        }
-        if (s.status === 'fulfilled') {
-          setStages(s.value.data.stages || [])
-          next.stages = s.value.data.stages || []
-        }
-        if (a.status === 'fulfilled') {
-          setAgents(a.value.data.agents || [])
-          next.agents = a.value.data.agents || []
-        }
-        if (q.status === 'fulfilled') {
-          setQuickReplies(q.value.data.quickReplies || [])
-          next.quickReplies = q.value.data.quickReplies || []
-        }
-        if (sync.status === 'fulfilled') setSyncJob(sync.value.data.job || null)
-        if (wa.status === 'fulfilled') {
-          const connected = Boolean(wa.value.data?.connected)
-          setWaConnected(connected)
-          next.waConnected = connected
-        }
-        setCrmBootstrapCache(next)
-      },
-    )
+    Promise.allSettled([
+      getCrmTags(),
+      getCrmStages(),
+      getCrmAgents(),
+      getCrmQuickReplies(),
+      getCrmSyncStatus(),
+      getWhatsAppStatus(),
+      getOrgMaterials(),
+    ]).then(([t, s, a, q, sync, wa, mats]) => {
+      const next = {}
+      if (t.status === 'fulfilled') {
+        setTags(t.value.data.tags || [])
+        next.tags = t.value.data.tags || []
+      }
+      if (s.status === 'fulfilled') {
+        setStages(s.value.data.stages || [])
+        next.stages = s.value.data.stages || []
+      }
+      if (a.status === 'fulfilled') {
+        setAgents(a.value.data.agents || [])
+        next.agents = a.value.data.agents || []
+      }
+      if (q.status === 'fulfilled') {
+        setQuickReplies(q.value.data.quickReplies || [])
+        next.quickReplies = q.value.data.quickReplies || []
+      }
+      if (sync.status === 'fulfilled') setSyncJob(sync.value.data.job || null)
+      if (wa.status === 'fulfilled') {
+        const connected = Boolean(wa.value.data?.connected)
+        setWaConnected(connected)
+        next.waConnected = connected
+      }
+      if (mats.status === 'fulfilled') {
+        setOrgMaterials(mats.value?.materials || [])
+      }
+      setCrmBootstrapCache(next)
+    })
   }, [])
 
   useEffect(() => {
@@ -1139,6 +1180,25 @@ export function Chat() {
     [],
   )
 
+  const applyOrgMaterial = useCallback(async (mat) => {
+    if (mat?.kind === 'document' && mat.mediaBase64) {
+      setAttachment({
+        base64: String(mat.mediaBase64).replace(/^data:[^;]+;base64,/, ''),
+        mime: mat.mediaMime || 'application/pdf',
+        name: mat.mediaName || 'catalogo.pdf',
+        type: 'document',
+      })
+    }
+    let text = String(mat?.body || '').trim()
+    if (mat?.kind === 'link' && mat.url) {
+      text = text ? `${text}\n${mat.url}` : mat.url
+    }
+    if (text) {
+      setDraft((prev) => (prev ? `${prev} ${text}` : text))
+    }
+    inputRef.current?.focus()
+  }, [])
+
   const onDraftChange = useCallback((value) => {
     setDraft(value)
     const match = value.match(/(?:^|\s)\/([a-z0-9_-]*)$/i)
@@ -1414,6 +1474,47 @@ export function Chat() {
               <div ref={listEndRef} />
             </div>
 
+            {/* Ações rápidas — mobile */}
+            {active && !activeIsGroup && (
+              <div className="flex items-stretch gap-1 border-t border-brand-800/80 bg-brand-950/40 px-2 py-1.5 lg:hidden">
+                {[
+                  { label: 'Orçamento', action: () => leadActionsRef.current?.openQuote() },
+                  { label: 'Compra', action: () => leadActionsRef.current?.openPurchase() },
+                  { label: 'Lembrete', action: () => leadActionsRef.current?.openReminder() },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={item.action}
+                    className="flex-1 rounded-lg px-1 py-2 text-[10px] font-semibold uppercase tracking-wide text-accent-300 transition hover:bg-accent-500/10"
+                  >
+                    {item.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    inputRef.current?.focus()
+                    setDraft((prev) => (prev.startsWith('/') ? prev : `/${prev}`))
+                  }}
+                  className="flex-1 rounded-lg px-1 py-2 text-[10px] font-semibold uppercase tracking-wide text-stone-400 transition hover:bg-white/5 hover:text-stone-200"
+                  title="Digite / no campo de mensagem para atalhos"
+                >
+                  Atalhos
+                </button>
+                {orgMaterials.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => document.getElementById('chat-materials-trigger')?.click()}
+                    className="flex-1 rounded-lg px-1 py-2 text-[10px] font-semibold uppercase tracking-wide text-stone-400 transition hover:bg-white/5 hover:text-stone-200"
+                    title="Materiais da loja"
+                  >
+                    Materiais
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Composer */}
             <div className="relative border-t border-brand-800 p-3">
               {qrOpen && filteredQuickReplies.length > 0 && (
@@ -1474,6 +1575,7 @@ export function Chat() {
                     draft={draft}
                   />
                 )}
+                {!isRecording && <ChatMaterialsMenu materials={orgMaterials} onApply={applyOrgMaterial} />}
                 {!isRecording && (
                   <>
                     <input
@@ -1622,26 +1724,7 @@ export function Chat() {
               </Button>
             </div>
 
-            <ContactLeadActions
-              contact={active.contact}
-              conversationId={active.id}
-              onContactUpdate={(contact) => {
-                setConversations((prev) =>
-                  prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...contact } } : c)),
-                )
-                setTags((prev) => {
-                  const ids = new Set(prev.map((t) => t.id))
-                  const merged = [...prev]
-                  for (const t of contact.tags || []) {
-                    if (!ids.has(t.id)) merged.push(t)
-                  }
-                  return merged.sort((a, b) => a.name.localeCompare(b.name))
-                })
-              }}
-              onConversationUpdate={(conversation) => {
-                setConversations((prev) => prev.map((c) => (c.id === conversation.id ? conversation : c)))
-              }}
-            />
+            <div ref={setLeadPanelEl} />
 
             <div>
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Estágio (CRM)</p>
@@ -1856,6 +1939,30 @@ export function Chat() {
         message={`Excluir a tag "${tagToDelete?.name || ''}"? Ela será removida de todos os leads.`}
       />
     </div>
+
+      {active && !activeIsGroup && (
+        <ContactLeadActions
+          ref={leadActionsRef}
+          contact={active.contact}
+          portalEl={showPanel ? leadPanelEl : null}
+          onContactUpdate={(contact) => {
+            setConversations((prev) =>
+              prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...contact } } : c)),
+            )
+            setTags((prev) => {
+              const ids = new Set(prev.map((t) => t.id))
+              const merged = [...prev]
+              for (const t of contact.tags || []) {
+                if (!ids.has(t.id)) merged.push(t)
+              }
+              return merged.sort((a, b) => a.name.localeCompare(b.name))
+            })
+          }}
+          onConversationUpdate={(conversation) => {
+            setConversations((prev) => prev.map((c) => (c.id === conversation.id ? conversation : c)))
+          }}
+        />
+      )}
     </>
   )
 }

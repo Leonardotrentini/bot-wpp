@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { History, Receipt, ShoppingBag, Bell, Loader2, X, Trash2, Pencil } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { Modal } from '../common/Modal.jsx'
@@ -114,7 +115,36 @@ function hasLegacyQuoteTags(tags = []) {
   return quoteTags.length > 1 || quoteTags.some((t) => t.name !== 'Orçamento')
 }
 
-export function ContactLeadActions({ contact, onContactUpdate, onConversationUpdate }) {
+export function LeadActionButtons({ onQuote, onPurchase, onReminder, onHistory, className = '' }) {
+  const btnClass =
+    'flex flex-col items-center justify-center gap-1 rounded-xl border border-accent-500/35 bg-accent-500/10 px-2 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-accent-400 transition hover:border-accent-500/55 hover:bg-accent-500/20 hover:text-accent-300'
+
+  return (
+    <div className={`grid grid-cols-2 gap-2 ${className}`}>
+      <button type="button" className={btnClass} onClick={onHistory}>
+        <History className="h-4 w-4" />
+        Histórico
+      </button>
+      <button type="button" className={btnClass} onClick={onQuote}>
+        <Receipt className="h-4 w-4" />
+        Orçamento
+      </button>
+      <button type="button" className={btnClass} onClick={onPurchase}>
+        <ShoppingBag className="h-4 w-4" />
+        Compra
+      </button>
+      <button type="button" className={btnClass} onClick={onReminder}>
+        <Bell className="h-4 w-4" />
+        Lembrete
+      </button>
+    </div>
+  )
+}
+
+export const ContactLeadActions = forwardRef(function ContactLeadActions(
+  { contact, onContactUpdate, onConversationUpdate, portalEl = null },
+  ref,
+) {
   const toast = useToast()
   const toastRef = useRef(toast)
   toastRef.current = toast
@@ -378,70 +408,70 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     }
   }
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      openQuote: () => setQuoteOpen(true),
+      openPurchase: () => setPurchaseOpen(true),
+      openReminder: () => setReminderOpen(true),
+      openHistory: () => setHistoryOpen(true),
+    }),
+    [],
+  )
+
   if (!contactId) return null
 
-  const btnClass =
-    'flex flex-col items-center justify-center gap-1 rounded-xl border border-accent-500/35 bg-accent-500/10 px-2 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-accent-400 transition hover:border-accent-500/55 hover:bg-accent-500/20 hover:text-accent-300'
+  const panelContent = (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Lead</p>
+      {contact.metaFunnel && (
+        <p className="mb-2 text-[11px] leading-snug text-stone-500">{metaFunnelLabel(contact.metaFunnel)}</p>
+      )}
+      {(contact.quote || contact.purchase || contact.nextReminder) && (
+        <div className="mb-2 space-y-1 rounded-xl border border-brand-700/80 bg-brand-900/50 px-3 py-2 text-xs text-stone-300">
+          {contact.quote?.amount != null && (
+            <p>
+              Orçamento: <span className="font-medium text-accent-300">{formatBrl(contact.quote.amount)}</span>
+            </p>
+          )}
+          {contact.purchase?.amount != null && (
+            <p className="flex flex-wrap items-center gap-2">
+              Compra: <span className="font-medium text-emerald-400">{formatBrl(contact.purchase.amount)}</span>
+              {contact.purchase.ticket ? (
+                <span className="text-stone-500"> · ticket {contact.purchase.ticket}</span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setPurchaseOpen(true)}
+                className="text-[10px] font-semibold uppercase tracking-wide text-accent-400 hover:text-accent-300"
+              >
+                Editar
+              </button>
+            </p>
+          )}
+          {contact.nextReminder?.scheduledAt && (
+            <p>
+              Lembrete:{' '}
+              <span className="font-medium text-sky-300">{formatReminderWhen(contact.nextReminder.scheduledAt)}</span>
+              {contact.nextReminder.note ? (
+                <span className="text-stone-500"> · {contact.nextReminder.note}</span>
+              ) : null}
+            </p>
+          )}
+        </div>
+      )}
+      <LeadActionButtons
+        onHistory={() => setHistoryOpen(true)}
+        onQuote={() => setQuoteOpen(true)}
+        onPurchase={() => setPurchaseOpen(true)}
+        onReminder={() => setReminderOpen(true)}
+      />
+    </div>
+  )
 
   return (
     <>
-      <div>
-        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">Lead</p>
-        {contact.metaFunnel && (
-          <p className="mb-2 text-[11px] leading-snug text-stone-500">{metaFunnelLabel(contact.metaFunnel)}</p>
-        )}
-        {(contact.quote || contact.purchase || contact.nextReminder) && (
-          <div className="mb-2 space-y-1 rounded-xl border border-brand-700/80 bg-brand-900/50 px-3 py-2 text-xs text-stone-300">
-            {contact.quote?.amount != null && (
-              <p>
-                Orçamento: <span className="font-medium text-accent-300">{formatBrl(contact.quote.amount)}</span>
-              </p>
-            )}
-            {contact.purchase?.amount != null && (
-              <p className="flex flex-wrap items-center gap-2">
-                Compra: <span className="font-medium text-emerald-400">{formatBrl(contact.purchase.amount)}</span>
-                {contact.purchase.ticket ? (
-                  <span className="text-stone-500"> · ticket {contact.purchase.ticket}</span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setPurchaseOpen(true)}
-                  className="text-[10px] font-semibold uppercase tracking-wide text-accent-400 hover:text-accent-300"
-                >
-                  Editar
-                </button>
-              </p>
-            )}
-            {contact.nextReminder?.scheduledAt && (
-              <p>
-                Lembrete:{' '}
-                <span className="font-medium text-sky-300">{formatReminderWhen(contact.nextReminder.scheduledAt)}</span>
-                {contact.nextReminder.note ? (
-                  <span className="text-stone-500"> · {contact.nextReminder.note}</span>
-                ) : null}
-              </p>
-            )}
-          </div>
-        )}
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" className={btnClass} onClick={() => setHistoryOpen(true)}>
-            <History className="h-4 w-4" />
-            Histórico
-          </button>
-          <button type="button" className={btnClass} onClick={() => setQuoteOpen(true)}>
-            <Receipt className="h-4 w-4" />
-            Orçamento
-          </button>
-          <button type="button" className={btnClass} onClick={() => setPurchaseOpen(true)}>
-            <ShoppingBag className="h-4 w-4" />
-            Compra
-          </button>
-          <button type="button" className={btnClass} onClick={() => setReminderOpen(true)}>
-            <Bell className="h-4 w-4" />
-            Lembrete
-          </button>
-        </div>
-      </div>
+      {portalEl ? createPortal(panelContent, portalEl) : null}
 
       <Modal
         isOpen={historyOpen}
@@ -740,4 +770,4 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       </Modal>
     </>
   )
-}
+})

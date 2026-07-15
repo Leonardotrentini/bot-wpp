@@ -13,6 +13,42 @@ export const mockUser = {
   plan: 'Pro',
 }
 
+export const mockOrgMembers = [
+  {
+    userId: mockUser.id,
+    name: mockUser.name,
+    email: mockUser.email,
+    role: 'OWNER',
+    whatsapp: { connected: true, status: 'connected', phone: '+5511998765432' },
+  },
+  {
+    userId: 'u-seller-1',
+    name: 'Alessandra',
+    email: 'alessandra@empresa.com.br',
+    role: 'SELLER',
+    whatsapp: { connected: false, status: 'disconnected', phone: null },
+  },
+  {
+    userId: 'u-seller-2',
+    name: 'Luis Baseset',
+    email: 'luis@baseset.com.br',
+    role: 'SELLER',
+    whatsapp: { connected: true, status: 'connected', phone: '+5511987654321' },
+  },
+]
+
+export const mockOrgPendingInvites = [
+  {
+    id: 'inv-mock-1',
+    email: 'rafael.costa@empresa.com.br',
+    name: 'Rafael Costa',
+    role: 'SELLER',
+    expiresAt: '2026-07-22T12:00:00.000Z',
+    createdAt: '2026-07-13T10:00:00.000Z',
+    inviteUrl: 'http://localhost:5173/accept-invite?token=mock-invite-rafael',
+  },
+]
+
 export const mockGroups = [
   {
     id: 'g1',

@@ -31,9 +31,10 @@ model User {
   phone              String?
   avatarUrl          String?
   passwordHash       String
-  role               UserRole            @default(USER)
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  role                    UserRole            @default(USER)
+  crmPackAtacadoAppliedAt DateTime?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
   subscriptions      Subscription[]
   whatsappConnection WhatsAppConnection?
   whatsappGroups     WhatsAppGroup[]
@@ -42,12 +43,35 @@ model User {
 }
 
 model Organization {
-  id        String               @id @default(cuid())
-  name      String
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
-  members   OrganizationMember[]
-  invites   OrgInvite[]
+  id             String               @id @default(cuid())
+  name           String
+  dailySalesGoal Float?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  members        OrganizationMember[]
+  invites        OrgInvite[]
+  materials      OrgMaterial[]
+}
+
+model OrgMaterial {
+  id              String       @id @default(cuid())
+  organizationId  String
+  title           String
+  kind            String // document | link
+  body            String       @default("")
+  url             String?
+  mediaBase64     String?
+  mediaMime       String?
+  mediaName       String?
+  shortcut        String?
+  sortOrder       Int          @default(0)
+  createdByUserId String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, sortOrder])
 }
 
 model OrganizationMember {

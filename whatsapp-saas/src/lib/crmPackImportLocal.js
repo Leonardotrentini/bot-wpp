@@ -3,6 +3,8 @@
  * Espelha a lógica do backend crmPackImport.js com maps em memória.
  */
 
+const SHORTCUT_RE = /^[a-z0-9_-]{1,30}$/i
+
 function slugKey(raw, fallback) {
   const base = String(raw || '')
     .normalize('NFD')
@@ -18,6 +20,29 @@ function requireKey(map, key, label) {
   const id = map.get(String(key || ''))
   if (!id) throw new Error(`${label}: chave "${key}" não existe no pack.`)
   return id
+}
+
+function normalizeQuickReplyDefs(rawQuickReplies) {
+  if (!rawQuickReplies) return []
+  const out = []
+  const used = new Set()
+  for (let i = 0; i < rawQuickReplies.length; i += 1) {
+    const row = rawQuickReplies[i] || {}
+    const shortcut = String(row.shortcut || '').trim().toLowerCase()
+    if (!shortcut) throw new Error(`quickReplies[${i}]: shortcut obrigatório.`)
+    if (!SHORTCUT_RE.test(shortcut)) throw new Error(`quickReplies[${i}]: shortcut inválido.`)
+    if (used.has(shortcut)) throw new Error(`quickReplies[${i}]: shortcut duplicado.`)
+    used.add(shortcut)
+    const body = String(row.body || '').trim()
+    if (!body) throw new Error(`quickReplies[${i}]: body obrigatório.`)
+    out.push({
+      shortcut,
+      title: String(row.title || '').trim().slice(0, 80),
+      body: body.slice(0, 4096),
+      mediaType: 'none',
+    })
+  }
+  return out
 }
 
 function compileTrigger(raw, tagByKey, stageByKey, flowName) {
@@ -75,15 +100,19 @@ function compileActions(actions, tagByKey, stageByKey, flowName) {
 
 /**
  * @param {object} pack
- * @param {{ tags: any[], stages: any[], flows: any[] }} store — mutável
+ * @param {{ tags: any[], stages: any[], flows: any[], quickReplies?: any[] }} store — mutável
  */
 export function importCrmPackLocal(pack, store) {
-  if (!pack || pack.kind !== 'vesto_crm_pack' || Number(pack.version) !== 1) {
-    throw new Error('Pack inválido: use kind "vesto_crm_pack" e version 1.')
+  if (!pack || pack.kind !== 'vesto_crm_pack' || ![1, 2].includes(Number(pack.version))) {
+    throw new Error('Pack inválido: use kind "vesto_crm_pack" e version 1 ou 2.')
   }
   if (!Array.isArray(pack.tags) || !Array.isArray(pack.stages) || !Array.isArray(pack.flows)) {
     throw new Error('Pack inválido: tags, stages e flows devem ser arrays.')
   }
+  if (pack.quickReplies != null && !Array.isArray(pack.quickReplies)) {
+    throw new Error('Pack inválido: quickReplies deve ser array quando informado.')
+  }
+  if (!Array.isArray(store.quickReplies)) store.quickReplies = []
 
   const summary = {
     packName: String(pack.name || 'Pack CRM').trim() || 'Pack CRM',
@@ -92,6 +121,9 @@ export function importCrmPackLocal(pack, store) {
     stagesCreated: 0,
     stagesReused: 0,
     flowsCreated: 0,
+    flowsReused: 0,
+    quickRepliesCreated: 0,
+    quickRepliesReused: 0,
   }
 
   const tagByKey = new Map()
@@ -122,8 +154,15 @@ export function importCrmPackLocal(pack, store) {
     const key = String(row.key || slugKey(name, `stage_${i + 1}`)).toLowerCase()
     const existing = store.stages.find((s) => s.name.toLowerCase() === name.toLowerCase())
     let stage = existing
-    if (stage) summary.stagesReused += 1
-    else {
+    if (stage) {
+      summary.stagesReused += 1
+      if (row.isDefault) {
+        store.stages.forEach((s) => {
+          s.isDefault = s.id === stage.id
+        })
+        stage.isDefault = true
+      }
+    } else {
       stage = {
         id: `stage-${Date.now()}-${i}`,
         name,
@@ -131,6 +170,7 @@ export function importCrmPackLocal(pack, store) {
         sortOrder: store.stages.length,
         isDefault: Boolean(row.isDefault),
       }
+      if (stage.isDefault) store.stages.forEach((s) => { s.isDefault = false })
       store.stages.push(stage)
       summary.stagesCreated += 1
     }
@@ -150,6 +190,12 @@ export function importCrmPackLocal(pack, store) {
     const row = pack.flows[i] || {}
     const name = String(row.name || '').trim()
     if (!name) throw new Error(`flows[${i}]: name obrigatório.`)
+    const existing = store.flows.find((f) => f.name.toLowerCase() === name.toLowerCase())
+    if (existing) {
+      summary.flowsReused += 1
+      flowsOut.push({ ...existing, reused: true })
+      continue
+    }
     const trigger = compileTrigger(row.trigger, tagByKey, stageByKey, name)
     const actions = compileActions(row.actions, tagByKey, stageByKey, name)
     const flow = {
@@ -162,11 +208,52 @@ export function importCrmPackLocal(pack, store) {
       cooldownPerContactHours: Math.min(720, Math.max(1, Number(row.cooldownPerContactHours) || 24)),
       quietHours: null,
       createdAt: new Date().toISOString(),
+      reused: false,
     }
     store.flows.push(flow)
     summary.flowsCreated += 1
     flowsOut.push(flow)
   }
 
-  return { summary, tags: tagsOut, stages: stagesOut, flows: flowsOut }
+  const quickRepliesOut = []
+  const quickReplyDefs = normalizeQuickReplyDefs(pack.quickReplies)
+  for (let i = 0; i < quickReplyDefs.length; i += 1) {
+    const def = quickReplyDefs[i]
+    const existing = store.quickReplies.find((q) => q.shortcut.toLowerCase() === def.shortcut)
+    let qr = existing
+    if (qr) {
+      Object.assign(qr, { title: def.title, body: def.body, mediaType: def.mediaType })
+      summary.quickRepliesReused += 1
+    } else {
+      qr = {
+        id: `qr-${Date.now()}-${i}`,
+        shortcut: def.shortcut,
+        title: def.title,
+        body: def.body,
+        mediaType: def.mediaType,
+        hasMedia: false,
+      }
+      store.quickReplies.push(qr)
+      summary.quickRepliesCreated += 1
+    }
+    quickRepliesOut.push({
+      id: qr.id,
+      shortcut: qr.shortcut,
+      title: qr.title || '',
+      body: qr.body,
+      reused: Boolean(existing),
+    })
+  }
+
+  return { summary, tags: tagsOut, stages: stagesOut, flows: flowsOut, quickReplies: quickRepliesOut }
+}
+
+export const GENERIC_STAGE_NAMES = ['novo', 'em atendimento', 'negociando', 'fechado']
+
+export function isGenericDefaultSetup(stages, flowCount) {
+  if (flowCount > 0) return false
+  if (!stages?.length) return true
+  if (stages.length !== 4) return false
+  const names = stages.map((s) => String(s.name || '').trim().toLowerCase())
+  return GENERIC_STAGE_NAMES.every((n) => names.includes(n)) && names.length === 4
 }

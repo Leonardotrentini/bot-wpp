@@ -1,14 +1,32 @@
-import { useEffect, useRef, useState } from 'react'
-import { Camera, Shield } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Camera, Copy, Shield, Trash2, UserPlus, Users } from 'lucide-react'
+import { SettingsOrgMaterials } from '../../components/dashboard/SettingsOrgMaterials.jsx'
 import { Card } from '../../components/common/Card.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
+import { ConfirmModal } from '../../components/common/Modal.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { updateProfile } from '../../services/api.js'
+import { fetchOrgMembers, inviteOrgMember, removeOrgMember, updateProfile } from '../../services/api.js'
 import { AVATAR_MAX_INPUT_BYTES, resizeAvatarFile } from '../../lib/avatarImage.js'
+
+const ROLE_LABELS = {
+  OWNER: 'Dono',
+  SELLER: 'Vendedor',
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role
+}
+
+function whatsappStatusLabel(member) {
+  const status = member?.whatsapp?.status
+  if (status === 'connected') return { text: 'WhatsApp conectado', variant: 'success' }
+  if (status === 'disconnected') return { text: 'WhatsApp desconectado', variant: 'muted' }
+  return null
+}
 
 function emptyProfileForm(user) {
   return {
@@ -21,7 +39,7 @@ function emptyProfileForm(user) {
 
 export function Settings() {
   const toast = useToast()
-  const { user, setCurrentUser } = useAuth()
+  const { user, setCurrentUser, isOrgOwner } = useAuth()
   const photoInputRef = useRef(null)
   const [profile, setProfile] = useState(() => emptyProfileForm(user))
   const [avatarTouched, setAvatarTouched] = useState(false)
@@ -29,6 +47,38 @@ export function Settings() {
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
+  const [teamLoading, setTeamLoading] = useState(false)
+  const [members, setMembers] = useState([])
+  const [pendingInvites, setPendingInvites] = useState([])
+  const [inviteForm, setInviteForm] = useState({ name: '', email: '' })
+  const [inviting, setInviting] = useState(false)
+  const [removeTarget, setRemoveTarget] = useState(null)
+  const [removing, setRemoving] = useState(false)
+  const [copiedInviteId, setCopiedInviteId] = useState(null)
+
+  const loadTeam = useCallback(async () => {
+    if (!isOrgOwner) {
+      setMembers([])
+      setPendingInvites([])
+      return
+    }
+    setTeamLoading(true)
+    try {
+      const data = await fetchOrgMembers()
+      setMembers(data?.members || [])
+      setPendingInvites(data?.pendingInvites || [])
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Não foi possível carregar a equipe.')
+      setMembers([])
+      setPendingInvites([])
+    } finally {
+      setTeamLoading(false)
+    }
+  }, [isOrgOwner, toast])
+
+  useEffect(() => {
+    loadTeam()
+  }, [loadTeam])
 
   useEffect(() => {
     setProfile(emptyProfileForm(user))
@@ -130,6 +180,63 @@ export function Settings() {
     }
   }
 
+  const sendInvite = async () => {
+    const name = inviteForm.name.trim()
+    const email = inviteForm.email.trim().toLowerCase()
+    if (name.length < 2) return toast.error('Nome deve ter pelo menos 2 caracteres.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return toast.error('Informe um e-mail válido.')
+
+    try {
+      setInviting(true)
+      const data = await inviteOrgMember({ name, email })
+      const inviteUrl = data?.invite?.inviteUrl
+      setInviteForm({ name: '', email: '' })
+      await loadTeam()
+      if (inviteUrl) {
+        toast.success(`Convite enviado! Link: ${inviteUrl}`)
+      } else {
+        toast.success('Convite criado com sucesso.')
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Não foi possível enviar o convite.')
+    } finally {
+      setInviting(false)
+    }
+  }
+
+  const copyInviteLink = async (invite) => {
+    if (!invite?.inviteUrl) {
+      toast.error('Link do convite indisponível.')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(invite.inviteUrl)
+      setCopiedInviteId(invite.id)
+      toast.success('Link copiado para a área de transferência.')
+      setTimeout(() => setCopiedInviteId(null), 2000)
+    } catch {
+      toast.error('Não foi possível copiar o link.')
+    }
+  }
+
+  const confirmRemoveMember = async () => {
+    if (!removeTarget) return
+    try {
+      setRemoving(true)
+      await removeOrgMember(removeTarget.userId)
+      toast.success(`${removeTarget.name} foi removido da equipe.`)
+      setRemoveTarget(null)
+      await loadTeam()
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Não foi possível remover o vendedor.')
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  const sellers = members.filter((member) => member.role === 'SELLER')
+  const teamEmpty = !teamLoading && sellers.length === 0 && pendingInvites.length === 0
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
@@ -221,6 +328,156 @@ export function Settings() {
           {savingPassword ? 'Alterando…' : 'Alterar senha'}
         </Button>
       </Card>
+
+      {isOrgOwner && <SettingsOrgMaterials />}
+
+      {isOrgOwner && (
+        <Card className="space-y-5">
+          <div className="flex items-center gap-2">
+            <Users className="h-5 w-5 text-accent-400" />
+            <div>
+              <h3 className="font-semibold text-stone-50">Equipe</h3>
+              <p className="text-xs text-stone-500">Convide vendedores e gerencie quem acessa a conta da empresa.</p>
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-brand-800 bg-brand-950/30 p-4">
+            <div className="flex items-center gap-2">
+              <UserPlus className="h-4 w-4 text-accent-400" />
+              <h4 className="text-sm font-medium text-stone-200">Convidar vendedor</h4>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input
+                label="Nome"
+                value={inviteForm.name}
+                onChange={(e) => setInviteForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Nome do vendedor"
+              />
+              <Input
+                label="E-mail"
+                type="email"
+                value={inviteForm.email}
+                onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))}
+                placeholder="email@empresa.com.br"
+              />
+            </div>
+            <Button
+              onClick={sendInvite}
+              disabled={inviting || !inviteForm.name.trim() || !inviteForm.email.trim()}
+            >
+              {inviting ? 'Enviando convite…' : 'Enviar convite'}
+            </Button>
+          </div>
+
+          <div className="space-y-3">
+            <h4 className="text-sm font-medium text-stone-200">Membros da equipe</h4>
+
+            {teamLoading ? (
+              <p className="py-6 text-center text-sm text-stone-500">Carregando equipe…</p>
+            ) : (
+              <div className="space-y-3">
+                {members.length > 0 ? (
+                  <div className="space-y-2">
+                    {members.map((member) => {
+                      const wa = whatsappStatusLabel(member)
+                      const canRemove = member.role === 'SELLER' && member.userId !== user?.id
+                      return (
+                        <div
+                          key={member.userId}
+                          className="flex flex-col gap-3 rounded-xl border border-brand-800 bg-brand-950/40 p-3 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <UserAvatar name={member.name} size="md" />
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-stone-100">{member.name}</p>
+                              <p className="truncate text-xs text-stone-500">{member.email}</p>
+                              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                                <Badge variant={member.role === 'OWNER' ? 'warning' : 'default'}>
+                                  {roleLabel(member.role)}
+                                </Badge>
+                                {wa && <Badge variant={wa.variant}>{wa.text}</Badge>}
+                              </div>
+                            </div>
+                          </div>
+                          {canRemove && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="self-start text-red-400 hover:text-red-300 sm:self-center"
+                              onClick={() => setRemoveTarget({ userId: member.userId, name: member.name })}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Remover
+                            </Button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="py-4 text-center text-sm text-stone-500">Nenhum membro encontrado.</p>
+                )}
+
+                {teamEmpty && (
+                  <div className="rounded-xl border border-dashed border-brand-700/80 bg-brand-950/20 px-4 py-6 text-center">
+                    <Users className="mx-auto h-7 w-7 text-stone-600" />
+                    <p className="mt-2 text-sm font-medium text-stone-300">Nenhum vendedor na equipe ainda</p>
+                    <p className="mt-1 text-xs text-stone-500">
+                      Convide alguém pelo formulário acima para compartilhar o acesso ao painel.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {pendingInvites.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="text-sm font-medium text-stone-200">Convites pendentes</h4>
+              <div className="space-y-2">
+                {pendingInvites.map((invite) => (
+                  <div
+                    key={invite.id}
+                    className="flex flex-col gap-3 rounded-xl border border-brand-800 bg-brand-950/40 p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-stone-100">{invite.name}</p>
+                      <p className="truncate text-xs text-stone-500">{invite.email}</p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <Badge variant="muted">Aguardando aceite</Badge>
+                        <Badge variant="default">{roleLabel(invite.role)}</Badge>
+                      </div>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="self-start sm:self-center"
+                      onClick={() => copyInviteLink(invite)}
+                      disabled={!invite.inviteUrl}
+                    >
+                      <Copy className="h-4 w-4" />
+                      {copiedInviteId === invite.id ? 'Copiado' : 'Copiar link'}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <ConfirmModal
+        isOpen={Boolean(removeTarget)}
+        onClose={() => !removing && setRemoveTarget(null)}
+        onConfirm={confirmRemoveMember}
+        title="Remover vendedor"
+        message={
+          removeTarget
+            ? `Tem certeza que deseja remover ${removeTarget.name} da equipe? O acesso ao painel será revogado.`
+            : ''
+        }
+        loading={removing}
+      />
     </div>
   )
 }

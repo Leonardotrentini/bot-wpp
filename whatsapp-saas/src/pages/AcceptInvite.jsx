@@ -34,8 +34,11 @@ export function AcceptInvite() {
     setLoading(true)
     try {
       const data = await acceptOrgInvite({ token, password })
-      login(data.user)
       localStorage.setItem('vg_auth_token', data.token)
+      login(data.user)
+      // Evita respingo de conversas/socket da sessão anterior (ex.: dono no mesmo browser).
+      const { resetRealtimeAndCaches } = await import('../lib/sessionIsolation.js')
+      resetRealtimeAndCaches()
       navigate('/dashboard/connect', { replace: true })
     } catch (err) {
       setError(err?.response?.data?.message || 'Não foi possível aceitar o convite.')

@@ -49,16 +49,49 @@ function validatePackShape(pack) {
   if (pack.kind !== "vesto_crm_pack") {
     return 'Pack inválido: "kind" deve ser "vesto_crm_pack".'
   }
-  if (Number(pack.version) !== 1) {
-    return 'Pack inválido: "version" deve ser 1.'
+  if (![1, 2].includes(Number(pack.version))) {
+    return 'Pack inválido: "version" deve ser 1 ou 2.'
   }
   if (!Array.isArray(pack.tags)) return 'Pack inválido: "tags" deve ser array.'
   if (!Array.isArray(pack.stages)) return 'Pack inválido: "stages" deve ser array.'
   if (!Array.isArray(pack.flows)) return 'Pack inválido: "flows" deve ser array.'
+  if (pack.quickReplies != null && !Array.isArray(pack.quickReplies)) {
+    return 'Pack inválido: "quickReplies" deve ser array quando informado.'
+  }
   if (pack.tags.length > 50) return "Máximo de 50 tags por pack."
   if (pack.stages.length > 30) return "Máximo de 30 estágios por pack."
   if (pack.flows.length > 30) return "Máximo de 30 fluxos por pack."
+  if (Array.isArray(pack.quickReplies) && pack.quickReplies.length > 30) {
+    return "Máximo de 30 atalhos por pack."
+  }
   return null
+}
+
+const SHORTCUT_RE = /^[a-z0-9_-]{1,30}$/i
+
+function normalizeQuickReplyDefs(rawQuickReplies) {
+  if (!rawQuickReplies) return []
+  const out = []
+  const used = new Set()
+  for (let i = 0; i < rawQuickReplies.length; i += 1) {
+    const row = rawQuickReplies[i] || {}
+    const shortcut = String(row.shortcut || "").trim().toLowerCase()
+    if (!shortcut) throw new Error(`quickReplies[${i}]: informe "shortcut".`)
+    if (!SHORTCUT_RE.test(shortcut)) {
+      throw new Error(`quickReplies[${i}]: shortcut inválido (${shortcut}).`)
+    }
+    if (used.has(shortcut)) throw new Error(`quickReplies[${i}]: shortcut duplicado "${shortcut}".`)
+    used.add(shortcut)
+    const body = String(row.body || "").trim()
+    if (!body) throw new Error(`quickReplies[${i}]: informe "body".`)
+    out.push({
+      shortcut,
+      title: String(row.title || "").trim().slice(0, 80),
+      body: body.slice(0, 4096),
+      mediaType: "none",
+    })
+  }
+  return out
 }
 
 function normalizeTagDefs(rawTags) {
@@ -259,6 +292,9 @@ async function importCrmPack(prisma, userId, pack) {
     stagesCreated: 0,
     stagesReused: 0,
     flowsCreated: 0,
+    flowsReused: 0,
+    quickRepliesCreated: 0,
+    quickRepliesReused: 0,
   }
 
   const existingTags = await prisma.crmTag.findMany({ where: { userId } })
@@ -334,8 +370,25 @@ async function importCrmPack(prisma, userId, pack) {
     throw err
   }
 
+  const existingFlows = await prisma.crmFlow.findMany({ where: { userId } })
+  const flowByName = new Map(existingFlows.map((f) => [f.name.toLowerCase(), f]))
+
   const flowsOut = []
   for (const def of flowDefs) {
+    const before = flowByName.get(def.name.toLowerCase())
+    if (before) {
+      summary.flowsReused += 1
+      flowsOut.push({
+        id: before.id,
+        name: before.name,
+        enabled: before.enabled,
+        trigger: before.trigger,
+        actions: before.actions,
+        cooldownPerContactHours: before.cooldownPerContactHours,
+        reused: true,
+      })
+      continue
+    }
     const flow = await prisma.crmFlow.create({
       data: {
         userId,
@@ -349,6 +402,7 @@ async function importCrmPack(prisma, userId, pack) {
       },
     })
     summary.flowsCreated += 1
+    flowByName.set(def.name.toLowerCase(), flow)
     flowsOut.push({
       id: flow.id,
       name: flow.name,
@@ -356,7 +410,47 @@ async function importCrmPack(prisma, userId, pack) {
       trigger: flow.trigger,
       actions: flow.actions,
       cooldownPerContactHours: flow.cooldownPerContactHours,
+      reused: false,
     })
+  }
+
+  let quickReplyDefs = []
+  try {
+    quickReplyDefs = normalizeQuickReplyDefs(pack.quickReplies)
+  } catch (err) {
+    err.code = "VALIDATION_ERROR"
+    throw err
+  }
+
+  const quickRepliesOut = []
+  if (quickReplyDefs.length) {
+    const existingQuickReplies = await prisma.crmQuickReply.findMany({ where: { userId } })
+    const qrByShortcut = new Map(existingQuickReplies.map((q) => [q.shortcut.toLowerCase(), q]))
+
+    for (const def of quickReplyDefs) {
+      const before = qrByShortcut.get(def.shortcut.toLowerCase())
+      let row = before
+      if (row) {
+        row = await prisma.crmQuickReply.update({
+          where: { id: row.id },
+          data: { title: def.title, body: def.body, mediaType: def.mediaType },
+        })
+        summary.quickRepliesReused += 1
+      } else {
+        row = await prisma.crmQuickReply.create({
+          data: { userId, shortcut: def.shortcut, title: def.title, body: def.body, mediaType: def.mediaType },
+        })
+        qrByShortcut.set(def.shortcut, row)
+        summary.quickRepliesCreated += 1
+      }
+      quickRepliesOut.push({
+        id: row.id,
+        shortcut: row.shortcut,
+        title: row.title || "",
+        body: row.body,
+        reused: Boolean(before),
+      })
+    }
   }
 
   return {
@@ -371,6 +465,7 @@ async function importCrmPack(prisma, userId, pack) {
       reused,
     })),
     flows: flowsOut,
+    quickReplies: quickRepliesOut,
   }
 }
 
@@ -387,12 +482,15 @@ function previewCrmPack(pack) {
   const tagByKey = new Map(tagDefs.map((t) => [t.key, `virtual:${t.key}`]))
   const stageByKey = new Map(stageDefs.map((s) => [s.key, `virtual:${s.key}`]))
   const flowDefs = compileFlowDefs(pack.flows, tagByKey, stageByKey)
+  const quickReplyDefs = normalizeQuickReplyDefs(pack.quickReplies)
   return {
     packName: String(pack.name || "Pack CRM").trim() || "Pack CRM",
     tags: tagDefs.length,
     stages: stageDefs.length,
     flows: flowDefs.length,
+    quickReplies: quickReplyDefs.length,
     flowNames: flowDefs.map((f) => f.name),
+    quickReplyShortcuts: quickReplyDefs.map((q) => q.shortcut),
   }
 }
 
@@ -402,5 +500,6 @@ module.exports = {
   validatePackShape,
   normalizeTagDefs,
   normalizeStageDefs,
+  normalizeQuickReplyDefs,
   compileFlowDefs,
 }

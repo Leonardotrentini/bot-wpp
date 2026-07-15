@@ -72,8 +72,8 @@ async function main() {
     }
   }
 
-  const { ensureDefaultTags } = require("../src/lib/crmDefaults")
-  await ensureDefaultTags(admin.id)
+  const { ensureAtacadoPack } = require("../src/lib/crmDefaults")
+  await ensureAtacadoPack(admin.id)
 
   console.log("[seed] Planos criados/atualizados: free, pro")
   if (process.env.NODE_ENV === "production" && !process.env.ADMIN_SEED_PASSWORD) {

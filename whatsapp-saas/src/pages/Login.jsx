@@ -5,6 +5,7 @@ import { Input } from '../components/common/Input.jsx'
 import { BrandLogo } from '../components/common/BrandLogo.jsx'
 import { login } from '../services/api.js'
 import { useAuth } from '../contexts/AuthContext.jsx'
+import { getDashboardHomePath } from '../lib/dashboardHome.js'
 import { useToast } from '../contexts/ToastContext.jsx'
 
 export function Login() {
@@ -33,7 +34,7 @@ export function Login() {
       const { data } = await login(email, password)
       setUser(data.user)
       toast.success('Login realizado com sucesso!')
-      navigate('/dashboard')
+      navigate(getDashboardHomePath(data.user))
     } catch (err) {
       toast.error(err.message || 'Falha no login')
     } finally {

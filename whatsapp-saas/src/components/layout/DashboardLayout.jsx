@@ -1,6 +1,7 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { DashboardSidebar } from './DashboardSidebar.jsx'
 import { DashboardHeader } from './DashboardHeader.jsx'
+import { SellerRouteGuard } from './SellerRouteGuard.jsx'
 import { ReminderAlertsProvider } from '../../contexts/ReminderAlertsContext.jsx'
 import { MetaPixelLoader } from '../integrations/MetaPixelLoader.jsx'
 import { useMemo } from 'react'
@@ -27,7 +28,7 @@ const titles = {
 export function DashboardLayout() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const { width } = useSidebar()
+  const { width, isDesktop } = useSidebar()
   const { isImpersonating, impersonation, exitImpersonation } = useAuth()
   const demoMode = !resolveUseRealApi()
 
@@ -44,7 +45,7 @@ export function DashboardLayout() {
       <MetaPixelLoader />
       <div className="min-h-screen bg-brand-950">
         <DashboardSidebar />
-        <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
+        <div className="transition-[margin] duration-300" style={{ marginLeft: isDesktop ? width : 0 }}>
         {demoMode && (
           <div className="sticky top-0 z-40 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
             <p className="text-sm text-amber-100">
@@ -72,7 +73,9 @@ export function DashboardLayout() {
         )}
         <DashboardHeader title={title} />
         <main className="p-4 lg:p-6">
-          <Outlet />
+          <SellerRouteGuard>
+            <Outlet />
+          </SellerRouteGuard>
         </main>
         </div>
       </div>
