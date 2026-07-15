@@ -940,6 +940,15 @@ let mockCrmTags = [
   { id: 'tag-quente', name: 'Lead quente', color: '#ef4444' },
 ]
 
+let mockCrmStages = [
+  { id: 'stage-novo', name: 'Novo', color: '#38bdf8', sortOrder: 0, isDefault: true },
+  { id: 'stage-atend', name: 'Em atendimento', color: '#fbbf24', sortOrder: 1, isDefault: false },
+  { id: 'stage-neg', name: 'Negociando', color: '#a78bfa', sortOrder: 2, isDefault: false },
+  { id: 'stage-fech', name: 'Fechado', color: '#34d399', sortOrder: 3, isDefault: false },
+]
+
+let mockCrmFlows = []
+
 export async function getCrmTags() {
   if (resolveUseRealApi()) return apiClient.get('/crm/tags')
   return mockResponse({ tags: mockCrmTags })
@@ -954,36 +963,50 @@ export async function createCrmTag(payload) {
 
 export async function updateCrmTag(id, payload) {
   if (resolveUseRealApi()) return apiClient.patch(`/crm/tags/${encodeURIComponent(id)}`, payload)
+  mockCrmTags = mockCrmTags.map((t) => (t.id === id ? { ...t, ...payload } : t))
   return mockResponse({ tag: { id, ...payload } })
 }
 
 export async function deleteCrmTag(id) {
   if (resolveUseRealApi()) return apiClient.delete(`/crm/tags/${encodeURIComponent(id)}`)
+  mockCrmTags = mockCrmTags.filter((t) => t.id !== id)
   return mockResponse({ ok: true })
 }
 
 export async function getCrmStages() {
   if (resolveUseRealApi()) return apiClient.get('/crm/stages')
-  return mockResponse({ stages: [] })
+  return mockResponse({ stages: mockCrmStages })
 }
 
 export async function createCrmStage(payload) {
   if (resolveUseRealApi()) return apiClient.post('/crm/stages', payload)
-  return mockResponse({ stage: { id: `stage-${Date.now()}`, ...payload } })
+  const stage = {
+    id: `stage-${Date.now()}`,
+    color: '#64748b',
+    sortOrder: mockCrmStages.length,
+    isDefault: false,
+    ...payload,
+  }
+  mockCrmStages = [...mockCrmStages, stage]
+  return mockResponse({ stage })
 }
 
 export async function updateCrmStage(id, payload) {
   if (resolveUseRealApi()) return apiClient.patch(`/crm/stages/${encodeURIComponent(id)}`, payload)
+  mockCrmStages = mockCrmStages.map((s) => (s.id === id ? { ...s, ...payload } : s))
   return mockResponse({ stage: { id, ...payload } })
 }
 
 export async function reorderCrmStages(order) {
   if (resolveUseRealApi()) return apiClient.post('/crm/stages/reorder', { order })
-  return mockResponse({ stages: [] })
+  const byId = new Map(mockCrmStages.map((s) => [s.id, s]))
+  mockCrmStages = order.map((id, i) => ({ ...byId.get(id), sortOrder: i })).filter(Boolean)
+  return mockResponse({ stages: mockCrmStages })
 }
 
 export async function deleteCrmStage(id) {
   if (resolveUseRealApi()) return apiClient.delete(`/crm/stages/${encodeURIComponent(id)}`)
+  mockCrmStages = mockCrmStages.filter((s) => s.id !== id)
   return mockResponse({ ok: true })
 }
 
@@ -1014,27 +1037,49 @@ export async function getCrmQuickReplyContent(id) {
 
 export async function getCrmFlows() {
   if (resolveUseRealApi()) return apiClient.get('/crm/flows')
-  return mockResponse({ flows: [] })
+  return mockResponse({ flows: mockCrmFlows })
 }
 
 export async function createCrmFlow(payload) {
   if (resolveUseRealApi()) return apiClient.post('/crm/flows', payload, { timeout: 120000 })
-  return mockResponse({ flow: { id: `flow-${Date.now()}`, ...payload } })
+  const flow = { id: `flow-${Date.now()}`, createdAt: new Date().toISOString(), ...payload }
+  mockCrmFlows = [flow, ...mockCrmFlows]
+  return mockResponse({ flow })
 }
 
 export async function updateCrmFlow(id, payload) {
   if (resolveUseRealApi()) return apiClient.put(`/crm/flows/${encodeURIComponent(id)}`, payload, { timeout: 120000 })
+  mockCrmFlows = mockCrmFlows.map((f) => (f.id === id ? { ...f, ...payload } : f))
   return mockResponse({ flow: { id, ...payload } })
 }
 
 export async function toggleCrmFlow(id, enabled) {
   if (resolveUseRealApi()) return apiClient.patch(`/crm/flows/${encodeURIComponent(id)}`, { enabled })
-  return mockResponse({ flow: { id, enabled } })
+  mockCrmFlows = mockCrmFlows.map((f) => (f.id === id ? { ...f, enabled } : f))
+  return mockResponse({ flow: mockCrmFlows.find((f) => f.id === id) || { id, enabled } })
 }
 
 export async function deleteCrmFlow(id) {
   if (resolveUseRealApi()) return apiClient.delete(`/crm/flows/${encodeURIComponent(id)}`)
+  mockCrmFlows = mockCrmFlows.filter((f) => f.id !== id)
   return mockResponse({ ok: true })
+}
+
+export async function importCrmPack(pack) {
+  if (resolveUseRealApi()) {
+    return apiClient.post('/crm/packs/import', pack, { timeout: 120000 })
+  }
+  const { importCrmPackLocal } = await import('../lib/crmPackImportLocal.js')
+  try {
+    const store = { tags: mockCrmTags, stages: mockCrmStages, flows: mockCrmFlows }
+    const result = importCrmPackLocal(pack, store)
+    mockCrmTags = store.tags
+    mockCrmStages = store.stages
+    mockCrmFlows = store.flows
+    return mockResponse(result)
+  } catch (err) {
+    throw new Error(err?.message || 'Pack inválido.')
+  }
 }
 
 export async function getCrmFlowRuns(id) {

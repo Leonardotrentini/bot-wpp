@@ -1,0 +1,74 @@
+BRIEFING — Pack JSON Vesto CRM (importar na ferramenta)
+=======================================================
+
+Objetivo
+--------
+Gerar UM arquivo JSON (.json, UTF-8) no formato vesto_crm_pack version 1.
+A Vesto importa esse arquivo e cria/reusa tags, estágios do Kanban e fluxos.
+
+Regras obrigatórias
+-------------------
+1) kind = "vesto_crm_pack"
+2) version = 1
+3) NUNCA use IDs internos (cuid). Só key + name.
+4) Nos fluxos, referencie tags/estágios por tagKey / stageKey / tagKeys.
+5) Toda key usada em fluxos DEVE existir em tags[] ou stages[].
+6) Fluxos com "enabled": false (recomendado).
+7) Mensagens só texto (type send_message + body). Sem mídia/base64 na v1.
+8) Máx.: 50 tags, 30 estágios, 30 fluxos, 10 ações por fluxo.
+
+Estrutura raiz
+--------------
+{
+  "version": 1,
+  "kind": "vesto_crm_pack",
+  "name": "Nome do pack",
+  "description": "opcional",
+  "tags": [ { "key": "snake_case", "name": "Nome UI", "color": "#RRGGBB" } ],
+  "stages": [ { "key": "snake_case", "name": "Nome Kanban", "color": "#RRGGBB", "isDefault": false } ],
+  "flows": [ { "name": "...", "enabled": false, "cooldownPerContactHours": 24, "trigger": {}, "actions": [] } ]
+}
+
+key: a-z, 0-9, underscore, 1–40 chars.
+
+Gatilhos (trigger.type)
+-----------------------
+- new_conversation
+- keyword → keywords: string[], matchMode?: "contains"|"exact"
+- no_reply → delayUnit: "hours"|"minutes", delayValue: number
+- stage_change → stageKey?: string (omitir = qualquer estágio)
+- tag_added → tagKey: string
+- contact_reply → tagKeys: string[] (mín. 1, lógica OR)
+
+Ações (actions[].type)
+----------------------
+- send_message → body: string
+- add_tag → tagKey: string
+- remove_tag → tagKey: string
+- move_stage → stageKey: string
+- set_status → value: "open"|"pending"|"resolved"|"archived"
+- assign_ai → evitar na v1 se não houver agente
+
+Import na conta
+---------------
+- Tag/estágio: se name já existir → reutiliza; senão cria.
+- Fluxo: sempre cria novo.
+- enabled false por padrão no pack.
+
+Exemplo mínimo de fluxo de reengajamento
+----------------------------------------
+trigger: contact_reply + tagKeys ["sem_resposta","fup_1"]
+actions:
+  1 remove_tag sem_resposta
+  2 remove_tag fup_1
+  3 add_tag reengajou
+  4 move_stage negociando
+
+Prompt para o Claude
+--------------------
+Gere APENAS um JSON válido (sem markdown, sem comentários) com kind "vesto_crm_pack"
+e version 1, conforme este briefing. Inclua tags, stages e flows descritos no
+roteiro de atendimento abaixo. Use só keys (nunca IDs). Fluxos enabled:false.
+Mensagens somente texto.
+
+[COLE AQUI O ROTEIRO DE ATENDIMENTO / FUP / TEXTOS / ESTÁGIOS]

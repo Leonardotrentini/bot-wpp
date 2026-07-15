@@ -36,6 +36,7 @@ const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw } = require("../lib/crmMedia")
 const { onStageChange, notifyTagAddedForContact, testFlowOnConversation } = require("../lib/crmFlows")
+const { importCrmPack } = require("../lib/crmPackImport")
 const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
@@ -1349,6 +1350,19 @@ function createCrmRouter({ io }) {
     if (!flow) return res.status(404).json({ error: "NOT_FOUND", message: "Fluxo não encontrado." })
     await prisma.crmFlow.delete({ where: { id: flow.id } })
     return res.json({ ok: true })
+  })
+
+  router.post("/packs/import", async (req, res) => {
+    try {
+      const result = await importCrmPack(prisma, req.user.sub, req.body)
+      return res.status(201).json(result)
+    } catch (err) {
+      if (err?.code === "VALIDATION_ERROR") {
+        return res.status(400).json({ error: "VALIDATION_ERROR", message: err.message || "Pack inválido." })
+      }
+      console.error("[crm] pack import:", err)
+      return res.status(500).json({ error: "IMPORT_FAILED", message: "Falha ao importar o pack." })
+    }
   })
 
   router.get("/flows/:id/runs", async (req, res) => {

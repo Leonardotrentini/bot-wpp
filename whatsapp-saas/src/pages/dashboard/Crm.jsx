@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import {
   Bot,
   CheckCheck,
+  ChevronLeft,
+  ChevronRight,
   Kanban,
   Loader2,
   MessageSquare,
@@ -13,6 +15,7 @@ import {
   Tag as TagIcon,
   Trash2,
   Unplug,
+  Upload,
   Zap,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
@@ -79,6 +82,7 @@ import {
   updateCrmFlow,
   toggleCrmFlow,
   deleteCrmFlow,
+  importCrmPack,
   getCrmAgents,
   createCrmAgent,
   updateCrmAgent,
@@ -123,7 +127,7 @@ function CrmSettingsToolBtn({ title, onClick, children }) {
   )
 }
 
-function CrmTabHeader({ tab, onChange, onOpenSettings, refreshing }) {
+function CrmTabHeader({ tab, onChange, onOpenSettings, refreshing, onImportPack, packImporting }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 pb-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -149,6 +153,16 @@ function CrmTabHeader({ tab, onChange, onOpenSettings, refreshing }) {
         ) : null}
       </div>
       <div className="flex items-center gap-1.5">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={packImporting}
+          onClick={onImportPack}
+          title="Importar pack JSON (tags, estágios e fluxos)"
+        >
+          {packImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+          Importar pack
+        </Button>
         <CrmSettingsToolBtn title="Tags" onClick={() => onOpenSettings('tags')}>
           <TagIcon className="h-4 w-4" />
         </CrmSettingsToolBtn>
@@ -278,7 +292,7 @@ function KanbanColumn({ stage, stageId, cards, dragId, overStage, columnProps, r
         </span>
       </div>
       <div
-        className={`min-h-0 flex-1 space-y-2 overflow-y-auto rounded-xl p-1.5 transition ${
+        className={`min-h-0 flex-1 space-y-2 overflow-y-auto vg-scrollbar rounded-xl p-1.5 transition ${
           overStage === stageId ? 'bg-accent-500/10 outline-dashed outline-1 outline-accent-500/40' : 'bg-brand-950/40'
         }`}
       >
@@ -449,6 +463,9 @@ function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
 function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags, onRefreshAvatar }) {
   const [dragId, setDragId] = useState(null)
   const [overStage, setOverStage] = useState(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+  const scrollRef = useRef(null)
 
   const byStage = useMemo(() => {
     const map = new Map()
@@ -460,6 +477,36 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags
     }
     return { map, unstaged }
   }, [stages, conversations])
+
+  const updateScrollHints = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const max = el.scrollWidth - el.clientWidth
+    setCanScrollLeft(el.scrollLeft > 4)
+    setCanScrollRight(max > 4 && el.scrollLeft < max - 4)
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    updateScrollHints()
+    const onScroll = () => updateScrollHints()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateScrollHints) : null
+    ro?.observe(el)
+    window.addEventListener('resize', updateScrollHints)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      ro?.disconnect()
+      window.removeEventListener('resize', updateScrollHints)
+    }
+  }, [updateScrollHints, stages, byStage.unstaged.length])
+
+  const scrollByColumns = (dir) => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollBy({ left: dir * Math.min(320, el.clientWidth * 0.7), behavior: 'smooth' })
+  }
 
   const renderCard = (c) => (
     <KanbanCard
@@ -496,30 +543,78 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags
   })
 
   return (
-    <div className="flex h-[calc(100vh-11rem)] min-h-[420px] gap-3 overflow-x-auto pb-2">
-      {byStage.unstaged.length > 0 && (
-        <KanbanColumn
-          stage={{ name: 'Sem estágio', color: '#64748b' }}
-          stageId="__none__"
-          cards={byStage.unstaged}
-          dragId={dragId}
-          overStage={overStage}
-          columnProps={columnProps}
-          renderCard={renderCard}
-        />
+    <div className="relative">
+      {(canScrollLeft || canScrollRight) && (
+        <div className="mb-2 flex items-center justify-end gap-2">
+          {canScrollRight && (
+            <span className="mr-auto text-xs text-stone-500">
+              Há mais estágios à direita →
+            </span>
+          )}
+          <button
+            type="button"
+            aria-label="Rolar Kanban para a esquerda"
+            disabled={!canScrollLeft}
+            onClick={() => scrollByColumns(-1)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-700 bg-brand-900 text-stone-300 transition hover:border-accent-500/50 hover:text-accent-300 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="Rolar Kanban para a direita"
+            disabled={!canScrollRight}
+            onClick={() => scrollByColumns(1)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-700 bg-brand-900 text-stone-300 transition hover:border-accent-500/50 hover:text-accent-300 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
       )}
-      {stages.map((stage) => (
-        <KanbanColumn
-          key={stage.id}
-          stage={stage}
-          stageId={stage.id}
-          cards={byStage.map.get(stage.id) || []}
-          dragId={dragId}
-          overStage={overStage}
-          columnProps={columnProps}
-          renderCard={renderCard}
-        />
-      ))}
+
+      <div className="relative">
+        {canScrollLeft && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-brand-950 via-brand-950/80 to-transparent"
+          />
+        )}
+        {canScrollRight && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-y-0 right-0 z-10 w-14 bg-gradient-to-l from-brand-950 via-brand-950/85 to-transparent"
+          />
+        )}
+
+        <div
+          ref={scrollRef}
+          className="flex h-[calc(100vh-13rem)] min-h-[420px] gap-3 overflow-x-scroll vg-scrollbar-board pb-1"
+        >
+          {byStage.unstaged.length > 0 && (
+            <KanbanColumn
+              stage={{ name: 'Sem estágio', color: '#64748b' }}
+              stageId="__none__"
+              cards={byStage.unstaged}
+              dragId={dragId}
+              overStage={overStage}
+              columnProps={columnProps}
+              renderCard={renderCard}
+            />
+          )}
+          {stages.map((stage) => (
+            <KanbanColumn
+              key={stage.id}
+              stage={stage}
+              stageId={stage.id}
+              cards={byStage.map.get(stage.id) || []}
+              dragId={dragId}
+              overStage={overStage}
+              columnProps={columnProps}
+              renderCard={renderCard}
+            />
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -1484,6 +1579,8 @@ export function Crm() {
   const [flowEditing, setFlowEditing] = useState(null)
   const [flowSaving, setFlowSaving] = useState(false)
   const [flowTestTarget, setFlowTestTarget] = useState(null)
+  const [packImporting, setPackImporting] = useState(false)
+  const packFileRef = useRef(null)
   const [agentModal, setAgentModal] = useState(false)
   const [agentEditing, setAgentEditing] = useState(null)
   const [agentSaving, setAgentSaving] = useState(false)
@@ -1558,6 +1655,48 @@ export function Crm() {
       setFlowsLoading(false)
     }
   }, [toast])
+
+  const reloadFlowsForce = useCallback(async () => {
+    flowsLoadedRef.current = false
+    await loadFlows()
+  }, [loadFlows])
+
+  const handleImportPackFile = useCallback(
+    async (file) => {
+      if (!file) return
+      setPackImporting(true)
+      try {
+        const text = await file.text()
+        let pack
+        try {
+          pack = JSON.parse(text)
+        } catch {
+          throw new Error('Arquivo JSON inválido.')
+        }
+        const { data } = await importCrmPack(pack)
+        const s = data.summary || {}
+        toast.success(
+          `Pack “${s.packName || 'CRM'}”: ${s.flowsCreated || 0} fluxo(s), ${s.tagsCreated || 0} tag(s) nova(s), ${s.stagesCreated || 0} estágio(s) novo(s).`,
+        )
+        // Atualiza listas locais
+        const [tagsRes, stagesRes] = await Promise.all([getCrmTags(), getCrmStages()])
+        setTags(tagsRes.data.tags || [])
+        setStages(stagesRes.data.stages || [])
+        setCrmBootstrapCache({
+          ...(getCrmBootstrapCache() || {}),
+          tags: tagsRes.data.tags || [],
+          stages: stagesRes.data.stages || [],
+        })
+        await reloadFlowsForce()
+      } catch (err) {
+        toast.error(err?.response?.data?.message || err?.message || 'Falha ao importar pack.')
+      } finally {
+        setPackImporting(false)
+        if (packFileRef.current) packFileRef.current.value = ''
+      }
+    },
+    [toast, reloadFlowsForce],
+  )
 
   const loadAgents = useCallback(async () => {
     if (agentsLoadedRef.current) return
@@ -1723,7 +1862,23 @@ export function Crm() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <CrmTabHeader tab={tab} onChange={setTab} onOpenSettings={setSettingsPanel} />
+        <input
+          ref={packFileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) void handleImportPackFile(file)
+          }}
+        />
+        <CrmTabHeader
+          tab={tab}
+          onChange={setTab}
+          onOpenSettings={setSettingsPanel}
+          onImportPack={() => packFileRef.current?.click()}
+          packImporting={packImporting}
+        />
         <div className="flex justify-center py-20">
           <Spinner />
         </div>
@@ -1733,7 +1888,24 @@ export function Crm() {
 
   return (
     <div className="space-y-4">
-      <CrmTabHeader tab={tab} onChange={setTab} onOpenSettings={setSettingsPanel} refreshing={refreshing} />
+      <input
+        ref={packFileRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) void handleImportPackFile(file)
+        }}
+      />
+      <CrmTabHeader
+        tab={tab}
+        onChange={setTab}
+        onOpenSettings={setSettingsPanel}
+        refreshing={refreshing}
+        onImportPack={() => packFileRef.current?.click()}
+        packImporting={packImporting}
+      />
 
       {tab === 'kanban' && (
         <>
@@ -1790,7 +1962,7 @@ export function Crm() {
 
       {tab === 'flows' && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-stone-400">
               Automações que reagem a eventos das conversas — sempre com cooldown e limites anti-spam.
             </p>

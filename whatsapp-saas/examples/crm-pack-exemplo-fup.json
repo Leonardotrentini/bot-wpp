@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "kind": "vesto_crm_pack",
+  "name": "Pack exemplo FUP + reengajamento",
+  "description": "Exemplo para testar Importar pack: tags FUP, estágio Negociando e fluxos de follow-up/reengajamento.",
+  "tags": [
+    { "key": "sem_resposta", "name": "Sem resposta", "color": "#f59e0b" },
+    { "key": "fup_1", "name": "FUP-1", "color": "#fbbf24" },
+    { "key": "reengajou", "name": "Reengajou", "color": "#34d399" }
+  ],
+  "stages": [
+    { "key": "novo", "name": "Novo", "color": "#38bdf8", "isDefault": true },
+    { "key": "negociando", "name": "Negociando", "color": "#a78bfa" },
+    { "key": "fechado", "name": "Fechado", "color": "#34d399" }
+  ],
+  "flows": [
+    {
+      "name": "FUP 24h — Sem resposta",
+      "enabled": false,
+      "cooldownPerContactHours": 24,
+      "trigger": {
+        "type": "no_reply",
+        "delayUnit": "hours",
+        "delayValue": 24
+      },
+      "actions": [
+        { "type": "add_tag", "tagKey": "sem_resposta" },
+        { "type": "add_tag", "tagKey": "fup_1" },
+        {
+          "type": "send_message",
+          "body": "Oi! Notei que ainda não tivemos retorno. Posso te ajudar com alguma dúvida?"
+        }
+      ]
+    },
+    {
+      "name": "Respondeu FUP → Negociando",
+      "enabled": false,
+      "cooldownPerContactHours": 24,
+      "trigger": {
+        "type": "contact_reply",
+        "tagKeys": ["sem_resposta", "fup_1"]
+      },
+      "actions": [
+        { "type": "remove_tag", "tagKey": "sem_resposta" },
+        { "type": "remove_tag", "tagKey": "fup_1" },
+        { "type": "add_tag", "tagKey": "reengajou" },
+        { "type": "move_stage", "stageKey": "negociando" }
+      ]
+    }
+  ]
+}

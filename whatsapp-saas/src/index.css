@@ -142,20 +142,57 @@
 
   .vg-scrollbar {
     scrollbar-width: thin;
-    scrollbar-color: rgb(45 107 79 / 0.45) transparent;
+    scrollbar-color: rgb(61 143 106 / 0.65) rgb(15 30 22 / 0.45);
   }
   .vg-scrollbar::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 8px;
+    height: 8px;
   }
   .vg-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .vg-scrollbar::-webkit-scrollbar-thumb {
-    background: rgb(45 107 79 / 0.45);
+    background: rgb(15 30 22 / 0.4);
     border-radius: 999px;
   }
+  .vg-scrollbar::-webkit-scrollbar-thumb {
+    background: rgb(61 143 106 / 0.6);
+    border-radius: 999px;
+    border: 2px solid rgb(15 30 22 / 0.4);
+    background-clip: padding-box;
+  }
   .vg-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgb(61 143 106 / 0.55);
+    background: rgb(90 170 130 / 0.85);
+    border: 2px solid rgb(15 30 22 / 0.4);
+    background-clip: padding-box;
+  }
+
+  /* Kanban / boards: barra sempre reservada + contraste alto (evita overlay invisível no Win) */
+  .vg-scrollbar-board {
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: rgb(201 162 39 / 0.9) rgb(29 72 54 / 0.95);
+  }
+  .vg-scrollbar-board::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+    background: rgb(29 72 54 / 0.95);
+  }
+  .vg-scrollbar-board::-webkit-scrollbar-track {
+    background: rgb(21 53 40 / 0.98);
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 1px rgb(61 143 106 / 0.25);
+  }
+  .vg-scrollbar-board::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgb(212 175 55 / 0.95), rgb(168 134 31 / 0.95));
+    border-radius: 8px;
+    border: 3px solid rgb(21 53 40 / 0.98);
+    background-clip: padding-box;
+    min-height: 40px;
+  }
+  .vg-scrollbar-board::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgb(232 213 163), rgb(201 162 39));
+    border: 3px solid rgb(21 53 40 / 0.98);
+    background-clip: padding-box;
+  }
+  .vg-scrollbar-board::-webkit-scrollbar-corner {
+    background: rgb(21 53 40 / 0.98);
   }
 }
