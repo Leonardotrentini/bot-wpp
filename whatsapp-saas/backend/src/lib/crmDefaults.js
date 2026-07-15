@@ -11,7 +11,7 @@ const QUALIFIED_TAG_COLOR = "#3b82f6"
 
 const GENERIC_STAGE_NAMES = ["novo", "em atendimento", "negociando", "fechado"]
 
-const ATACADO_PACK = require(path.join(__dirname, "../../../examples/crm-pack-atacado-vestuario.json"))
+const ATACADO_PACK = require(path.join(__dirname, "../../examples/crm-pack-atacado-vestuario.json"))
 
 function isQualifiedTagName(name) {
   return String(name || "").trim().toUpperCase() === QUALIFIED_TAG_NAME
