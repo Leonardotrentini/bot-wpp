@@ -269,18 +269,40 @@ async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact, attri
 }
 
 /**
+ * Clique LP fica no userId do Pixel (OWNER). WhatsApp pode ser do SELLER.
+ * Resolve o dono da org para achar o lead pendente certo — mensagem continua limpa (sem vst_).
+ */
+async function resolveAttributionOwnerUserId(prisma, userId) {
+  if (!userId) return null
+  const member = await prisma.organizationMember.findUnique({
+    where: { userId },
+    select: { organizationId: true, role: true },
+  })
+  if (!member) return userId
+  if (member.role === "OWNER") return userId
+
+  const owner = await prisma.organizationMember.findFirst({
+    where: { organizationId: member.organizationId, role: "OWNER" },
+    select: { userId: true },
+  })
+  return owner?.userId || userId
+}
+
+/**
  * Fallback só quando a mensagem não traz vst_ e há exatamente 1 clique pendente
  * na janela curta — evita cruzar atribuição sob volume concurrente.
+ * Busca no OWNER (Pixel/LP), não no vendedor que recebeu o WhatsApp.
  */
 async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact }) {
   if (!contact?.id) return contact
   if (contactHasLpAttribution(contact)) return contact
 
+  const ownerUserId = (await resolveAttributionOwnerUserId(prisma, userId).catch(() => userId)) || userId
   const minClickAt = new Date(Date.now() - PENDING_LEAD_MAX_AGE_MS)
 
   const candidates = await prisma.metaAttributionLead.findMany({
     where: {
-      userId,
+      userId: ownerUserId,
       contactId: null,
       expiresAt: { gt: new Date() },
       clickAt: { gte: minClickAt },
@@ -298,7 +320,11 @@ async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, conta
   })
   if (claimed.count === 0) return contact
 
-  return applyAttributionLeadToContact(prisma, { userId, contact, lead: { ...lead, contactId: contact.id } })
+  return applyAttributionLeadToContact(prisma, {
+    userId: lead.userId || ownerUserId,
+    contact,
+    lead: { ...lead, contactId: contact.id },
+  })
 }
 
 async function resolveAndApplyAttributionFromMessage(prisma, { userId, contact, messageBody }) {
@@ -340,6 +366,7 @@ module.exports = {
   extractVstRefFromText,
   buildContactEventIdFromRef,
   getIntegrationByPublicKey,
+  resolveAttributionOwnerUserId,
   createAttributionLead,
   applyAttributionLeadToContact,
   resolveAndApplyAttributionFromMessage,

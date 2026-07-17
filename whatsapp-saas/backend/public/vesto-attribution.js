@@ -184,13 +184,20 @@
       sessionStorage.setItem("vesto_ref", ref)
       sessionStorage.setItem("vesto_contact_event_id", contactEventId)
     } catch (e) {}
-    sendAttribution(meta, ref, contactEventId)
     var target = ev && ev.currentTarget ? ev.currentTarget : null
     var phone = resolvePhone(target, opts)
     if (!phone) return
     var msg = waMsg || "Olá! Vim pelo site e quero mais informações."
     var text = encodeURIComponent(msg)
-    window.open("https://wa.me/" + phone + "?text=" + text, "_blank", "noopener,noreferrer")
+    // Espera o POST (timeout curto) antes do wa.me — mensagem continua limpa (sem vst_).
+    Promise.race([
+      sendAttribution(meta, ref, contactEventId),
+      new Promise(function (resolve) {
+        setTimeout(resolve, 2500)
+      }),
+    ]).finally(function () {
+      window.open("https://wa.me/" + phone + "?text=" + text, "_blank", "noopener,noreferrer")
+    })
   }
 
   captureMeta()
