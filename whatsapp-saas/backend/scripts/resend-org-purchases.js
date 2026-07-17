@@ -1,21 +1,19 @@
 /**
- * Reenvia Purchase à Meta para vendas recentes da org Baseset (OWNER + SELLER).
+ * ATENÇÃO: reenvio histórico de Purchase polui Compras/ROAS no Ads
+ * (se event_time for "agora"). Por padrão este script NÃO envia nada.
  *
- * Uso (produção via Railway):
- *   railway run --service <backend> -- node scripts/resend-org-purchases.js --confirmo-enviar --days 7
+ * Uso seguro (só lista):
+ *   node scripts/resend-org-purchases.js --dry-run --days 2
  *
- * Flags:
- *   --confirmo-enviar   obrigatório para disparar CAPI real
- *   --days N            janela (default 7)
- *   --force             reenvia mesmo com purchaseEventSentAt preenchido
- *   --dry-run           só lista, não envia
- *   --email EMAIL       dono/org seed (default basesetatacado@gmail.com)
+ * Envio real (evitar): exige flags explícitas + máx. 2 dias + event_time da venda:
+ *   node scripts/resend-org-purchases.js --confirmo-enviar --eu-sei-que-polui-ads --days 2
+ *
+ * Preferência: NÃO use. Compras novas vão sozinhas pelo botão Compra no CRM.
  */
 require("dotenv").config()
 const { PrismaClient } = require("@prisma/client")
-const { trackCrmPurchaseEvent } = require("../src/lib/metaConversions")
+const { trackCrmPurchaseEvent, resolveMetaIntegrationForTracking } = require("../src/lib/metaConversions")
 const { ensureAttributionBeforeMetaEvent } = require("../src/lib/metaAttributionLead")
-const { resolveMetaIntegrationForTracking } = require("../src/lib/metaConversions")
 
 function hasFlag(name) {
   return process.argv.includes(name)
@@ -28,16 +26,23 @@ function argValue(name, fallback) {
 }
 
 async function main() {
-  const dryRun = hasFlag("--dry-run")
+  const dryRun = hasFlag("--dry-run") || !hasFlag("--confirmo-enviar")
   const force = hasFlag("--force")
-  const days = Math.max(1, Number(argValue("--days", "7")) || 7)
+  const allowPollute = hasFlag("--eu-sei-que-polui-ads")
+  const days = Math.max(1, Math.min(2, Number(argValue("--days", "2")) || 2))
   const email = argValue("--email", process.env.META_LIVE_USER_EMAIL || "basesetatacado@gmail.com")
 
-  if (!dryRun && !hasFlag("--confirmo-enviar")) {
-    console.error(
-      "Use: node scripts/resend-org-purchases.js --confirmo-enviar [--days 7] [--force] [--dry-run]",
-    )
-    process.exit(1)
+  if (!dryRun) {
+    if (!allowPollute) {
+      console.error(
+        "Envio real bloqueado. Use só --dry-run, ou (não recomendado) --confirmo-enviar --eu-sei-que-polui-ads --days 2",
+      )
+      process.exit(1)
+    }
+    if (force) {
+      console.error("--force também bloqueado neste script (evita reenviar lote e poluir Ads).")
+      process.exit(1)
+    }
   }
 
   const prisma = new PrismaClient()
@@ -78,14 +83,12 @@ async function main() {
         type: "purchase_confirmed",
         createdAt: { gte: since },
       },
-      include: {
-        contact: true,
-        // contact already includes customFields
-      },
+      include: { contact: true },
       orderBy: { createdAt: "asc" },
     })
 
-    console.log(`\n${purchases.length} venda(s) desde ${since.toISOString()} (últimos ${days}d)\n`)
+    console.log(`\n${purchases.length} venda(s) desde ${since.toISOString()} (últimos ${days}d)`)
+    console.log(dryRun ? "MODO: dry-run (não envia)\n" : "MODO: ENVIO REAL — use com extremo cuidado\n")
 
     let sent = 0
     let skipped = 0
@@ -106,14 +109,9 @@ async function main() {
         continue
       }
 
-      const already = Boolean(contact.purchaseEventSentAt)
-      if (already && !force) {
-        console.log(
-          `SKIP ${contact.phone || contact.name} R$${amount} — já tem purchaseEventSentAt (use --force)`,
-        )
-        skipped += 1
-        continue
-      }
+      const payload =
+        row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? row.payload : {}
+      const alreadyOnActivity = Boolean(payload.metaPurchaseSentAt)
 
       contact = await ensureAttributionBeforeMetaEvent(prisma, {
         userId: contact.userId,
@@ -124,7 +122,7 @@ async function main() {
       const hasAttr = Boolean(meta.ctwaClid || meta.fbc || meta.fbp || meta.fbclid)
 
       console.log(
-        `${dryRun ? "DRY" : "SEND"} ${contact.phone || contact.name} R$${amount} attr=${hasAttr} already=${already} seller=${contact.userId}`,
+        `${dryRun ? "DRY" : "SEND"} ${contact.phone || contact.name} R$${amount} attr=${hasAttr} activitySent=${alreadyOnActivity} seller=${contact.userId}`,
       )
 
       if (dryRun) {
@@ -132,19 +130,26 @@ async function main() {
         continue
       }
 
-      const ticket = row.payload?.ticket || `backfill-${row.id}`
+      if (alreadyOnActivity) {
+        skipped += 1
+        console.log(`  SKIP already sent on activity`)
+        continue
+      }
+
       const result = await trackCrmPurchaseEvent(prisma, {
         userId: contact.userId,
         contact,
         amount,
-        ticket,
-        force: force || already,
+        ticket: row.payload?.ticket || `backfill-${row.id}`,
+        activityId: row.id,
+        eventTime: row.createdAt,
+        force: false,
       })
 
       if (result.sent) {
         sent += 1
         console.log(
-          `  OK eventId=${result.eventId} mode=${result.trackingMode} attr=${result.hasAdsAttribution}`,
+          `  OK eventId=${result.eventId} mode=${result.trackingMode} attr=${result.hasAdsAttribution} event_time=venda`,
         )
       } else if (result.error) {
         failed += 1
@@ -154,7 +159,6 @@ async function main() {
         console.log(`  SKIP reason=${result.reason || "—"} ${result.message || ""}`)
       }
 
-      // evita rate limit agressivo
       await new Promise((r) => setTimeout(r, 400))
     }
 

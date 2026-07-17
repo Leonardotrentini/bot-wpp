@@ -15,7 +15,10 @@ export function toastMetaTracking(toast, tracking, fallbackLabel = 'Evento') {
   }
 
   if (tracking.skipped && tracking.reason === 'already_sent') {
-    toast.info(`${tracking.eventName || fallbackLabel} já enviado para este lead (máx. 1x na Meta).`)
+    toast.info(
+      tracking.message ||
+        `${tracking.eventName || fallbackLabel} já enviado à Meta para esta venda.`,
+    )
     return true
   }
 

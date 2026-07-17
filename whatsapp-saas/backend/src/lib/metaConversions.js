@@ -455,7 +455,7 @@ function buildQuoteEvent({ contact, amount, eventId, userId, integration, mode }
   })
 }
 
-function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode }) {
+function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integration, mode, eventTime }) {
   const stage = getFunnelStage(PURCHASE_EVENT)
   const eventSource = eventSourceForMode(mode)
   return buildFunnelEvent({
@@ -465,6 +465,7 @@ function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integrat
     userId,
     integration,
     mode,
+    eventTime,
     customData: buildFunnelCustomData({
       contentCategory: stage.contentCategory,
       eventSource,
@@ -473,6 +474,24 @@ function buildPurchaseEvent({ contact, amount, ticket, eventId, userId, integrat
       ticket,
     }),
   })
+}
+
+function toEventTimeSec(eventTime) {
+  if (eventTime == null) return Math.floor(Date.now() / 1000)
+  if (eventTime instanceof Date) return Math.floor(eventTime.getTime() / 1000)
+  const n = Number(eventTime)
+  if (!Number.isFinite(n) || n <= 0) return Math.floor(Date.now() / 1000)
+  // aceita ms ou segundos
+  return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n)
+}
+
+function contactHasAdsAttribution(contact) {
+  return Boolean(
+    contact?.customFields?.meta?.ctwaClid ||
+      contact?.customFields?.meta?.fbc ||
+      contact?.customFields?.meta?.fbp ||
+      contact?.customFields?.meta?.fbclid,
+  )
 }
 
 function formatMetaError(json) {
@@ -1114,7 +1133,14 @@ async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
   })
 }
 
-async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket, force = false }) {
+/**
+ * Purchase ao vivo: 1 envio por venda (activityId), não 1x por lead para sempre.
+ * Assim compras novas continuam indo à Meta mesmo se o lead já teve Purchase (ex.: backfill).
+ */
+async function trackCrmPurchaseEvent(
+  prisma,
+  { userId, contact, amount, ticket, force = false, activityId = null, eventTime = null },
+) {
   const { integration, metaUserId, source } = await resolveMetaIntegrationForTracking(prisma, userId)
   if (!integration?.enabled || !integration.sendPurchases) {
     return {
@@ -1141,7 +1167,47 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket, 
     attributionUserId: metaUserId,
   })
 
-  if (force && contactReady.purchaseEventSentAt) {
+  const hasAttr = contactHasAdsAttribution(contactReady)
+  const occurrenceTicket =
+    (activityId && String(activityId)) || (ticket != null && String(ticket).trim()) || null
+
+  // Idempotência por venda (activity), não por contato.
+  if (activityId && !force) {
+    const activity = await prisma.crmContactActivity.findFirst({
+      where: { id: activityId, contactId: contactReady.id },
+      select: { id: true, payload: true },
+    })
+    const payload =
+      activity?.payload && typeof activity.payload === "object" && !Array.isArray(activity.payload)
+        ? activity.payload
+        : {}
+    if (payload.metaPurchaseSentAt) {
+      return {
+        sent: false,
+        skipped: true,
+        reason: "already_sent",
+        eventName: PURCHASE_EVENT,
+        message: "Esta venda já foi enviada à Meta.",
+        metaSource: source,
+        hasAdsAttribution: hasAttr,
+      }
+    }
+  }
+
+  // Caminho legado (ex.: tag) sem activityId: mantém máx. 1 Purchase por lead.
+  if (!activityId && contactReady.purchaseEventSentAt && !force) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: "already_sent",
+      eventName: PURCHASE_EVENT,
+      message: "Purchase já enviado para este lead (use o botão Compra para nova venda).",
+      metaSource: source,
+      hasAdsAttribution: hasAttr,
+    }
+  }
+
+  if (force && !activityId && contactReady.purchaseEventSentAt) {
     await prisma.crmContact.update({
       where: { id: contactReady.id },
       data: { purchaseEventSentAt: null },
@@ -1149,37 +1215,68 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket, 
     contactReady = { ...contactReady, purchaseEventSentAt: null }
   }
 
-  const result = await dispatchIdempotentMetaEvent(prisma, {
+  const eventTimeSec = toEventTimeSec(eventTime)
+
+  const result = await dispatchMetaEvent(prisma, {
     userId: metaUserId,
     contact: contactReady,
     integration,
     eventName: PURCHASE_EVENT,
     eventIdPrefix: getFunnelStage(PURCHASE_EVENT).eventIdPrefix,
-    idempotencyField: "purchaseEventSentAt",
+    ticket: occurrenceTicket,
     amount,
-    ticket,
     buildPayload: ({ eventId, mode }) =>
       buildPurchaseEvent({
         contact: contactReady,
         amount,
-        ticket,
+        ticket: ticket || occurrenceTicket,
         eventId,
         userId: metaUserId,
         integration,
         mode,
+        eventTime: eventTimeSec,
       }),
-    gate: true,
   })
+
+  if (result.sent) {
+    await prisma.crmContact
+      .update({
+        where: { id: contactReady.id },
+        data: { purchaseEventSentAt: new Date() },
+      })
+      .catch(() => {})
+
+    if (activityId) {
+      const activity = await prisma.crmContactActivity.findFirst({
+        where: { id: activityId, contactId: contactReady.id },
+        select: { id: true, payload: true },
+      })
+      if (activity) {
+        const prev =
+          activity.payload && typeof activity.payload === "object" && !Array.isArray(activity.payload)
+            ? activity.payload
+            : {}
+        await prisma.crmContactActivity
+          .update({
+            where: { id: activity.id },
+            data: {
+              payload: {
+                ...prev,
+                metaPurchaseSentAt: new Date().toISOString(),
+                metaEventId: result.eventId || null,
+                metaHasAdsAttribution: hasAttr,
+              },
+            },
+          })
+          .catch(() => {})
+      }
+    }
+  }
 
   return {
     ...result,
     metaSource: source,
-    hasAdsAttribution: Boolean(
-      contactReady?.customFields?.meta?.ctwaClid ||
-        contactReady?.customFields?.meta?.fbc ||
-        contactReady?.customFields?.meta?.fbp ||
-        contactReady?.customFields?.meta?.fbclid,
-    ),
+    hasAdsAttribution: hasAttr,
   }
 }
 

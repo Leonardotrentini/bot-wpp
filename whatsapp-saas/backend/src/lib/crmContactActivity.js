@@ -537,7 +537,7 @@ async function confirmContactPurchase(
   }
 
   // Sempre cria um novo registro de venda (mesmo lead pode ter várias compras).
-  await logContactActivity(prisma, {
+  const purchaseActivity = await logContactActivity(prisma, {
     userId,
     contactId: contact.id,
     type: "purchase_confirmed",
@@ -551,11 +551,14 @@ async function confirmContactPurchase(
     await emitContactConversation(prisma, io, userId, contact.id)
   }
 
+  // Cada venda → 1 Purchase na Meta (activityId), com event_time = agora.
   const tracking = await trackCrmPurchaseEvent(prisma, {
     userId,
     contact: updated,
     amount: value,
-    ticket: ticketValue,
+    ticket: ticketValue || purchaseActivity.id,
+    activityId: purchaseActivity.id,
+    eventTime: purchaseActivity.createdAt || new Date(),
   })
 
   return {

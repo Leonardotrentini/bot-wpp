@@ -617,24 +617,36 @@ router.get("/plans", authMiddleware, requireAdmin, async (_req, res) => {
 })
 
 /**
- * Reenvia Purchase CAPI para vendas recentes de uma empresa (OWNER + SELLER).
+ * Lista (dry-run) vendas recentes — NÃO reenvia Purchase à Meta.
+ * Reenvio histórico polui Compras/ROAS no Ads (event_time = agora).
+ * Compras novas: só pelo botão Compra no CRM.
  * POST /api/admin/organizations/:id/meta/resend-purchases
- * body: { days?: number, force?: boolean, dryRun?: boolean }
+ * body: { days?: number } — máx. 2; sempre dryRun
  */
 router.post("/organizations/:id/meta/resend-purchases", authMiddleware, requireAdmin, async (req, res) => {
-  const { trackCrmPurchaseEvent, resolveMetaIntegrationForTracking } = require("../lib/metaConversions")
-  const { ensureAttributionBeforeMetaEvent } = require("../lib/metaAttributionLead")
+  const { resolveMetaIntegrationForTracking } = require("../lib/metaConversions")
 
   const schema = z.object({
-    days: z.coerce.number().int().min(1).max(60).optional().default(7),
-    force: z.boolean().optional().default(false),
-    dryRun: z.boolean().optional().default(false),
+    days: z.coerce.number().int().min(1).max(2).optional().default(2),
+    force: z.boolean().optional(),
+    dryRun: z.boolean().optional(),
   })
   const parsed = schema.safeParse(req.body || {})
   if (!parsed.success) {
-    return res.status(400).json({ error: "VALIDATION", message: "Parâmetros inválidos." })
+    return res.status(400).json({
+      error: "VALIDATION",
+      message: "Parâmetros inválidos. Máximo 2 dias; envio real desabilitado.",
+    })
   }
-  const { days, force, dryRun } = parsed.data
+  const days = parsed.data.days
+
+  if (req.body?.dryRun === false || req.body?.force === true) {
+    return res.status(403).json({
+      error: "BACKFILL_DISABLED",
+      message:
+        "Reenvio histórico de Purchase está desabilitado para não poluir o Ads Manager. Só compras novas (botão Compra) enviam à Meta daqui pra frente.",
+    })
+  }
 
   const org = await prisma.organization.findUnique({
     where: { id: req.params.id },
@@ -669,15 +681,12 @@ router.post("/organizations/:id/meta/resend-purchases", authMiddleware, requireA
     orderBy: { createdAt: "asc" },
   })
 
-  const results = []
-  let sent = 0
-  let skipped = 0
-  let failed = 0
-
-  for (const row of purchases) {
+  const results = purchases.map((row) => {
     const contact = row.contact
     const amount = Number(row.payload?.amount)
-    const base = {
+    const payload =
+      row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? row.payload : {}
+    return {
       activityId: row.id,
       contactId: contact?.id || null,
       phone: contact?.phone || null,
@@ -685,61 +694,13 @@ router.post("/organizations/:id/meta/resend-purchases", authMiddleware, requireA
       amount: Number.isFinite(amount) ? amount : null,
       createdAt: row.createdAt.toISOString(),
       sellerUserId: row.userId,
+      status: "dry_run",
+      alreadySentOnActivity: Boolean(payload.metaPurchaseSentAt),
+      contactPurchaseEventSentAt: contact?.purchaseEventSentAt
+        ? contact.purchaseEventSentAt.toISOString()
+        : null,
     }
-
-    if (!contact || !Number.isFinite(amount) || amount <= 0) {
-      skipped += 1
-      results.push({ ...base, status: "skipped", reason: "invalid" })
-      continue
-    }
-
-    if (contact.purchaseEventSentAt && !force) {
-      skipped += 1
-      results.push({ ...base, status: "skipped", reason: "already_sent" })
-      continue
-    }
-
-    if (dryRun) {
-      skipped += 1
-      results.push({
-        ...base,
-        status: "dry_run",
-        alreadySent: Boolean(contact.purchaseEventSentAt),
-      })
-      continue
-    }
-
-    const contactReady = await ensureAttributionBeforeMetaEvent(prisma, {
-      userId: contact.userId,
-      contact,
-      attributionUserId: metaCtx.metaUserId,
-    })
-
-    const tracking = await trackCrmPurchaseEvent(prisma, {
-      userId: contact.userId,
-      contact: contactReady,
-      amount,
-      ticket: row.payload?.ticket || `admin-backfill-${row.id}`,
-      force: force || Boolean(contact.purchaseEventSentAt),
-    })
-
-    if (tracking.sent) {
-      sent += 1
-      results.push({
-        ...base,
-        status: "sent",
-        eventId: tracking.eventId,
-        hasAdsAttribution: tracking.hasAdsAttribution,
-        trackingMode: tracking.trackingMode,
-      })
-    } else if (tracking.error) {
-      failed += 1
-      results.push({ ...base, status: "failed", error: tracking.error })
-    } else {
-      skipped += 1
-      results.push({ ...base, status: "skipped", reason: tracking.reason || "unknown" })
-    }
-  }
+  })
 
   return res.json({
     organizationId: org.id,
@@ -747,9 +708,12 @@ router.post("/organizations/:id/meta/resend-purchases", authMiddleware, requireA
     metaSource: metaCtx.source,
     pixelId: metaCtx.integration.pixelId,
     days,
-    force,
-    dryRun,
-    summary: { total: purchases.length, sent, skipped, failed },
+    force: false,
+    dryRun: true,
+    backfillDisabled: true,
+    message:
+      "Somente listagem. Envio real desabilitado — use o botão Compra no CRM para Purchase ao vivo.",
+    summary: { total: purchases.length, sent: 0, skipped: purchases.length, failed: 0 },
     results,
   })
 })
