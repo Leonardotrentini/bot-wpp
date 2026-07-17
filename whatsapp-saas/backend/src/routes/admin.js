@@ -616,4 +616,142 @@ router.get("/plans", authMiddleware, requireAdmin, async (_req, res) => {
   })
 })
 
+/**
+ * Reenvia Purchase CAPI para vendas recentes de uma empresa (OWNER + SELLER).
+ * POST /api/admin/organizations/:id/meta/resend-purchases
+ * body: { days?: number, force?: boolean, dryRun?: boolean }
+ */
+router.post("/organizations/:id/meta/resend-purchases", authMiddleware, requireAdmin, async (req, res) => {
+  const { trackCrmPurchaseEvent, resolveMetaIntegrationForTracking } = require("../lib/metaConversions")
+  const { ensureAttributionBeforeMetaEvent } = require("../lib/metaAttributionLead")
+
+  const schema = z.object({
+    days: z.coerce.number().int().min(1).max(60).optional().default(7),
+    force: z.boolean().optional().default(false),
+    dryRun: z.boolean().optional().default(false),
+  })
+  const parsed = schema.safeParse(req.body || {})
+  if (!parsed.success) {
+    return res.status(400).json({ error: "VALIDATION", message: "Parâmetros inválidos." })
+  }
+  const { days, force, dryRun } = parsed.data
+
+  const org = await prisma.organization.findUnique({
+    where: { id: req.params.id },
+    include: {
+      members: { select: { userId: true, role: true, user: { select: { name: true, email: true } } } },
+    },
+  })
+  if (!org) return res.status(404).json({ error: "NOT_FOUND", message: "Empresa não encontrada." })
+
+  const owner = org.members.find((m) => m.role === "OWNER")
+  if (!owner) {
+    return res.status(400).json({ error: "NO_OWNER", message: "Empresa sem dono." })
+  }
+
+  const metaCtx = await resolveMetaIntegrationForTracking(prisma, owner.userId)
+  if (!metaCtx.integration?.enabled || !metaCtx.integration?.accessToken) {
+    return res.status(400).json({
+      error: "META_NOT_CONFIGURED",
+      message: "Pixel Meta do dono não está ativo.",
+    })
+  }
+
+  const userIds = org.members.map((m) => m.userId)
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+  const purchases = await prisma.crmContactActivity.findMany({
+    where: {
+      userId: { in: userIds },
+      type: "purchase_confirmed",
+      createdAt: { gte: since },
+    },
+    include: { contact: true },
+    orderBy: { createdAt: "asc" },
+  })
+
+  const results = []
+  let sent = 0
+  let skipped = 0
+  let failed = 0
+
+  for (const row of purchases) {
+    const contact = row.contact
+    const amount = Number(row.payload?.amount)
+    const base = {
+      activityId: row.id,
+      contactId: contact?.id || null,
+      phone: contact?.phone || null,
+      name: contact?.name || contact?.pushName || null,
+      amount: Number.isFinite(amount) ? amount : null,
+      createdAt: row.createdAt.toISOString(),
+      sellerUserId: row.userId,
+    }
+
+    if (!contact || !Number.isFinite(amount) || amount <= 0) {
+      skipped += 1
+      results.push({ ...base, status: "skipped", reason: "invalid" })
+      continue
+    }
+
+    if (contact.purchaseEventSentAt && !force) {
+      skipped += 1
+      results.push({ ...base, status: "skipped", reason: "already_sent" })
+      continue
+    }
+
+    if (dryRun) {
+      skipped += 1
+      results.push({
+        ...base,
+        status: "dry_run",
+        alreadySent: Boolean(contact.purchaseEventSentAt),
+      })
+      continue
+    }
+
+    const contactReady = await ensureAttributionBeforeMetaEvent(prisma, {
+      userId: contact.userId,
+      contact,
+      attributionUserId: metaCtx.metaUserId,
+    })
+
+    const tracking = await trackCrmPurchaseEvent(prisma, {
+      userId: contact.userId,
+      contact: contactReady,
+      amount,
+      ticket: row.payload?.ticket || `admin-backfill-${row.id}`,
+      force: force || Boolean(contact.purchaseEventSentAt),
+    })
+
+    if (tracking.sent) {
+      sent += 1
+      results.push({
+        ...base,
+        status: "sent",
+        eventId: tracking.eventId,
+        hasAdsAttribution: tracking.hasAdsAttribution,
+        trackingMode: tracking.trackingMode,
+      })
+    } else if (tracking.error) {
+      failed += 1
+      results.push({ ...base, status: "failed", error: tracking.error })
+    } else {
+      skipped += 1
+      results.push({ ...base, status: "skipped", reason: tracking.reason || "unknown" })
+    }
+  }
+
+  return res.json({
+    organizationId: org.id,
+    organizationName: org.name,
+    metaSource: metaCtx.source,
+    pixelId: metaCtx.integration.pixelId,
+    days,
+    force,
+    dryRun,
+    summary: { total: purchases.length, sent, skipped, failed },
+    results,
+  })
+})
+
 module.exports = router

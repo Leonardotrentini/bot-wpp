@@ -547,7 +547,45 @@ async function getMetaIntegrationEnriched(prisma, userId) {
 }
 
 async function getMetaIntegrationCredentials(prisma, userId) {
-  return prisma.metaIntegration.findUnique({ where: { userId } })
+  return resolveMetaIntegrationForTracking(prisma, userId).then((r) => r.integration)
+}
+
+/**
+ * Pixel/token ficam no OWNER; vendas do SELLER usam a integração da empresa.
+ * Retorna também metaUserId (dono do Pixel / pool de atribuição LP).
+ */
+async function resolveMetaIntegrationForTracking(prisma, userId) {
+  const own = await prisma.metaIntegration.findUnique({ where: { userId } })
+  if (own?.enabled && own.pixelId && own.accessToken) {
+    return { integration: own, metaUserId: userId, source: "self" }
+  }
+
+  const member = await prisma.organizationMember.findUnique({
+    where: { userId },
+    select: { organizationId: true, role: true },
+  })
+  if (!member || member.role === "OWNER") {
+    return { integration: own || null, metaUserId: userId, source: own ? "self_disabled" : "none" }
+  }
+
+  const owner = await prisma.organizationMember.findFirst({
+    where: { organizationId: member.organizationId, role: "OWNER" },
+    select: { userId: true },
+  })
+  if (!owner?.userId) {
+    return { integration: own || null, metaUserId: userId, source: "none" }
+  }
+
+  const ownerIntegration = await prisma.metaIntegration.findUnique({ where: { userId: owner.userId } })
+  if (ownerIntegration?.enabled && ownerIntegration.pixelId && ownerIntegration.accessToken) {
+    return { integration: ownerIntegration, metaUserId: owner.userId, source: "org_owner" }
+  }
+
+  return {
+    integration: ownerIntegration || own || null,
+    metaUserId: owner.userId,
+    source: ownerIntegration ? "org_owner_disabled" : "none",
+  }
 }
 
 async function upsertMetaIntegration(prisma, userId, data) {
@@ -904,13 +942,13 @@ async function dispatchIdempotentMetaEvent(prisma, {
 }
 
 async function getEnabledIntegration(prisma, userId) {
-  const integration = await getMetaIntegrationCredentials(prisma, userId)
-  if (!integration?.enabled) return { integration: null, skipped: true, reason: "disabled" }
-  return { integration }
+  const { integration, metaUserId, source } = await resolveMetaIntegrationForTracking(prisma, userId)
+  if (!integration?.enabled) return { integration: null, metaUserId, source, skipped: true, reason: "disabled" }
+  return { integration, metaUserId, source }
 }
 
 async function trackContactEvent(prisma, { userId, contact }) {
-  const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
+  const { integration, metaUserId, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
   if (!integration?.pixelId || !integration?.accessToken) {
     return { sent: false, skipped: true, reason: "not_configured" }
@@ -930,19 +968,23 @@ async function trackContactEvent(prisma, { userId, contact }) {
   const mode = resolveTrackingMode(contact)
   // Contact do LP usa pathway CRM (website), mesmo se depois veio CTWA
   const crmMode = { mode: "crm" }
+  const recordUserId = metaUserId || userId
 
   try {
     const payload = buildContactEvent({
       contact,
       eventId,
-      userId,
+      userId: recordUserId,
       integration,
       mode: crmMode,
     })
     // Contact não é evento de funil contável — envia sem assert de content_category do funil
     const eventTargetId = await resolveEventTargetId(integration, crmMode)
     const result = await sendMetaEvent(integration, payload, { eventTargetId })
-    await recordIntegrationResult(prisma, userId, { eventName: CONTACT_EVENT, eventsReceived: result.events_received })
+    await recordIntegrationResult(prisma, recordUserId, {
+      eventName: CONTACT_EVENT,
+      eventsReceived: result.events_received,
+    })
 
     const claim = await prisma.crmContact.updateMany({
       where: { id: contact.id, contactEventSentAt: null },
@@ -963,7 +1005,7 @@ async function trackContactEvent(prisma, { userId, contact }) {
       payload,
     }
   } catch (err) {
-    await recordIntegrationResult(prisma, userId, { eventName: CONTACT_EVENT, error: err.message })
+    await recordIntegrationResult(prisma, recordUserId, { eventName: CONTACT_EVENT, error: err.message })
     return {
       sent: false,
       eventId,
@@ -975,10 +1017,14 @@ async function trackContactEvent(prisma, { userId, contact }) {
 }
 
 async function trackConversationStartedEvent(prisma, { userId, contact }) {
-  const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
+  const { integration, metaUserId, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
 
-  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, {
+    userId,
+    contact,
+    attributionUserId: metaUserId,
+  })
 
   // Twin CAPI do Contact da LP (mesmo event_id do Pixel), se atribuição ainda não disparou
   if (contactHasLpAttribution(contactReady) && !contactReady.contactEventSentAt) {
@@ -986,47 +1032,76 @@ async function trackConversationStartedEvent(prisma, { userId, contact }) {
   }
 
   return dispatchIdempotentMetaEvent(prisma, {
-    userId,
+    userId: metaUserId,
     contact: contactReady,
     integration,
     eventName: CONVERSATION_STARTED_EVENT,
     eventIdPrefix: "vesto-conversation-started",
     idempotencyField: "conversationStartedEventSentAt",
     buildPayload: ({ eventId, mode }) =>
-      buildConversationStartedEvent({ contact: contactReady, eventId, userId, integration, mode }),
+      buildConversationStartedEvent({
+        contact: contactReady,
+        eventId,
+        userId: metaUserId,
+        integration,
+        mode,
+      }),
     gate: true,
   })
 }
 
 async function trackLeadQualifiedEvent(prisma, { userId, contact }) {
-  const { integration, skipped, reason } = await getEnabledIntegration(prisma, userId)
+  const { integration, metaUserId, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
 
-  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, {
+    userId,
+    contact,
+    attributionUserId: metaUserId,
+  })
 
   return dispatchIdempotentMetaEvent(prisma, {
-    userId,
+    userId: metaUserId,
     contact: contactReady,
     integration,
     eventName: LEAD_QUALIFIED_EVENT,
     eventIdPrefix: "vesto-lead-qualified",
     idempotencyField: "qualifiedEventSentAt",
     buildPayload: ({ eventId, mode }) =>
-      buildLeadQualifiedEvent({ contact: contactReady, eventId, userId, integration, mode }),
+      buildLeadQualifiedEvent({ contact: contactReady, eventId, userId: metaUserId, integration, mode }),
     gate: true,
   })
 }
 
 async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
-  const integration = await getMetaIntegrationCredentials(prisma, userId)
+  const { integration, metaUserId, source } = await resolveMetaIntegrationForTracking(prisma, userId)
   if (!integration?.enabled || !integration.sendQuotes) {
-    return { sent: false, skipped: true, reason: "disabled" }
+    return {
+      sent: false,
+      skipped: true,
+      reason: "disabled",
+      message: "Meta desativada para orçamentos. Configure em Integrações (conta do dono da empresa).",
+      metaSource: source,
+    }
+  }
+  if (!integration.pixelId || !integration.accessToken) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: "not_configured",
+      message: "Pixel/token Meta não configurados na conta do dono.",
+      metaSource: source,
+    }
   }
 
-  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, {
+    userId,
+    contact,
+    attributionUserId: metaUserId,
+  })
 
   return dispatchIdempotentMetaEvent(prisma, {
-    userId,
+    userId: metaUserId,
     contact: contactReady,
     integration,
     eventName: QUOTE_EVENT,
@@ -1034,24 +1109,48 @@ async function trackCrmQuoteEvent(prisma, { userId, contact, amount }) {
     idempotencyField: "quoteEventSentAt",
     amount,
     buildPayload: ({ eventId, mode }) =>
-      buildQuoteEvent({ contact: contactReady, amount, eventId, userId, integration, mode }),
+      buildQuoteEvent({ contact: contactReady, amount, eventId, userId: metaUserId, integration, mode }),
     gate: true,
   })
 }
 
-async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }) {
-  const integration = await getMetaIntegrationCredentials(prisma, userId)
+async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket, force = false }) {
+  const { integration, metaUserId, source } = await resolveMetaIntegrationForTracking(prisma, userId)
   if (!integration?.enabled || !integration.sendPurchases) {
-    return { sent: false, skipped: true, reason: "disabled" }
+    return {
+      sent: false,
+      skipped: true,
+      reason: "disabled",
+      message: "Meta desativada para compras. Configure em Integrações (conta do dono da empresa).",
+      metaSource: source,
+    }
   }
   if (!integration.pixelId || !integration.accessToken) {
-    return { sent: false, skipped: true, reason: "not_configured" }
+    return {
+      sent: false,
+      skipped: true,
+      reason: "not_configured",
+      message: "Pixel/token Meta não configurados na conta do dono.",
+      metaSource: source,
+    }
   }
 
-  const contactReady = await ensureAttributionBeforeMetaEvent(prisma, { userId, contact })
+  let contactReady = await ensureAttributionBeforeMetaEvent(prisma, {
+    userId,
+    contact,
+    attributionUserId: metaUserId,
+  })
+
+  if (force && contactReady.purchaseEventSentAt) {
+    await prisma.crmContact.update({
+      where: { id: contactReady.id },
+      data: { purchaseEventSentAt: null },
+    })
+    contactReady = { ...contactReady, purchaseEventSentAt: null }
+  }
 
   const result = await dispatchIdempotentMetaEvent(prisma, {
-    userId,
+    userId: metaUserId,
     contact: contactReady,
     integration,
     eventName: PURCHASE_EVENT,
@@ -1060,12 +1159,21 @@ async function trackCrmPurchaseEvent(prisma, { userId, contact, amount, ticket }
     amount,
     ticket,
     buildPayload: ({ eventId, mode }) =>
-      buildPurchaseEvent({ contact: contactReady, amount, ticket, eventId, userId, integration, mode }),
+      buildPurchaseEvent({
+        contact: contactReady,
+        amount,
+        ticket,
+        eventId,
+        userId: metaUserId,
+        integration,
+        mode,
+      }),
     gate: true,
   })
 
   return {
     ...result,
+    metaSource: source,
     hasAdsAttribution: Boolean(
       contactReady?.customFields?.meta?.ctwaClid ||
         contactReady?.customFields?.meta?.fbc ||
@@ -1291,6 +1399,7 @@ module.exports = {
   getMetaIntegration,
   getMetaIntegrationEnriched,
   getMetaIntegrationCredentials,
+  resolveMetaIntegrationForTracking,
   resolveWabaDatasetId,
   resolveEventTargetId,
   resolveTestEventCode,

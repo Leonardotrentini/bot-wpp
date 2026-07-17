@@ -206,25 +206,23 @@ function contactHasAnyAdsAttribution(contact) {
 async function resolveAndApplyAttributionFromLinkedLead(prisma, { userId, contact }) {
   if (!contact?.id || contactHasLpAttribution(contact)) return contact
 
+  // Lead LP fica no OWNER; contato pode ser SELLER — busca só pelo contactId.
   const lead = await prisma.metaAttributionLead.findFirst({
-    where: {
-      userId,
-      contactId: contact.id,
-      expiresAt: { gt: new Date() },
-    },
+    where: { contactId: contact.id },
     orderBy: { clickAt: "desc" },
   })
   if (!lead) return contact
-  return applyAttributionLeadToContact(prisma, { userId, contact, lead })
+  return applyAttributionLeadToContact(prisma, { userId: lead.userId || userId, contact, lead })
 }
 
 /** Lê últimas mensagens inbound em busca de vst_ref da LP. */
 async function resolveAndApplyAttributionFromRecentMessages(prisma, { userId, contact, limit = 30 }) {
   if (!contact?.id || contactHasLpAttribution(contact)) return contact
 
+  const messageUserId = contact.userId || userId
   const messages = await prisma.crmMessage.findMany({
     where: {
-      userId,
+      userId: messageUserId,
       conversation: { contactId: contact.id },
       fromMe: false,
       body: { not: null },
@@ -248,17 +246,25 @@ async function resolveAndApplyAttributionFromRecentMessages(prisma, { userId, co
 /**
  * Antes de Quote/Purchase/LeadQualified: recupera fbc/fbp já ligados ao contato
  * ou vst_ref nas mensagens. NÃO usa lead pendente solto (risco de atribuir clique de outro lead).
+ * attributionUserId = dono do Pixel/LP (OWNER); mensagens usam contact.userId.
  */
-async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact }) {
+async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact, attributionUserId }) {
   if (!contact?.id) return contact
   if (contactHasAnyAdsAttribution(contact)) return contact
 
+  const attrUserId = attributionUserId || userId
   let next = contact
-  next = (await resolveAndApplyAttributionFromLinkedLead(prisma, { userId, contact: next }).catch(() => next)) || next
+  next =
+    (await resolveAndApplyAttributionFromLinkedLead(prisma, { userId: attrUserId, contact: next }).catch(
+      () => next,
+    )) || next
   if (contactHasAnyAdsAttribution(next)) return next
 
   next =
-    (await resolveAndApplyAttributionFromRecentMessages(prisma, { userId, contact: next }).catch(() => next)) || next
+    (await resolveAndApplyAttributionFromRecentMessages(prisma, {
+      userId: attrUserId,
+      contact: next,
+    }).catch(() => next)) || next
   return next
 }
 
@@ -299,16 +305,16 @@ async function resolveAndApplyAttributionFromMessage(prisma, { userId, contact, 
   const ref = extractVstRefFromText(messageBody)
   if (!ref) return contact
 
+  // ref é único; lead LP pertence ao OWNER mesmo quando a mensagem é do SELLER
   const lead = await prisma.metaAttributionLead.findFirst({
     where: {
       ref,
-      userId,
       expiresAt: { gt: new Date() },
     },
   })
   if (!lead) return contact
 
-  return applyAttributionLeadToContact(prisma, { userId, contact, lead })
+  return applyAttributionLeadToContact(prisma, { userId: lead.userId || userId, contact, lead })
 }
 
 async function cleanupExpiredAttributionLeads(prisma) {

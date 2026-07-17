@@ -16,8 +16,7 @@ import { ensureNotificationPermission } from '../../lib/browserNotifications.js'
 import { toastMetaTracking, metaFunnelLabel } from '../../lib/metaTrackingFeedback.js'
 
 function notifyMetaTracking(toastApi, tracking, actionLabel) {
-  toastMetaTracking(toastApi, tracking, actionLabel)
-  return Boolean(tracking?.sent)
+  return toastMetaTracking(toastApi, tracking, actionLabel)
 }
 
 function formatBrl(value) {
@@ -283,12 +282,9 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       if (data.contact) onContactUpdate?.(data.contact)
       const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Orçamento')
       if (!metaWarned) {
-        const modeLabel = data.tracking?.trackingMode === 'ctwa' ? ' (anúncio WhatsApp)' : ''
-        toastRef.current.success(
-          data.tracking?.sent
-            ? `Orçamento salvo e enviado à Meta${modeLabel}.`
-            : 'Orçamento salvo.',
-        )
+        toastRef.current.success('Orçamento salvo.')
+      } else if (!data.tracking?.sent) {
+        toastRef.current.success('Orçamento salvo no CRM.')
       }
       setQuoteOpen(false)
       if (historyOpen) loadHistory()
@@ -315,18 +311,11 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       if (data.conversation) onConversationUpdate?.(data.conversation)
       const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
       if (!metaWarned) {
-        const modeLabel = data.tracking?.trackingMode === 'ctwa' ? ' (anúncio WhatsApp)' : ''
-        if (data.tracking?.sent && data.tracking?.hasAdsAttribution === false) {
-          toastRef.current.success(
-            `Compra confirmada e enviada à Meta${modeLabel}. Sem clique de anúncio neste lead — coluna Compras do Ads pode ficar "—".`,
-          )
-        } else {
-          toastRef.current.success(
-            data.tracking?.sent
-              ? `Compra confirmada e enviada à Meta${modeLabel}.`
-              : 'Compra confirmada.',
-          )
-        }
+        toastRef.current.success('Compra confirmada.')
+      } else if (data.tracking?.sent) {
+        // toast Meta já cobriu; reforço curto no CRM
+      } else {
+        toastRef.current.success('Compra salva no CRM.')
       }
       setPurchaseOpen(false)
       if (historyOpen) loadHistory()
