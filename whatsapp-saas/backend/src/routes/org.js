@@ -37,6 +37,7 @@ function createOrgRouter() {
             id: true,
             name: true,
             email: true,
+            avatarUrl: true,
             createdAt: true,
             whatsappConnection: {
               select: { status: true, phone: true, qrCode: true, updatedAt: true },
@@ -55,6 +56,7 @@ function createOrgRouter() {
           userId: m.user.id,
           name: m.user.name,
           email: m.user.email,
+          avatarUrl: m.user.avatarUrl || null,
           role: m.role,
           joinedAt: m.joinedAt.toISOString(),
           invitedAt: m.invitedAt?.toISOString() || null,
@@ -154,11 +156,65 @@ function createOrgRouter() {
       return res.status(404).json({ error: "NOT_FOUND", message: "Membro não encontrado nesta empresa." })
     }
     if (member.role === "OWNER") {
-      return res.status(400).json({ error: "CANNOT_REMOVE_OWNER", message: "Não é possível remover o dono da empresa." })
+      const owners = await prisma.organizationMember.count({
+        where: { organizationId: req.dataScope.orgId, role: "OWNER" },
+      })
+      if (owners <= 1) {
+        return res.status(400).json({
+          error: "LAST_OWNER",
+          message: "Não é possível remover o único dono da empresa.",
+        })
+      }
     }
 
     await prisma.organizationMember.delete({ where: { id: member.id } })
     return res.json({ ok: true })
+  })
+
+  /** Dono define/remove foto de perfil de um membro (aparece na bolinha do Kanban). */
+  router.patch("/members/:userId/avatar", requireOrgOwner, async (req, res) => {
+    const targetUserId = req.params.userId
+    const schema = z.object({
+      avatar: z.string().max(1_000_000).nullable(),
+    })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Envie avatar (data URL) ou null para remover.",
+      })
+    }
+
+    const member = await prisma.organizationMember.findFirst({
+      where: { organizationId: req.dataScope.orgId, userId: targetUserId },
+      select: { id: true },
+    })
+    if (!member) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Membro não encontrado nesta empresa." })
+    }
+
+    const avatar = parsed.data.avatar
+    if (avatar != null && avatar !== "" && !String(avatar).startsWith("data:image/")) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Avatar inválido. Use uma imagem (JPG/PNG).",
+      })
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: targetUserId },
+      data: { avatarUrl: avatar || null },
+      select: { id: true, name: true, email: true, avatarUrl: true },
+    })
+
+    return res.json({
+      member: {
+        userId: updated.id,
+        name: updated.name,
+        email: updated.email,
+        avatarUrl: updated.avatarUrl || null,
+      },
+    })
   })
 
   router.get("/sellers", async (req, res) => {

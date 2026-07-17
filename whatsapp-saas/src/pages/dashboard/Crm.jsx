@@ -87,6 +87,7 @@ import {
   createCrmAgent,
   updateCrmAgent,
   deleteCrmAgent,
+  fetchOrgMembers,
   testCrmAgent,
   getWhatsAppStatus,
   refreshCrmContactAvatar,
@@ -127,7 +128,18 @@ function CrmSettingsToolBtn({ title, onClick, children }) {
   )
 }
 
-function CrmTabHeader({ tab, onChange, onOpenSettings, refreshing, onImportPack, packImporting }) {
+function CrmTabHeader({
+  tab,
+  onChange,
+  onOpenSettings,
+  refreshing,
+  onImportPack,
+  packImporting,
+  showSellerFilter,
+  sellerFilter,
+  onSellerFilterChange,
+  members,
+}) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-800 pb-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -152,7 +164,25 @@ function CrmTabHeader({ tab, onChange, onOpenSettings, refreshing, onImportPack,
           </span>
         ) : null}
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {showSellerFilter ? (
+          <div className="min-w-[160px] sm:w-48">
+            <Select
+              value={sellerFilter || ''}
+              onChange={(e) => onSellerFilterChange?.(e.target.value)}
+              aria-label="Filtrar Kanban por vendedor"
+              menuClassName="max-h-56"
+            >
+              <option value="">Vendedor: todos</option>
+              {members.map((m) => (
+                <option key={m.userId} value={m.userId}>
+                  {m.name || m.email}
+                  {m.role === 'OWNER' ? ' (dono)' : ''}
+                </option>
+              ))}
+            </Select>
+          </div>
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
@@ -207,7 +237,45 @@ function KanbanActionBtn({ title, onClick, children, active }) {
   )
 }
 
-function KanbanCard({ conversation: c, dragId, onDragStart, onDragEnd, onOpenChat, onEdit, onTags, onRefreshAvatar }) {
+function attendantInitials(name) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (parts.length === 0) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
+}
+
+function KanbanAttendantBadge({ attendant }) {
+  if (!attendant) return null
+  const label = attendant.name || attendant.email || 'Atendente'
+  const src = attendant.avatarUrl || attendant.avatar || null
+  return (
+    <span
+      title={`Atendendo: ${label}`}
+      className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center overflow-hidden rounded-full border-2 border-brand-900 bg-accent-500/90 text-[8px] font-bold leading-none text-brand-950 shadow-sm ring-1 ring-brand-950/40"
+    >
+      {src ? (
+        <img src={src} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <span aria-hidden>{attendantInitials(label)}</span>
+      )}
+    </span>
+  )
+}
+
+function KanbanCard({
+  conversation: c,
+  dragId,
+  onDragStart,
+  onDragEnd,
+  onOpenChat,
+  onEdit,
+  onTags,
+  onRefreshAvatar,
+  attendant,
+}) {
   return (
     <div
       draggable
@@ -219,13 +287,16 @@ function KanbanCard({ conversation: c, dragId, onDragStart, onDragEnd, onOpenCha
     >
       <div className="cursor-grab p-3 active:cursor-grabbing">
         <div className="flex items-start gap-2.5">
-          <UserAvatar
-            name={contactTitle(c.contact)}
-            src={c.contact?.avatarUrl}
-            size="sm"
-            contactId={c.contact?.id}
-            onRefreshAvatar={onRefreshAvatar}
-          />
+          <div className="relative shrink-0">
+            <UserAvatar
+              name={contactTitle(c.contact)}
+              src={c.contact?.avatarUrl}
+              size="sm"
+              contactId={c.contact?.id}
+              onRefreshAvatar={onRefreshAvatar}
+            />
+            <KanbanAttendantBadge attendant={attendant} />
+          </div>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
             <p className="truncate text-[11px] text-stone-500">
@@ -460,7 +531,7 @@ function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
   )
 }
 
-function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags, onRefreshAvatar }) {
+function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags, onRefreshAvatar, attendantByUserId }) {
   const [dragId, setDragId] = useState(null)
   const [overStage, setOverStage] = useState(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -513,6 +584,7 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags
       key={c.id}
       conversation={c}
       dragId={dragId}
+      attendant={c.userId ? attendantByUserId?.[c.userId] || null : null}
       onDragStart={(e) => {
         setDragId(c.id)
         e.dataTransfer.effectAllowed = 'move'
@@ -1549,8 +1621,10 @@ export function Crm() {
   const toast = useToast()
   const navigate = useNavigate()
   const { user, isOrgOwner } = useAuth()
-  const scopeRef = useRef({ userId: user?.id, isOrgOwner })
-  scopeRef.current = { userId: user?.id, isOrgOwner }
+  const [sellerFilter, setSellerFilter] = useState('')
+  const [orgMembers, setOrgMembers] = useState([])
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '' })
+  scopeRef.current = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
   const [tab, setTab] = useState('kanban')
   const initial = useMemo(() => readCrmInitialState(), [])
 
@@ -1591,6 +1665,12 @@ export function Crm() {
   const [waConnected, setWaConnected] = useState(initial.waConnected)
   useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !loading })
 
+  const kanbanListParams = useMemo(() => {
+    const params = { ...CRM_CONVERSATIONS_LIST_PARAMS }
+    if (isOrgOwner && sellerFilter) params.sellerUserId = sellerFilter
+    return params
+  }, [isOrgOwner, sellerFilter])
+
   const loadKanbanData = useCallback(async () => {
     const seq = ++kanbanLoadSeq.current
     const hasData = conversationsRef.current.length > 0
@@ -1598,7 +1678,7 @@ export function Crm() {
     else setRefreshing(true)
     try {
       const [convos, st, tg] = await Promise.allSettled([
-        getCrmConversations(CRM_CONVERSATIONS_LIST_PARAMS),
+        getCrmConversations(kanbanListParams),
         getCrmStages(),
         getCrmTags(),
       ])
@@ -1607,7 +1687,10 @@ export function Crm() {
       if (convos.status === 'fulfilled') {
         const rows = convos.value.data.conversations || []
         setConversations(rows)
-        mirrorConversationsListCache(rows, CRM_CONVERSATIONS_LIST_PARAMS)
+        // Só espelha cache global da inbox quando não há filtro de vendedor
+        if (!kanbanListParams.sellerUserId) {
+          mirrorConversationsListCache(rows, CRM_CONVERSATIONS_LIST_PARAMS)
+        }
       }
       if (st.status === 'fulfilled') {
         setStages(st.value.data.stages || [])
@@ -1624,7 +1707,47 @@ export function Crm() {
         setRefreshing(false)
       }
     }
-  }, [])
+  }, [kanbanListParams])
+
+  useEffect(() => {
+    if (!isOrgOwner) {
+      setOrgMembers([])
+      setSellerFilter('')
+      return
+    }
+    let cancelled = false
+    fetchOrgMembers()
+      .then((res) => {
+        if (cancelled) return
+        setOrgMembers(res?.members || [])
+      })
+      .catch(() => {
+        if (!cancelled) setOrgMembers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOrgOwner])
+
+  const attendantByUserId = useMemo(() => {
+    const map = {}
+    for (const m of orgMembers) {
+      if (!m?.userId) continue
+      map[m.userId] = {
+        name: m.name || m.email || 'Atendente',
+        email: m.email || null,
+        avatarUrl: m.avatarUrl || m.avatar || null,
+      }
+    }
+    if (user?.id) {
+      map[user.id] = {
+        name: user.name || user.email || map[user.id]?.name || 'Eu',
+        email: user.email || map[user.id]?.email || null,
+        avatarUrl: user.avatar || user.avatarUrl || map[user.id]?.avatarUrl || null,
+      }
+    }
+    return map
+  }, [orgMembers, user])
 
   const loadSecondary = useCallback(async () => {
     const nextBoot = { ...(getCrmBootstrapCache() || {}) }
@@ -1905,6 +2028,10 @@ export function Crm() {
         refreshing={refreshing}
         onImportPack={() => packFileRef.current?.click()}
         packImporting={packImporting}
+        showSellerFilter={tab === 'kanban' && isOrgOwner && orgMembers.length > 0}
+        sellerFilter={sellerFilter}
+        onSellerFilterChange={setSellerFilter}
+        members={orgMembers}
       />
 
       {tab === 'kanban' && (
@@ -1942,6 +2069,7 @@ export function Crm() {
             onEdit={setKanbanEdit}
             onTags={setKanbanTags}
             onRefreshAvatar={refreshAvatar}
+            attendantByUserId={attendantByUserId}
           />
           <KanbanQuickEditModal
             conversation={kanbanEdit}

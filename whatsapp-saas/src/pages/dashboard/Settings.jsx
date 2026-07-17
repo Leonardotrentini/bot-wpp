@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, Shield } from 'lucide-react'
+import { Camera, Shield, Users } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -7,7 +7,7 @@ import { Badge } from '../../components/common/Badge.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { updateProfile } from '../../services/api.js'
+import { updateProfile, fetchOrgMembers, updateOrgMemberAvatar } from '../../services/api.js'
 import { AVATAR_MAX_INPUT_BYTES, resizeAvatarFile } from '../../lib/avatarImage.js'
 
 function emptyProfileForm(user) {
@@ -21,7 +21,7 @@ function emptyProfileForm(user) {
 
 export function Settings() {
   const toast = useToast()
-  const { user, setCurrentUser } = useAuth()
+  const { user, setCurrentUser, isOrgOwner } = useAuth()
   const photoInputRef = useRef(null)
   const [profile, setProfile] = useState(() => emptyProfileForm(user))
   const [avatarTouched, setAvatarTouched] = useState(false)
@@ -29,11 +29,38 @@ export function Settings() {
   const [savingProfile, setSavingProfile] = useState(false)
   const [savingPassword, setSavingPassword] = useState(false)
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
+  const [teamMembers, setTeamMembers] = useState([])
+  const [teamLoading, setTeamLoading] = useState(false)
+  const [teamPhotoBusyId, setTeamPhotoBusyId] = useState(null)
+  const teamPhotoInputRef = useRef(null)
+  const teamPhotoTargetRef = useRef(null)
 
   useEffect(() => {
     setProfile(emptyProfileForm(user))
     setAvatarTouched(false)
   }, [user?.id, user?.name, user?.email, user?.phone, user?.avatar])
+
+  useEffect(() => {
+    if (!isOrgOwner) {
+      setTeamMembers([])
+      return
+    }
+    let cancelled = false
+    setTeamLoading(true)
+    fetchOrgMembers()
+      .then((res) => {
+        if (!cancelled) setTeamMembers(res?.members || [])
+      })
+      .catch(() => {
+        if (!cancelled) setTeamMembers([])
+      })
+      .finally(() => {
+        if (!cancelled) setTeamLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isOrgOwner])
 
   const profileDirty =
     avatarTouched ||
@@ -72,6 +99,66 @@ export function Settings() {
     onProfileField('avatar', null)
     setAvatarTouched(true)
     toast.success('Foto removida. Clique em "Salvar perfil" para confirmar.')
+  }
+
+  const openTeamPhotoPicker = (userId) => {
+    teamPhotoTargetRef.current = userId
+    teamPhotoInputRef.current?.click()
+  }
+
+  const onTeamPhotoPick = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    const userId = teamPhotoTargetRef.current
+    teamPhotoTargetRef.current = null
+    if (!file || !userId) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione uma imagem válida (JPG, PNG ou WebP).')
+      return
+    }
+    if (file.size > AVATAR_MAX_INPUT_BYTES) {
+      toast.error('A imagem original deve ter no máximo 5MB.')
+      return
+    }
+    try {
+      setTeamPhotoBusyId(userId)
+      const dataUrl = await resizeAvatarFile(file)
+      const data = await updateOrgMemberAvatar(userId, { avatar: dataUrl })
+      const avatarUrl = data?.member?.avatarUrl ?? dataUrl
+      setTeamMembers((prev) =>
+        prev.map((m) => (m.userId === userId ? { ...m, avatarUrl } : m)),
+      )
+      if (userId === user?.id) {
+        applyUserUpdate({
+          user: { ...user, avatar: avatarUrl },
+        })
+        setProfile((p) => ({ ...p, avatar: avatarUrl }))
+      }
+      toast.success('Foto do vendedor atualizada. Aparece na bolinha do Kanban.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao salvar foto do vendedor.')
+    } finally {
+      setTeamPhotoBusyId(null)
+    }
+  }
+
+  const removeTeamPhoto = async (userId) => {
+    try {
+      setTeamPhotoBusyId(userId)
+      await updateOrgMemberAvatar(userId, { avatar: null })
+      setTeamMembers((prev) =>
+        prev.map((m) => (m.userId === userId ? { ...m, avatarUrl: null } : m)),
+      )
+      if (userId === user?.id) {
+        applyUserUpdate({ user: { ...user, avatar: null } })
+        setProfile((p) => ({ ...p, avatar: null }))
+      }
+      toast.success('Foto removida. O Kanban usa as iniciais.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao remover foto.')
+    } finally {
+      setTeamPhotoBusyId(null)
+    }
   }
 
   const applyUserUpdate = (data) => {
@@ -183,6 +270,72 @@ export function Settings() {
           </Button>
         </div>
       </Card>
+
+      {isOrgOwner ? (
+        <Card className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Users className="h-5 w-5 text-accent-400" />
+            <div>
+              <h3 className="font-semibold text-stone-50">Fotos da equipe</h3>
+              <p className="text-xs text-stone-500">
+                Foto de cada vendedor (e do dono) na bolinha do Kanban. Sem foto, aparecem as iniciais.
+              </p>
+            </div>
+          </div>
+
+          <input
+            ref={teamPhotoInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/*"
+            className="hidden"
+            onChange={onTeamPhotoPick}
+          />
+
+          {teamLoading ? (
+            <p className="text-sm text-stone-500">Carregando equipe…</p>
+          ) : teamMembers.length === 0 ? (
+            <p className="text-sm text-stone-500">Nenhum membro na empresa.</p>
+          ) : (
+            <div className="space-y-3">
+              {teamMembers.map((m) => {
+                const busy = teamPhotoBusyId === m.userId
+                return (
+                  <div
+                    key={m.userId}
+                    className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-800 bg-brand-950/40 p-3"
+                  >
+                    <UserAvatar name={m.name || m.email} src={m.avatarUrl} size="md" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-stone-100">
+                        {m.name || m.email}
+                        {m.role === 'OWNER' ? (
+                          <span className="ml-1.5 text-xs font-normal text-stone-500">(dono)</span>
+                        ) : null}
+                      </p>
+                      <p className="truncate text-xs text-stone-500">{m.email}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => openTeamPhotoPicker(m.userId)}
+                      >
+                        {busy ? 'Salvando…' : m.avatarUrl ? 'Trocar foto' : 'Enviar foto'}
+                      </Button>
+                      {m.avatarUrl ? (
+                        <Button size="sm" variant="ghost" disabled={busy} onClick={() => removeTeamPhoto(m.userId)}>
+                          Remover
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+      ) : null}
 
       <Card className="space-y-4">
         <div className="flex items-center gap-2">

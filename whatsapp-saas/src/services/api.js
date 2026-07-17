@@ -1193,6 +1193,13 @@ export async function removeOrgMember(userId) {
   return { ok: true }
 }
 
+export async function updateOrgMemberAvatar(userId, { avatar }) {
+  if (resolveUseRealApi()) {
+    return (await apiClient.patch(`/org/members/${encodeURIComponent(userId)}/avatar`, { avatar })).data
+  }
+  return { member: { userId, avatarUrl: avatar || null } }
+}
+
 export async function acceptOrgInvite({ token, password }) {
   if (resolveUseRealApi()) return (await apiClient.post('/auth/accept-invite', { token, password })).data
   return { user: mockUser, token: 'mock-jwt-token' }
