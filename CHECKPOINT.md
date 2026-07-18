@@ -1,6 +1,16 @@
-# Checkpoint Vesto — 12/07/2026
+# Checkpoint Vesto — 17/07/2026
 
-Documento de retomada. Tudo commitado na `main`; último commit: `970d96a`.
+Documento de retomada. Tudo crítico commitado na `main`.
+
+**Últimos commits deste checkpoint:**
+- `9ea9cb9` — docs(meta): reforçar contrato universal das landing pages
+- `482c7f5` — fix(meta): vincular clique da LP por proximidade temporal
+- `19c7d16` — feat(crm): filtro por vendedor no Kanban e foto do atendente
+- `a3e76a8` — fix(meta): atribuir clique LP do dono ao WhatsApp do vendedor
+- `e3de4f4` — fix(meta): Purchase ao vivo por venda e trava reenvio histórico
+
+**Status:** Meta Ads coluna **Compras** atribuindo corretamente (validado em produção: subiu para 15).  
+**NÃO QUEBRAR** o fluxo LP → atribuição → CAPI descrito abaixo.
 
 ---
 
@@ -10,122 +20,96 @@ Documento de retomada. Tudo commitado na `main`; último commit: `970d96a`.
 |------|--------|
 | Backend (Railway) | `https://backend-production-7a466.up.railway.app` |
 | Frontend (produção) | `https://vestogroup.up.railway.app` |
-| LP referência | `https://baseset.vercel.app` |
-| Pixel Meta | `1566611764859334` |
-| Chave pública LP (exemplo BaseSet) | `vpk_17899139c659991466e48d5eb97d9443` |
+| Health backend | `GET /health` → `{ ok: true }` |
+| Script LP | `{backend}/vesto-attribution.js?key=vpk_…` |
+| Deploy | push `main` → Railway automático |
 
-Deploy: push na `main` → Railway faz build automático (ver `RAILWAY.md`).
-
----
-
-## O que está pronto e validado
-
-### Produto / integrações
-- [x] Script LP `vesto-attribution.js` — Contact no clique, POST atribuição silenciosa
-- [x] CORS `/api/public/meta/attribution` para domínios da LP
-- [x] Funil CAPI: `ConversationStarted` → `LeadQualified` → `Quote` → `Purchase`
-- [x] Conversões personalizadas Meta alinhadas com `content_category` (ver abaixo)
-- [x] Lead Qualificado aparecendo na campanha (custo validado)
-- [x] **Purchase CAPI testado** — `sent: true`, `lastEventName: Purchase`, `lastError: null`
-- [x] Histórico do lead — fix loop infinito (`38de9ad`)
-
-### Robustez (commit `970d96a`)
-- [x] Socket WhatsApp por tenant (`user:${userId}`)
-- [x] Webhook Evolution retorna 500 em falha
-- [x] Scheduler: catch-up antes de marcar automação `once` como concluída
-- [x] Idempotência Meta atômica (ConversationStarted, LeadQualified, Quote)
-- [x] Race P2002 em contato/conversa CRM
-- [x] Purchase usa contato atualizado no CAPI
-- [x] Frontend: API real em PROD, banner demo, interceptor 401, erros visíveis
-- [x] GroupDetails: rollback otimista; Members: aviso tags localStorage
+Deploy validado neste checkpoint: frontend + backend online após os commits acima.
 
 ---
 
-## Conversões personalizadas Meta (configuradas)
+## O que está pronto e validado (17/07/2026)
 
-| Nome na Meta | Evento | Regra `content_category` |
-|--------------|--------|---------------------------|
-| Mensagem Iniciada | `ConversationStarted` | contém `conversation_started` |
-| Lead Qualificado | `LeadQualified` | contém `qualified_lead` |
-| Orçamento ENVIADO | `Quote` | contém `quote` |
-| **Compra** | `Purchase` | contém `purchase` — **criar/confirmar se ainda não existir** |
+### Meta / atribuição / CAPI
+- [x] LP captura `fbclid` / `_fbc` / `_fbp` / UTMs e POST silencioso em `/api/public/meta/attribution`
+- [x] Mensagem WhatsApp **limpa** (sem `vst_` visível)
+- [x] Clique da LP fica no **OWNER** (Pixel); WhatsApp pode ser dono ou vendedor
+- [x] Match temporal na 1ª msg (±10 min; bloqueia ambiguidade <20s) — commit `482c7f5`
+- [x] Antes de Quote/Purchase/LeadQualified: `ensureAttributionBeforeMetaEvent` recupera atribuição
+- [x] Com `fbc`/`fbp`: CAPI usa `action_source: website` + `event_source_url` da LP
+- [x] Pixel do dono para vendas de vendedor (`resolveMetaIntegrationForTracking`)
+- [x] Purchase por **venda** (`activityId` + `event_time` da activity)
+- [x] Backfill histórico **travado** (não reenviar histórico antigo)
+- [x] Prompt universal da ferramenta atualizado (`buildMetaLpPrompt.js`) — commit `9ea9cb9`
+- [x] Prova real: toast Quote/Purchase **sem** “sem clique de anúncio” + Ads **Compras = 15**
 
-Fonte da ação na UI Meta: **Site** (normal para eventos CAPI do Vesto).
-
-**Opcional LP:** `Contact` + URL contém domínio da LP (ex. `baseset.vercel.app`).
-
----
-
-## Regras do funil (não esquecer)
-
-| Ação no Vesto | Evento Meta | Limite |
-|---------------|-------------|--------|
-| 1ª mensagem inbound (contato novo) | ConversationStarted | 1x/contato |
-| Tag **QUALIFICADO** (exata) | LeadQualified | 1x/contato |
-| Botão **ORÇAMENTO** no chat | Quote | 1x/contato |
-| Botão **COMPRA** confirmada | Purchase | cada confirmação |
-| Clicar só na tag visual | **não** envia Quote/Purchase | — |
-
-Toggles em **Integrações → Meta**: `sendQuotes`, `sendPurchases`.
+### CRM UI
+- [x] Kanban: filtro por vendedor (dono)
+- [x] Bolinha do atendente no card (avatar/iniciais)
+- [x] Dono pode definir fotos da equipe em Configurações
 
 ---
 
-## Testes feitos hoje (console)
+## Contrato da Landing Page (TODOS os usuários)
 
-### Script funil CRM
-- Rodar no painel logado; em **localhost** usar API relativa: `${window.location.origin}/api` (proxy Vite).
-- Em produção: `https://vestogroup.up.railway.app` ou API relativa.
+Fonte de verdade do texto copiável: painel **Integrações → Meta → Prompt para IA**  
+Código: `whatsapp-saas/src/lib/buildMetaLpPrompt.js`
 
-### Resultado do último teste (contato `cmrhbz1jp0004rx0pb4moapfv`)
-- QUALIFICADO: já existia → LeadQualified `already_sent` (esperado)
-- Quote: `skipped: true, reason: already_sent` (esperado)
-- **Purchase: `sent: true`, value 1500, trackingMode crm** ✅
-- Meta status: `connected: true`, `lastEventName: Purchase`, `lastError: null`
+### A página DEVE
+1. Pixel Meta **uma vez** (não duplicar com GTM/plugin)
+2. `PageView` uma vez; no CTA: `fbq('track','Contact', {}, { eventID: contactEventId })` — **não** `Lead`
+3. Script Vesto com `data-selector="[data-vesto-skip]"` + chave pública
+4. Domínio da LP em `allowedOrigins` no Vesto
+5. Rodízio de número no **servidor da LP** (`/api/next-seller`) — **não** `localStorage` / `vestoPickWhatsApp`
+6. No clique: POST atribuição com `ref`, `contactEventId`, `fbclid`, `fbc`, `fbp`, `clickAt`, `pageUrl`, `userAgent`, UTMs
+7. Esperar POST (máx. ~2,5s) **antes** de abrir `wa.me`
+8. Mensagem WA **limpa**
+9. **Não** disparar LeadQualified / Quote / Purchase no browser — só CAPI do CRM
 
-### Checar status Meta (console)
-```javascript
-(async () => {
-  const API = (window.__VESTO_ENV__?.apiBase || `${window.location.origin}/api`).replace(/\/+$/, '');
-  const TOKEN = localStorage.getItem('vg_auth_token');
-  const { integration: m } = await (await fetch(`${API}/integrations/meta`, {
-    headers: { Authorization: `Bearer ${TOKEN}` },
-  })).json();
-  console.log('📡 Meta:', m);
-})();
-```
-
-### Teste rápido todos os eventos (Eventos de teste Meta)
-`POST /integrations/meta/test` — requer código TEST em Integrações.
+### REGRA DE OURO
+- Quem decide o **número**: servidor da LP (`/api/next-seller`)
+- Quem grava a **atribuição Meta**: Vesto (`POST /api/public/meta/attribution`)
 
 ---
 
-## Pendências / próximos passos (amanhã)
-
-### Go-live clientes
-1. Piloto com 1–2 clientes: só CRM + funil + Meta (sem IA/fluxos/automações de grupo no início)
-2. Checklist por cliente: WhatsApp conectado, pixel/token, domínios LP, toggles Quote/Purchase
-3. Conversão personalizada **Purchase** na Meta se coluna Compra ficar vazia
-
-### Produto (P1 opcional)
-- [ ] Wizard/hints em Integrações
-- [ ] Toast feedback em LeadQualified (hoje só Quote/Purchase retornam `tracking` na API)
-- [ ] Teste funil completo com **contato novo** (validar Quote + LeadQualified `sent: true`)
-- [ ] Validar `ConversationStarted` com mensagem WhatsApp real (não simula pelo console)
-
-### Volume / medo operacional
-- 100–200 msgs/dia por cliente = carga baixa; risco maior é Evolution/sessão WhatsApp, não o backend
-- Idempotência faz colunas Orçamento/Compra mostrarem "-" após 1º evento por contato (comportamento esperado)
-
----
-
-## Commits recentes (referência)
+## Fluxo ponta a ponta (como está funcionando)
 
 ```
-970d96a Endurece operacao: socket por tenant, Meta atomico, erros visiveis e UX demo.
-38de9ad Corrige loop infinito no historico do lead no chat CRM.
-90ac7ca Corrige CORS da LP e otimiza painel de integracoes Meta.
-ba53981 Atribuicao silenciosa: mensagem WhatsApp limpa e prompt atualizado.
+Anúncio Meta (fbclid)
+  → LP (Pixel + script Vesto / rotator)
+  → POST /api/public/meta/attribution  [lead pendente no OWNER]
+  → wa.me (mensagem limpa)
+  → 1ª msg WhatsApp (dono OU vendedor conectado à org)
+  → resolveAttributionOwnerUserId → busca lead no OWNER
+  → match TEMPORAL → customFields.meta (fbclid, fbc, fbp, pageUrl, utm, attributionRef)
+  → CRM: Qualificado → Orçamento → Compra
+  → CAPI (action_source website se há cookies LP)
+  → Meta Ads coluna
 ```
+
+### Eventos CAPI do funil
+
+| Ação no Vesto | Evento Meta | content_category | Limite |
+|---------------|-------------|------------------|--------|
+| Tag QUALIFICADO | LeadQualified | qualified_lead | 1x/contato |
+| Botão Orçamento (com valor) | Quote | quote | 1x/contato |
+| Botão Compra (com valor) | Purchase | purchase | por venda |
+| Só tag visual Orçamento/Comprou | — | — | **não** envia |
+
+Toast bom: `Quote/Purchase enviado à Meta.` **sem** aviso “sem clique de anúncio”.
+
+---
+
+## NÃO FAZER (quebra atribuição / Ads)
+
+- Colocar `vst_` / códigos na mensagem do WhatsApp
+- Backfill / reenviar Purchases históricos
+- Exigir “só 1 clique pendente” (bug antigo)
+- Usar `localStorage` / `vesto_seq_*` / `vestoPickWhatsApp` para escolher número
+- Remover `data-selector="[data-vesto-skip]"` com rotator servidor
+- Disparar Quote/Purchase/LeadQualified no Pixel/GTM da LP
+- Mudar `action_source` / payload CAPI sem teste
+- Abrir `wa.me` sem esperar o POST de atribuição
 
 ---
 
@@ -133,16 +117,25 @@ ba53981 Atribuicao silenciosa: mensagem WhatsApp limpa e prompt atualizado.
 
 | Área | Caminho |
 |------|---------|
-| Backend principal | `whatsapp-saas/backend/src/server.js` |
-| CAPI Meta | `whatsapp-saas/backend/src/lib/metaConversions.js` |
-| CRM ingestão | `whatsapp-saas/backend/src/lib/crmCore.js` |
-| Orçamento/compra | `whatsapp-saas/backend/src/lib/crmContactActivity.js` |
+| Prompt LP (painel) | `whatsapp-saas/src/lib/buildMetaLpPrompt.js` |
 | Script LP | `whatsapp-saas/backend/public/vesto-attribution.js` |
-| Integrações UI | `whatsapp-saas/src/pages/dashboard/Integrations.jsx` |
-| Guia Meta UI | `whatsapp-saas/src/components/integrations/MetaIntegrationGuide.jsx` |
-| Funil lead chat | `whatsapp-saas/src/components/crm/ContactLeadActions.jsx` |
-| Deploy | `RAILWAY.md` |
+| Atribuição / match temporal | `whatsapp-saas/backend/src/lib/metaAttributionLead.js` |
+| CAPI Meta | `whatsapp-saas/backend/src/lib/metaConversions.js` |
+| Ingestão CRM / 1ª msg | `whatsapp-saas/backend/src/lib/crmCore.js` |
+| Orçamento / compra | `whatsapp-saas/backend/src/lib/crmContactActivity.js` |
+| Rota pública atribuição | `whatsapp-saas/backend/src/routes/publicMeta.js` |
+| Painel LP UI | `whatsapp-saas/src/components/integrations/MetaLpAttributionPanel.jsx` |
+| Feedback toast Meta | `whatsapp-saas/src/lib/metaTrackingFeedback.js` |
+| Kanban filtro/avatar | `whatsapp-saas/src/pages/dashboard/Crm.jsx` |
+| Rule Cursor Meta | `.cursor/rules/meta-lp-tracking-checkpoint.mdc` |
 
 ---
 
-*Checkpoint gerado em 12/07/2026 — retomar a partir da seção "Pendências / próximos passos".*
+## Checkpoint anterior (resumo)
+
+Checkpoint de **12/07/2026** validou funil CAPI básico, idempotência e Purchase live.  
+Este de **17/07/2026** consolida: atribuição LP↔vendedor, match temporal, trava de backfill, prompt universal e prova na coluna Compras do Ads.
+
+---
+
+*Checkpoint gerado em **17/07/2026** — tracking Meta/LP estável; não alterar sem necessidade e teste.*

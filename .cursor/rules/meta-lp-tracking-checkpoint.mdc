@@ -1,0 +1,30 @@
+---
+description: Checkpoint Meta/LP/CAPI validado em 17/07/2026 — não quebrar atribuição nem o prompt universal das LPs
+globs: "**/metaAttributionLead.js,**/metaConversions.js,**/vesto-attribution.js,**/buildMetaLpPrompt.js,**/publicMeta.js,**/crmCore.js,**/crmContactActivity.js,**/MetaLpAttributionPanel.jsx,**/metaTrackingFeedback.js"
+alwaysApply: false
+---
+
+# Checkpoint Meta + LP — 17/07/2026
+
+Tracking validado em produção (Ads Compras atribuindo). Preserve o contrato.
+
+## Fonte de verdade
+- Checkpoint completo: `CHECKPOINT.md` (data 17/07/2026)
+- Prompt copiável (todos os usuários): `whatsapp-saas/src/lib/buildMetaLpPrompt.js`
+- Commits: `9ea9cb9`, `482c7f5`, `a3e76a8`, `e3de4f4`
+
+## Fluxo que funciona
+LP captura fbclid/fbc/fbp → POST `/api/public/meta/attribution` no OWNER → WA mensagem limpa → 1ª msg (dono ou seller) → match temporal no OWNER → CRM Qualificado/Orçamento/Compra → CAPI com `action_source=website` quando há cookies LP.
+
+## Regras rígidas
+- Mensagem WhatsApp **sem** `vst_` / códigos técnicos
+- Número: servidor da LP (`/api/next-seller`), **não** localStorage / `vestoPickWhatsApp`
+- Script Vesto com `data-selector="[data-vesto-skip]"` quando houver rotator servidor
+- Pixel Contact com `eventID` = mesmo `contactEventId` do POST
+- Qualificado / Quote / Purchase **só** via CAPI do CRM — nunca no Pixel/GTM da LP
+- Match temporal (±10 min); não voltar a exigir “exatamente 1 pending”
+- Não reenviar histórico / backfill de Purchases
+- Prompt do painel deve permanecer **genérico** (chave/pixel/domínios/vendedores vêm do usuário)
+
+## Antes de mudar
+Testar: POST attribution 200 → atribuição no contato → toast sem “sem clique de anúncio” → Events Manager / Ads.

@@ -32,6 +32,8 @@ desktop.ini
 # Cursor (logs locais; manter só mcp do projeto)
 .cursor/*
 !.cursor/mcp.json
+!.cursor/rules/
+!.cursor/rules/**
 
 # Vite
 *.tsbuildinfo
