@@ -454,6 +454,7 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
           (await resolveAndApplyAttributionFromPendingLead(prisma, {
             userId,
             contact,
+            eventAt: mapped.timestamp,
           }).catch(() => contact)) || contact
       }
 

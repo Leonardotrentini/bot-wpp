@@ -11,6 +11,9 @@ const REF_PATTERN = /\(?\s*(vst_[a-z0-9]{6,16})\s*\)?/i
 const ATTRIBUTION_TTL_DAYS = 14
 /** Janela curta para fallback “último clique” sem vst_ na mensagem (evita cruzar leads). */
 const PENDING_LEAD_MAX_AGE_MS = 2 * 60 * 60 * 1000
+const TEMPORAL_MATCH_WINDOW_MS = 10 * 60 * 1000
+const TEMPORAL_MATCH_FUTURE_TOLERANCE_MS = 30 * 1000
+const TEMPORAL_MATCH_AMBIGUITY_MS = 20 * 1000
 
 function buildContactEventIdFromRef(ref) {
   const clean = String(ref || "")
@@ -265,6 +268,17 @@ async function ensureAttributionBeforeMetaEvent(prisma, { userId, contact, attri
       userId: attrUserId,
       contact: next,
     }).catch(() => next)) || next
+  if (contactHasAnyAdsAttribution(next)) return next
+
+  // Recupera leads limpos da LP que chegaram antes do fix ou cuja conversa já existia.
+  // O match é temporal e conservador; não escolhe quando há dois cliques diferentes
+  // praticamente empatados.
+  next =
+    (await resolveAndApplyAttributionFromPendingLead(prisma, {
+      userId: attrUserId,
+      contact: next,
+      eventAt: next.createdAt,
+    }).catch(() => next)) || next
   return next
 }
 
@@ -288,32 +302,66 @@ async function resolveAttributionOwnerUserId(prisma, userId) {
   return owner?.userId || userId
 }
 
+function attributionSignature(lead) {
+  return String(lead?.fbclid || lead?.fbc || lead?.ref || "")
+}
+
 /**
- * Fallback só quando a mensagem não traz vst_ e há exatamente 1 clique pendente
- * na janela curta — evita cruzar atribuição sob volume concurrente.
- * Busca no OWNER (Pixel/LP), não no vendedor que recebeu o WhatsApp.
+ * Escolhe o clique imediatamente anterior à primeira mensagem.
+ * Duplicatas do mesmo fbclid são equivalentes; cliques diferentes com distância
+ * quase igual são tratados como ambíguos e não são atribuídos.
  */
-async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact }) {
+function selectTemporalAttributionCandidate(candidates, eventAt) {
+  const eventMs = new Date(eventAt || Date.now()).getTime()
+  if (!Number.isFinite(eventMs)) return null
+
+  const ranked = (candidates || [])
+    .map((lead) => ({
+      lead,
+      delta: Math.abs(eventMs - new Date(lead.clickAt || 0).getTime()),
+    }))
+    .filter(({ delta }) => Number.isFinite(delta) && delta <= TEMPORAL_MATCH_WINDOW_MS)
+    .sort((a, b) => a.delta - b.delta)
+
+  if (!ranked.length) return null
+  const nearest = ranked[0]
+  const competing = ranked.find(
+    ({ lead }) => attributionSignature(lead) !== attributionSignature(nearest.lead),
+  )
+  if (competing && competing.delta - nearest.delta < TEMPORAL_MATCH_AMBIGUITY_MS) {
+    return null
+  }
+  return nearest.lead
+}
+
+/**
+ * Fallback para mensagem limpa (sem vst_): busca o clique da LP mais próximo
+ * da primeira mensagem, no OWNER do Pixel. Evita o bug antigo que exigia haver
+ * exatamente um único clique pendente em duas horas.
+ */
+async function resolveAndApplyAttributionFromPendingLead(prisma, { userId, contact, eventAt }) {
   if (!contact?.id) return contact
   if (contactHasLpAttribution(contact)) return contact
 
   const ownerUserId = (await resolveAttributionOwnerUserId(prisma, userId).catch(() => userId)) || userId
-  const minClickAt = new Date(Date.now() - PENDING_LEAD_MAX_AGE_MS)
+  const referenceAt = new Date(eventAt || contact.createdAt || Date.now())
+  if (Number.isNaN(referenceAt.getTime())) return contact
+  const minClickAt = new Date(referenceAt.getTime() - TEMPORAL_MATCH_WINDOW_MS)
+  const maxClickAt = new Date(referenceAt.getTime() + TEMPORAL_MATCH_FUTURE_TOLERANCE_MS)
 
   const candidates = await prisma.metaAttributionLead.findMany({
     where: {
       userId: ownerUserId,
       contactId: null,
       expiresAt: { gt: new Date() },
-      clickAt: { gte: minClickAt },
+      clickAt: { gte: minClickAt, lte: maxClickAt },
     },
     orderBy: { clickAt: "desc" },
-    take: 2,
+    take: 20,
   })
 
-  if (candidates.length !== 1) return contact
-
-  const lead = candidates[0]
+  const lead = selectTemporalAttributionCandidate(candidates, referenceAt)
+  if (!lead) return contact
   const claimed = await prisma.metaAttributionLead.updateMany({
     where: { id: lead.id, contactId: null },
     data: { contactId: contact.id },
@@ -371,6 +419,7 @@ module.exports = {
   applyAttributionLeadToContact,
   resolveAndApplyAttributionFromMessage,
   resolveAndApplyAttributionFromPendingLead,
+  selectTemporalAttributionCandidate,
   resolveAndApplyAttributionFromLinkedLead,
   resolveAndApplyAttributionFromRecentMessages,
   ensureAttributionBeforeMetaEvent,

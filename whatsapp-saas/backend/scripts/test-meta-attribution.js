@@ -9,6 +9,7 @@ const {
   extractVstRefFromText,
   validateRef,
   normalizeHostname,
+  selectTemporalAttributionCandidate,
 } = require("../src/lib/metaAttributionLead")
 const { isValidCtwaClid, extractCtwaClidFromRecord } = require("../src/lib/metaMessaging")
 
@@ -56,7 +57,50 @@ function testCtwaClid() {
   assert(extractCtwaClidFromRecord(record) === valid, "baileys externalAdReply")
 }
 
+function testTemporalPendingMatch() {
+  const at = new Date("2026-07-17T21:22:17.000Z")
+  const exact = {
+    id: "exact",
+    ref: "vst_exact001",
+    fbclid: "click-exact",
+    clickAt: new Date("2026-07-17T21:22:08.798Z"),
+  }
+  const old = {
+    id: "old",
+    ref: "vst_old00001",
+    fbclid: "click-old",
+    clickAt: new Date("2026-07-17T20:39:42.339Z"),
+  }
+  assert(
+    selectTemporalAttributionCandidate([old, exact], at)?.id === "exact",
+    "seleciona clique 8s antes, não exige único pendente",
+  )
+
+  const duplicate = {
+    id: "duplicate",
+    ref: "vst_dupe0001",
+    fbclid: "click-exact",
+    clickAt: new Date("2026-07-17T21:22:10.000Z"),
+  }
+  assert(
+    selectTemporalAttributionCandidate([exact, duplicate], at)?.id === "duplicate",
+    "duplicata do mesmo fbclid não gera ambiguidade",
+  )
+
+  const ambiguous = {
+    id: "ambiguous",
+    ref: "vst_other001",
+    fbclid: "other-person",
+    clickAt: new Date("2026-07-17T21:22:09.500Z"),
+  }
+  assert(
+    selectTemporalAttributionCandidate([exact, ambiguous], at) === null,
+    "dois cliques diferentes quase empatados são bloqueados",
+  )
+}
+
 testDomains()
 testRef()
 testCtwaClid()
+testTemporalPendingMatch()
 console.log("✓ Meta attribution unit tests OK")
