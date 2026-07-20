@@ -622,8 +622,11 @@ export async function getReportDashboard({
 } = {}) {
   if (resolveUseRealApi()) {
     const params = { period }
-    if (startDate) params.startDate = startDate
-    if (endDate) params.endDate = endDate
+    // Datas custom só no período personalizado (evita contaminar hoje/7d/30d).
+    if (period === 'custom') {
+      if (startDate) params.startDate = startDate
+      if (endDate) params.endDate = endDate
+    }
     if (metaPeriod) params.metaPeriod = metaPeriod
     if (groupIds?.length) params.groupIds = groupIds.join(',')
     if (sellerUserId) params.sellerUserId = sellerUserId

@@ -64,28 +64,38 @@ function todayYmd() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
 }
 
+/** Início do dia em America/Sao_Paulo (alinhado ao relatório da Visão geral). */
+function startOfDaySpIso(ymd) {
+  const d = new Date(`${ymd}T00:00:00.000-03:00`)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+function endOfDaySpIso(ymd) {
+  const d = new Date(`${ymd}T23:59:59.999-03:00`)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
 function periodToRange(period, startDate, endDate) {
   if (period === 'all') return { from: null, to: null }
   if (period === 'custom') {
     if (!startDate) return { from: null, to: null }
-    const from = new Date(`${startDate}T00:00:00`)
     const endYmd = endDate || startDate
-    const to = new Date(`${endYmd}T23:59:59.999`)
     return {
-      from: Number.isNaN(from.getTime()) ? null : from.toISOString(),
-      to: Number.isNaN(to.getTime()) ? null : to.toISOString(),
+      from: startOfDaySpIso(startDate),
+      to: endOfDaySpIso(endYmd),
     }
   }
   const to = new Date()
-  const from = new Date()
   if (period === 'today') {
-    from.setHours(0, 0, 0, 0)
-  } else if (period === '7d') {
-    from.setDate(from.getDate() - 7)
+    return { from: startOfDaySpIso(todayYmd()), to: to.toISOString() }
+  }
+  const from = new Date(to.getTime())
+  if (period === '7d') {
+    from.setTime(to.getTime() - 7 * 86400000)
   } else if (period === '30d') {
-    from.setDate(from.getDate() - 30)
+    from.setTime(to.getTime() - 30 * 86400000)
   } else if (period === '90d') {
-    from.setDate(from.getDate() - 90)
+    from.setTime(to.getTime() - 90 * 86400000)
   }
   return { from: from.toISOString(), to: to.toISOString() }
 }

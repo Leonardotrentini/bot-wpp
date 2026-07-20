@@ -38,6 +38,15 @@ function defaultLayout() {
   }
 }
 
+function sanitizeFilters(filters = {}) {
+  const next = { ...DEFAULT_REPORT_FILTERS, ...filters }
+  if (next.period && next.period !== 'custom') {
+    delete next.startDate
+    delete next.endDate
+  }
+  return next
+}
+
 function migrateLayout(parsed) {
   if (!parsed?.widgets) return { ...defaultLayout(), ...parsed, funnelSteps: normalizeFunnelSteps(parsed.funnelSteps) }
 
@@ -53,6 +62,7 @@ function migrateLayout(parsed) {
 
   return {
     ...parsed,
+    filters: sanitizeFilters(parsed.filters),
     widgets,
     funnelSteps: normalizeFunnelSteps(parsed.funnelSteps),
     version: STORAGE_VERSION,
@@ -81,7 +91,7 @@ export function loadReportLayout(userId) {
     }
     return {
       version: STORAGE_VERSION,
-      filters: { ...DEFAULT_REPORT_FILTERS, ...(parsed.filters || {}) },
+      filters: sanitizeFilters(parsed.filters),
       widgets: Array.isArray(parsed.widgets) && parsed.widgets.length
         ? parsed.widgets
         : DEFAULT_REPORT_WIDGETS.map((w) => ({ ...w })),
@@ -152,9 +162,15 @@ export function moveWidgetInLayout(layout, widgetId, direction) {
 }
 
 export function updateLayoutFilters(layout, filters) {
+  const nextFilters = { ...layout.filters, ...filters }
+  // Fora de personalizado, remove datas residuais (localStorage antigo).
+  if (nextFilters.period && nextFilters.period !== 'custom') {
+    delete nextFilters.startDate
+    delete nextFilters.endDate
+  }
   return {
     ...layout,
-    filters: { ...layout.filters, ...filters },
+    filters: nextFilters,
   }
 }
 

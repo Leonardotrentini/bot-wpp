@@ -31,21 +31,26 @@ function toSpDateStr(date) {
 
 function reportPeriodToRange(period, startDate, endDate) {
   const now = new Date()
-  const end = endDate ? new Date(`${endDate}T23:59:59.999-03:00`) : now
+  // startDate/endDate só valem em "custom". Em hoje/2d/7d/30d usam "agora",
+  // senão um personalizado antigo no localStorage contamina o filtro (ex.: "Hoje" com vendas de outro dia).
+  const useCustom = period === "custom" && Boolean(startDate)
+  const end = useCustom
+    ? new Date(`${endDate || startDate}T23:59:59.999-03:00`)
+    : now
   let start
 
   if (period === "hoje") {
-    start = todayStartInSp(end)
+    start = todayStartInSp(now)
   } else if (period === "2d") {
-    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
+    start = new Date(now.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
   } else if (period === "7d") {
-    start = new Date(end.getTime() - 7 * 86400000)
+    start = new Date(now.getTime() - 7 * 86400000)
   } else if (period === "30d") {
-    start = new Date(end.getTime() - 30 * 86400000)
-  } else if (period === "custom" && startDate) {
+    start = new Date(now.getTime() - 30 * 86400000)
+  } else if (useCustom) {
     start = new Date(`${startDate}T00:00:00.000-03:00`)
   } else {
-    start = new Date(end.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
+    start = new Date(now.getTime() - MESSAGE_RETENTION_DAYS * 86400000)
   }
 
   if (start > end) start = new Date(end.getTime() - 86400000)
@@ -124,16 +129,17 @@ async function buildReportDashboard(scopeUserIds, options = {}) {
 
   const { start, end } = reportPeriodToRange(period, startDate, endDate)
   const partialErrors = []
-  const metaStartDate = startDate || toSpDateStr(start)
-  const metaEndDate = endDate || toSpDateStr(end)
+  const useCustomDates = period === "custom" && Boolean(startDate)
+  const metaStartDate = useCustomDates ? startDate : toSpDateStr(start)
+  const metaEndDate = useCustomDates ? endDate || startDate : toSpDateStr(end)
   // Sempre deriva do período do painel (evita metaPeriod antigo "30d" em filtro custom).
   const resolvedMetaPeriod = mapPeriodToMetaPeriod(period)
 
   const groupsPromise = buildOverview(userIds, {
     groupJids,
     period,
-    startDate,
-    endDate,
+    startDate: useCustomDates ? startDate : undefined,
+    endDate: useCustomDates ? endDate : undefined,
   }).catch((err) => {
     partialErrors.push({ source: "groups", message: err?.message || "Falha ao carregar grupos." })
     return null

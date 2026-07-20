@@ -88,6 +88,11 @@ export function Dashboard() {
       const next = { ...layout.filters, ...patch }
       if (patch.period) {
         next.metaPeriod = mapPeriodToMetaPeriod(patch.period)
+        // Evita startDate/endDate de um personalizado antigo contaminarem hoje/7d/etc.
+        if (patch.period !== 'custom') {
+          next.startDate = undefined
+          next.endDate = undefined
+        }
       } else if (patch.startDate || patch.endDate) {
         // Personalizado: garante metaPeriod=custom e o backend usa since/until
         next.metaPeriod = 'custom'
