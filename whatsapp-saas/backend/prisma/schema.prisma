@@ -687,3 +687,32 @@ model MetaAttributionLead {
   @@index([expiresAt])
   @@index([userId, contactId, clickAt])
 }
+
+/** Log durável de cada tentativa CAPI (sucesso ou falha). */
+model MetaEventDelivery {
+  id              String   @id @default(cuid())
+  userId          String
+  contactId       String?
+  activityId      String?
+  eventName       String
+  eventId         String?
+  pixelId         String?
+  actionSource    String?
+  eventTime       Int?
+  value           Float?
+  hasFbc          Boolean  @default(false)
+  hasFbp          Boolean  @default(false)
+  hasAdsAttribution Boolean @default(false)
+  httpOk          Boolean  @default(false)
+  eventsReceived  Int      @default(0)
+  fbtraceId       String?
+  error           String?
+  metaMessages    Json?
+  testMode        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([contactId, createdAt(sort: Desc)])
+  @@index([eventName, createdAt(sort: Desc)])
+  @@index([eventId])
+}

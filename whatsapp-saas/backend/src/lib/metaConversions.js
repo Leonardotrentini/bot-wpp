@@ -30,6 +30,7 @@ const {
   resolveContactEventId,
 } = require("./metaMessaging")
 const { getStoredClickAt, ensureAttributionBeforeMetaEvent, contactHasLpAttribution } = require("./metaAttributionLead")
+const { recordMetaEventDelivery, isMetaDeliveryAccepted } = require("./metaEventDelivery")
 
 const GRAPH_API_VERSION = "v22.0"
 const VESTO_USER_AGENT = "Mozilla/5.0 (compatible; VestoCRM/1.0; +https://vesto.group)"
@@ -837,10 +838,16 @@ async function sendMetaEvent(integration, eventPayload, { useTestCode = false, e
     const message = formatMetaError(json)
     const err = new Error(message)
     err.metaResponse = json
+    err.httpOk = false
     throw err
   }
 
-  return json
+  return {
+    ...json,
+    httpOk: true,
+    testMode: Boolean(testCode),
+    eventTargetId: targetId,
+  }
 }
 
 async function recordIntegrationResult(prisma, userId, { eventName, error, eventsReceived }) {
@@ -867,6 +874,7 @@ async function dispatchMetaEvent(prisma, {
   ticket = null,
   buildPayload,
   amount = null,
+  activityId = null,
   extraReturn = {},
 }) {
   const mode = resolveTrackingMode(contact)
@@ -879,11 +887,60 @@ async function dispatchMetaEvent(prisma, {
       stable: stableEventId,
     })
 
+  let payload = null
+  let eventTargetId = null
   try {
-    const payload = buildPayload({ eventId, mode })
-    const eventTargetId = await resolveEventTargetId(integration, mode)
+    payload = buildPayload({ eventId, mode })
+    eventTargetId = await resolveEventTargetId(integration, mode)
     const result = await sendMetaEvent(integration, payload, { eventTargetId })
-    await recordIntegrationResult(prisma, userId, { eventName, eventsReceived: result.events_received })
+    const accepted = isMetaDeliveryAccepted(result)
+    const eventsReceived = Number(result.events_received) || 0
+
+    await recordMetaEventDelivery(prisma, {
+      userId,
+      contactId: contact?.id,
+      activityId,
+      eventName,
+      eventId,
+      pixelId: eventTargetId || integration.pixelId,
+      actionSource: payload?.action_source || null,
+      eventTime: payload?.event_time ?? null,
+      value: amount,
+      hasFbc: Boolean(payload?.user_data?.fbc),
+      hasFbp: Boolean(payload?.user_data?.fbp),
+      hasAdsAttribution: contactHasAdsAttribution(contact),
+      httpOk: true,
+      eventsReceived,
+      fbtraceId: result.fbtrace_id || null,
+      error: accepted ? null : "META_ZERO_EVENTS_RECEIVED",
+      metaMessages: result.messages || null,
+      testMode: Boolean(result.testMode),
+    })
+
+    if (!accepted) {
+      const zeroErr = new Error(
+        "Meta respondeu OK mas events_received=0 — evento não foi aceito no Pixel.",
+      )
+      zeroErr.code = "META_ZERO_EVENTS_RECEIVED"
+      zeroErr.metaResponse = result
+      await recordIntegrationResult(prisma, userId, { eventName, error: zeroErr.message })
+      return {
+        sent: false,
+        eventId,
+        eventName,
+        contentCategory: payload?.custom_data?.content_category || null,
+        value: amount,
+        trackingMode: mode.mode,
+        eventsReceived: 0,
+        metaTargetId: eventTargetId,
+        metaResponse: result,
+        error: zeroErr.message,
+        hasAdsAttribution: contactHasAdsAttribution(contact),
+        ...extraReturn,
+      }
+    }
+
+    await recordIntegrationResult(prisma, userId, { eventName, eventsReceived })
 
     return {
       sent: true,
@@ -892,22 +949,45 @@ async function dispatchMetaEvent(prisma, {
       contentCategory: payload?.custom_data?.content_category || null,
       value: amount,
       trackingMode: mode.mode,
-      eventsReceived: result.events_received,
+      eventsReceived,
       metaTargetId: eventTargetId,
       metaResponse: result,
+      hasAdsAttribution: contactHasAdsAttribution(contact),
       payload,
       ...extraReturn,
     }
   } catch (err) {
+    await recordMetaEventDelivery(prisma, {
+      userId,
+      contactId: contact?.id,
+      activityId,
+      eventName,
+      eventId,
+      pixelId: eventTargetId || integration?.pixelId || null,
+      actionSource: payload?.action_source || null,
+      eventTime: payload?.event_time ?? null,
+      value: amount,
+      hasFbc: Boolean(payload?.user_data?.fbc),
+      hasFbp: Boolean(payload?.user_data?.fbp),
+      hasAdsAttribution: contactHasAdsAttribution(contact),
+      httpOk: Boolean(err?.httpOk),
+      eventsReceived: Number(err?.metaResponse?.events_received) || 0,
+      fbtraceId: err?.metaResponse?.fbtrace_id || null,
+      error: err.message,
+      metaMessages: err?.metaResponse?.messages || err?.metaResponse || null,
+      testMode: false,
+    }).catch(() => {})
+
     await recordIntegrationResult(prisma, userId, { eventName, error: err.message })
     return {
       sent: false,
       eventId,
       eventName,
       value: amount,
-      trackingMode: mode.mode,
+      trackingMode: mode?.mode || resolveTrackingMode(contact).mode,
       error: err.message,
       metaResponse: err.metaResponse,
+      hasAdsAttribution: contactHasAdsAttribution(contact),
       ...extraReturn,
     }
   }
@@ -1000,9 +1080,44 @@ async function trackContactEvent(prisma, { userId, contact }) {
     // Contact não é evento de funil contável — envia sem assert de content_category do funil
     const eventTargetId = await resolveEventTargetId(integration, crmMode)
     const result = await sendMetaEvent(integration, payload, { eventTargetId })
+    const accepted = isMetaDeliveryAccepted(result)
+    const eventsReceived = Number(result.events_received) || 0
+
+    await recordMetaEventDelivery(prisma, {
+      userId: recordUserId,
+      contactId: contact?.id,
+      eventName: CONTACT_EVENT,
+      eventId,
+      pixelId: eventTargetId || integration.pixelId,
+      actionSource: payload?.action_source || null,
+      eventTime: payload?.event_time ?? null,
+      hasFbc: Boolean(payload?.user_data?.fbc),
+      hasFbp: Boolean(payload?.user_data?.fbp),
+      hasAdsAttribution: contactHasAdsAttribution(contact),
+      httpOk: true,
+      eventsReceived,
+      fbtraceId: result.fbtrace_id || null,
+      error: accepted ? null : "META_ZERO_EVENTS_RECEIVED",
+      metaMessages: result.messages || null,
+      testMode: Boolean(result.testMode),
+    })
+
+    if (!accepted) {
+      const msg = "Meta respondeu OK mas events_received=0 — evento não foi aceito no Pixel."
+      await recordIntegrationResult(prisma, recordUserId, { eventName: CONTACT_EVENT, error: msg })
+      return {
+        sent: false,
+        eventId,
+        eventName: CONTACT_EVENT,
+        eventsReceived: 0,
+        error: msg,
+        metaResponse: result,
+      }
+    }
+
     await recordIntegrationResult(prisma, recordUserId, {
       eventName: CONTACT_EVENT,
-      eventsReceived: result.events_received,
+      eventsReceived,
     })
 
     const claim = await prisma.crmContact.updateMany({
@@ -1018,12 +1133,25 @@ async function trackContactEvent(prisma, { userId, contact }) {
       eventId,
       eventName: CONTACT_EVENT,
       trackingMode: mode.mode,
-      eventsReceived: result.events_received,
+      eventsReceived,
       metaTargetId: eventTargetId,
       metaResponse: result,
       payload,
     }
   } catch (err) {
+    await recordMetaEventDelivery(prisma, {
+      userId: recordUserId,
+      contactId: contact?.id,
+      eventName: CONTACT_EVENT,
+      eventId,
+      pixelId: integration?.pixelId || null,
+      hasAdsAttribution: contactHasAdsAttribution(contact),
+      httpOk: Boolean(err?.httpOk),
+      eventsReceived: Number(err?.metaResponse?.events_received) || 0,
+      fbtraceId: err?.metaResponse?.fbtrace_id || null,
+      error: err.message,
+      metaMessages: err?.metaResponse?.messages || err?.metaResponse || null,
+    })
     await recordIntegrationResult(prisma, recordUserId, { eventName: CONTACT_EVENT, error: err.message })
     return {
       sent: false,
@@ -1225,6 +1353,7 @@ async function trackCrmPurchaseEvent(
     eventIdPrefix: getFunnelStage(PURCHASE_EVENT).eventIdPrefix,
     ticket: occurrenceTicket,
     amount,
+    activityId,
     buildPayload: ({ eventId, mode }) =>
       buildPurchaseEvent({
         contact: contactReady,
@@ -1239,25 +1368,27 @@ async function trackCrmPurchaseEvent(
   })
 
   if (result.sent) {
-    await prisma.crmContact
-      .update({
+    try {
+      await prisma.crmContact.update({
         where: { id: contactReady.id },
         data: { purchaseEventSentAt: new Date() },
       })
-      .catch(() => {})
+    } catch (flagErr) {
+      console.error("[meta] falha ao gravar purchaseEventSentAt", flagErr?.message || flagErr)
+    }
 
     if (activityId) {
-      const activity = await prisma.crmContactActivity.findFirst({
-        where: { id: activityId, contactId: contactReady.id },
-        select: { id: true, payload: true },
-      })
-      if (activity) {
-        const prev =
-          activity.payload && typeof activity.payload === "object" && !Array.isArray(activity.payload)
-            ? activity.payload
-            : {}
-        await prisma.crmContactActivity
-          .update({
+      try {
+        const activity = await prisma.crmContactActivity.findFirst({
+          where: { id: activityId, contactId: contactReady.id },
+          select: { id: true, payload: true },
+        })
+        if (activity) {
+          const prev =
+            activity.payload && typeof activity.payload === "object" && !Array.isArray(activity.payload)
+              ? activity.payload
+              : {}
+          await prisma.crmContactActivity.update({
             where: { id: activity.id },
             data: {
               payload: {
@@ -1265,10 +1396,13 @@ async function trackCrmPurchaseEvent(
                 metaPurchaseSentAt: new Date().toISOString(),
                 metaEventId: result.eventId || null,
                 metaHasAdsAttribution: hasAttr,
+                metaEventsReceived: result.eventsReceived ?? null,
               },
             },
           })
-          .catch(() => {})
+        }
+      } catch (flagErr) {
+        console.error("[meta] falha ao gravar metaPurchaseSentAt na activity", flagErr?.message || flagErr)
       }
     }
   }

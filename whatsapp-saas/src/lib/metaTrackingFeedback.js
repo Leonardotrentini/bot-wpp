@@ -10,7 +10,9 @@ export function toastMetaTracking(toast, tracking, fallbackLabel = 'Evento') {
       tracking.hasAdsAttribution === false
         ? ' (sem clique de anúncio — coluna Compras do Ads pode ficar "—")'
         : ''
-    toast.success(`${tracking.eventName || fallbackLabel} enviado à Meta.${attr}`)
+    const received =
+      tracking.eventsReceived != null ? ` (${tracking.eventsReceived} aceito)` : ''
+    toast.success(`${tracking.eventName || fallbackLabel} enviado à Meta${received}.${attr}`)
     return true
   }
 

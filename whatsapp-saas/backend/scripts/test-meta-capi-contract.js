@@ -389,6 +389,16 @@ function testCrmFunnelNoBrowserTwin() {
   console.log("✓ funil CRM: sem gêmeo browser + CAPI com content_category nos 4 estágios")
 }
 
+function testMetaDeliveryAccepted() {
+  const { isMetaDeliveryAccepted } = require("../src/lib/metaEventDelivery")
+  assert(isMetaDeliveryAccepted({ events_received: 1 }) === true, "1 evento = aceito")
+  assert(isMetaDeliveryAccepted({ events_received: 2 }) === true, "2 eventos = aceito")
+  assert(isMetaDeliveryAccepted({ events_received: 0 }) === false, "0 = rejeitado")
+  assert(isMetaDeliveryAccepted({}) === false, "sem campo = rejeitado")
+  assert(isMetaDeliveryAccepted(null) === false, "null = rejeitado")
+  console.log("✓ isMetaDeliveryAccepted (events_received >= 1)")
+}
+
 async function main() {
   testFunnelStageMap()
   testStableEventIds()
@@ -398,6 +408,7 @@ async function main() {
   testCrmLpAttributionPayloads()
   testSendMetaGuardrail()
   testCrmFunnelNoBrowserTwin()
+  testMetaDeliveryAccepted()
   await testSendMetaGuardrailAsync()
   console.log("\nAll meta CAPI contract tests OK")
 }
