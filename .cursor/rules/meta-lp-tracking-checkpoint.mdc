@@ -1,20 +1,20 @@
 ---
-description: Checkpoint Meta/LP/CAPI validado em 17/07/2026 — não quebrar atribuição nem o prompt universal das LPs
-globs: "**/metaAttributionLead.js,**/metaConversions.js,**/vesto-attribution.js,**/buildMetaLpPrompt.js,**/publicMeta.js,**/crmCore.js,**/crmContactActivity.js,**/MetaLpAttributionPanel.jsx,**/metaTrackingFeedback.js"
+description: Checkpoint Meta/LP/CAPI validado em 20/07/2026 (-checkpoint20-07) — não quebrar atribuição, entrega CAPI nem o prompt universal das LPs
+globs: "**/metaAttributionLead.js,**/metaConversions.js,**/metaEventDelivery.js,**/vesto-attribution.js,**/buildMetaLpPrompt.js,**/publicMeta.js,**/crmCore.js,**/crmContactActivity.js,**/MetaLpAttributionPanel.jsx,**/metaTrackingFeedback.js,**/reportDashboard.js"
 alwaysApply: false
 ---
 
-# Checkpoint Meta + LP — 17/07/2026
+# Checkpoint Meta + LP — 20/07/2026 (`-checkpoint20-07`)
 
-Tracking validado em produção (Ads Compras atribuindo). Preserve o contrato.
+Tracking validado em produção (Ads Compras no dia da marcação + entrega CAPI auditável). Preserve o contrato.
 
 ## Fonte de verdade
-- Checkpoint completo: `CHECKPOINT.md` (data 17/07/2026)
+- Checkpoint completo: `CHECKPOINT.md` (data 20/07/2026, tag `-checkpoint20-07`)
 - Prompt copiável (todos os usuários): `whatsapp-saas/src/lib/buildMetaLpPrompt.js`
-- Commits: `9ea9cb9`, `482c7f5`, `a3e76a8`, `e3de4f4`
+- Commits-chave: `8282472`, `3e7b50f`, `9ea9cb9`, `482c7f5`, `a3e76a8`, `e3de4f4`
 
 ## Fluxo que funciona
-LP captura fbclid/fbc/fbp → POST `/api/public/meta/attribution` no OWNER → WA mensagem limpa → 1ª msg (dono ou seller) → match temporal no OWNER → CRM Qualificado/Orçamento/Compra → CAPI com `action_source=website` quando há cookies LP.
+LP captura fbclid/fbc/fbp → POST `/api/public/meta/attribution` no OWNER → WA mensagem limpa → 1ª msg (dono ou seller) → match temporal no OWNER → CRM Qualificado/Orçamento/Compra → CAPI com `action_source=website` quando há cookies LP → `MetaEventDelivery` com `events_received >= 1` → Ads no dia do `event_time` (marcação).
 
 ## Regras rígidas
 - Mensagem WhatsApp **sem** `vst_` / códigos técnicos
@@ -24,7 +24,9 @@ LP captura fbclid/fbc/fbp → POST `/api/public/meta/attribution` no OWNER → W
 - Qualificado / Quote / Purchase **só** via CAPI do CRM — nunca no Pixel/GTM da LP
 - Match temporal (±10 min); não voltar a exigir “exatamente 1 pending”
 - Não reenviar histórico / backfill de Purchases
+- **Não** marcar `sent`/flags se HTTP 200 com `events_received < 1`
+- Purchase: `event_time` = confirmação da venda no CRM, **não** entrada do lead
 - Prompt do painel deve permanecer **genérico** (chave/pixel/domínios/vendedores vêm do usuário)
 
 ## Antes de mudar
-Testar: POST attribution 200 → atribuição no contato → toast sem “sem clique de anúncio” → Events Manager / Ads.
+Testar: POST attribution 200 → atribuição no contato → toast sem “sem clique de anúncio” → linha em `MetaEventDelivery` → Events Manager / Ads (aguardar delay).
