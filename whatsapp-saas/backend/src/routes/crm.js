@@ -274,6 +274,12 @@ function createCrmRouter({ io }) {
     })
   })
 
+  router.get("/conversations/:id", async (req, res) => {
+    const convo = await findScopedConversation(req, req.params.id)
+    if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+    return res.json({ conversation: formatConversationRow(convo) })
+  })
+
   router.get("/conversations/:id/messages", async (req, res) => {
     const convo = await findScopedConversation(req, req.params.id)
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })

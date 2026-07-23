@@ -46,6 +46,7 @@ import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
 import {
   getCrmConversations,
+  getCrmConversation,
   getCrmConversationMessages,
   sendCrmMessage,
   markCrmConversationRead,
@@ -391,7 +392,12 @@ export function Chat() {
       if (seq !== listLoadSeq.current) return
       if (convRes.status === 'fulfilled') {
         const rows = convRes.value.data.conversations || []
-        setConversations(rows)
+        setConversations((prev) => {
+          const active = activeIdRef.current
+          if (!active || isGroupChatId(active) || rows.some((c) => c.id === active)) return rows
+          const kept = prev.find((c) => c.id === active)
+          return kept ? [kept, ...rows] : rows
+        })
         mirrorConversationsListCache(rows, listParams)
       }
       if (groupsRes.status === 'fulfilled') {
@@ -621,6 +627,23 @@ export function Chat() {
           }
         }
         return
+      }
+
+      // Deep link (Vendas/Kanban/alerta): garantir que a conversa exista na lista
+      // mesmo fora do top da inbox — senão a UI fica em "Selecione uma conversa".
+      if (!conversationsRef.current.some((c) => c.id === id)) {
+        try {
+          const { data } = await getCrmConversation(id)
+          if (activeIdRef.current !== id) return
+          if (data?.conversation) {
+            setConversations((prev) => {
+              if (prev.some((c) => c.id === id)) return prev
+              return [data.conversation, ...prev]
+            })
+          }
+        } catch {
+          /* mensagens ainda tentam carregar; se 404 o toast abaixo cobre */
+        }
       }
 
       const cached = getCachedConversationMessages(id)

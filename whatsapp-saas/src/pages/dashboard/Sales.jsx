@@ -658,7 +658,7 @@ export function Sales() {
                             </button>
                             {sale.contact?.conversationId ? (
                               <Link
-                                to={`/dashboard/chat?c=${encodeURIComponent(sale.contact.conversationId)}`}
+                                to={`/dashboard/chat?c=${sale.contact.conversationId}`}
                                 className="inline-flex items-center gap-1 rounded-lg border border-brand-700 px-2.5 py-1.5 text-xs text-accent-400 transition hover:bg-accent-500/10"
                               >
                                 <MessageSquare className="h-3.5 w-3.5" />

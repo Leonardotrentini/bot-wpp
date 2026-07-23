@@ -760,6 +760,11 @@ export async function getCrmConversations(params = {}) {
   return mockResponse({ conversations: [], total: 0, limit: 100, offset: 0 })
 }
 
+export async function getCrmConversation(id) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/conversations/${encodeURIComponent(id)}`)
+  return mockResponse({ conversation: null })
+}
+
 export async function getCrmConversationMessages(id, params = {}) {
   if (resolveUseRealApi()) return apiClient.get(`/crm/conversations/${encodeURIComponent(id)}/messages`, { params })
   return mockResponse({ messages: [], hasMore: false })
