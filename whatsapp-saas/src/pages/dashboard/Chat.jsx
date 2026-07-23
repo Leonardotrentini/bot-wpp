@@ -678,6 +678,22 @@ export function Chat() {
     )
   }, [setSearchParams])
 
+  // Deep link (?c=): sempre carregar mensagens na montagem.
+  // activeId já pode vir da URL — não pular openConversation nesse caso (Kanban → Chat ficava vazio).
+  useEffect(() => {
+    const raw = searchParams.get('c')
+    if (!raw) return
+    let fromUrl = raw
+    try {
+      fromUrl = decodeURIComponent(raw)
+    } catch {
+      /* raw já ok */
+    }
+    if (fromUrl) openConversation(fromUrl)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Troca de ?c= sem remount (ex.: alerta → outra conversa já estando no Chat).
   useEffect(() => {
     const raw = searchParams.get('c')
     if (!raw) return
@@ -688,8 +704,7 @@ export function Chat() {
       /* raw já ok */
     }
     if (fromUrl && fromUrl !== activeIdRef.current) openConversation(fromUrl)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [searchParams, openConversation])
 
   useEffect(() => {
     if (!activeId || !isGroupChatId(activeId)) return undefined
