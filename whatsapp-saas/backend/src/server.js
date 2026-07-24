@@ -3343,13 +3343,16 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
   }
 
   if (!message.fromMe) {
-    if (result.isNewConversation) {
-      const contactForMeta = await prisma.crmContact.findUnique({ where: { id: conversation.contactId } })
-      if (contactForMeta) {
-        trackConversationStartedEvent(prisma, { userId, contact: contactForMeta }).catch((err) =>
-          console.error("[meta] ConversationStarted:", err?.message || err),
-        )
-      }
+    // ConversationStarted: 1ª mensagem INBOUND do contato (idempotente via flag).
+    // Não depender só de isNewConversation — o sync do CRM pré-cria conversas e
+    // zerava o disparo; outbound-first também precisa do evento na 1ª resposta do lead.
+    const contactForMeta = await prisma.crmContact.findUnique({ where: { id: conversation.contactId } })
+    if (contactForMeta && !contactForMeta.conversationStartedEventSentAt) {
+      trackConversationStartedEvent(prisma, {
+        userId,
+        contact: contactForMeta,
+        eventTime: message.timestamp || new Date(),
+      }).catch((err) => console.error("[meta] ConversationStarted:", err?.message || err))
     }
 
     if (created) {

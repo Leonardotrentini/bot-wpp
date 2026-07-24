@@ -405,7 +405,6 @@ function buildFunnelEvent({
 
 function buildConversationStartedEvent({ contact, eventId, userId, integration, mode, eventTime }) {
   const stage = getFunnelStage(CONVERSATION_STARTED_EVENT)
-  const clickSec = getStoredClickAt(contact)
   return buildFunnelEvent({
     eventName: stage.eventName,
     contact,
@@ -413,7 +412,8 @@ function buildConversationStartedEvent({ contact, eventId, userId, integration, 
     userId,
     integration,
     mode,
-    eventTime: eventTime != null ? eventTime : clickSec || undefined,
+    // Preferir eventTime explícito (1ª msg). Clique fica em fbc/fbp, não no event_time.
+    eventTime,
     customData: buildFunnelCustomData({
       contentCategory: stage.contentCategory,
       eventSource: eventSourceForMode(mode),
@@ -1163,7 +1163,7 @@ async function trackContactEvent(prisma, { userId, contact }) {
   }
 }
 
-async function trackConversationStartedEvent(prisma, { userId, contact }) {
+async function trackConversationStartedEvent(prisma, { userId, contact, eventTime = null }) {
   const { integration, metaUserId, skipped, reason } = await getEnabledIntegration(prisma, userId)
   if (skipped) return { sent: false, skipped: true, reason }
 
@@ -1177,6 +1177,8 @@ async function trackConversationStartedEvent(prisma, { userId, contact }) {
   if (contactHasLpAttribution(contactReady) && !contactReady.contactEventSentAt) {
     await trackContactEvent(prisma, { userId, contact: contactReady }).catch(() => {})
   }
+
+  const eventTimeSec = toEventTimeSec(eventTime)
 
   return dispatchIdempotentMetaEvent(prisma, {
     userId: metaUserId,
@@ -1192,6 +1194,8 @@ async function trackConversationStartedEvent(prisma, { userId, contact }) {
         userId: metaUserId,
         integration,
         mode,
+        // Horário da 1ª mensagem (não do clique) — campanha otimiza no dia da conversa.
+        eventTime: eventTimeSec,
       }),
     gate: true,
   })
