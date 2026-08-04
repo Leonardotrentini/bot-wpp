@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle, Users, Calendar, Loader2 } from 'lucide-react'
+import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle, Users, Calendar, Loader2, Info, Megaphone, CheckCircle2 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -92,6 +92,183 @@ function OriginBadge({ origin }) {
       <Users className="h-3 w-3" />
       Só grupo
     </span>
+  )
+}
+
+function MetaSourceCell({ meta }) {
+  if (!meta?.hasAttribution && !meta?.qualifiedSentToMeta) {
+    return <span className="text-stone-600">—</span>
+  }
+  const sourceLabel =
+    meta.source === 'both'
+      ? 'CTWA + LP'
+      : meta.source === 'ctwa'
+        ? 'Anúncio (CTWA)'
+        : meta.source === 'lp'
+          ? 'Landing (fbclid)'
+          : null
+  return (
+    <div className="flex min-w-[140px] flex-col gap-1">
+      {meta.campaign ? (
+        <span
+          className="inline-flex max-w-[180px] items-center gap-1 truncate text-[11px] font-medium text-sky-200"
+          title={meta.campaign}
+        >
+          <Megaphone className="h-3 w-3 shrink-0 text-sky-400" />
+          {meta.campaign}
+        </span>
+      ) : meta.hasAttribution ? (
+        <span className="text-[11px] text-stone-500">Campanha sem nome</span>
+      ) : null}
+      {sourceLabel ? (
+        <span className="text-[10px] text-stone-500" title="Origem do clique Meta">
+          Veio: {sourceLabel}
+        </span>
+      ) : null}
+      {meta.campaignComputed ? (
+        <span
+          className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-300"
+          title="LeadQualified enviado ao Meta CAPI — campanha computou a conversão"
+        >
+          <CheckCircle2 className="h-3 w-3" />
+          Campanha computou
+        </span>
+      ) : meta.qualifiedSentToMeta ? (
+        <span className="text-[10px] text-amber-300/90" title="LeadQualified enviado, sem clique/atributo Meta">
+          Enviado à Meta
+        </span>
+      ) : meta.hasAttribution ? (
+        <span className="text-[10px] text-stone-500" title="Tem atribuição, mas LeadQualified ainda não foi enviado">
+          Ainda não computou
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+const MEMBER_ROW_HEIGHT = 68
+const MEMBER_ROW_OVERSCAN = 10
+
+/** Janela virtual simples para não montar milhares de <tr> no DOM. */
+function useVirtualRows(itemCount, scrollRef, resetKey = 0) {
+  const [scrollTop, setScrollTop] = useState(0)
+  const [viewportH, setViewportH] = useState(560)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return undefined
+    const onScroll = () => setScrollTop(el.scrollTop)
+    const sync = () => setViewportH(el.clientHeight || 560)
+    sync()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      ro?.disconnect()
+    }
+  }, [scrollRef, itemCount, resetKey])
+
+  return useMemo(() => {
+    const start = Math.max(0, Math.floor(scrollTop / MEMBER_ROW_HEIGHT) - MEMBER_ROW_OVERSCAN)
+    const end = Math.min(
+      itemCount,
+      Math.ceil((scrollTop + viewportH) / MEMBER_ROW_HEIGHT) + MEMBER_ROW_OVERSCAN,
+    )
+    return {
+      start,
+      end,
+      topPad: start * MEMBER_ROW_HEIGHT,
+      bottomPad: Math.max(0, (itemCount - end) * MEMBER_ROW_HEIGHT),
+      totalHeight: itemCount * MEMBER_ROW_HEIGHT,
+    }
+  }, [scrollTop, viewportH, itemCount])
+}
+
+function MemberTableRow({ m, selected, periodUsesTagDate, onToggle, onRemoveTag }) {
+  return (
+    <tr className="border-b border-brand-800/80 hover:bg-white/[0.02]" style={{ height: MEMBER_ROW_HEIGHT }}>
+      <td className="px-3 py-3 align-middle">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggle(m.id)}
+          className="vg-checkbox"
+          aria-label={`Selecionar ${m.name}`}
+        />
+      </td>
+      <td className="px-5 py-3">
+        <div className="flex items-center gap-2">
+          <img src={m.avatar} alt="" className="h-9 w-9 rounded-full border border-brand-700" loading="lazy" />
+          <div className="min-w-0">
+            {m.conversationId ? (
+              <Link
+                to={`/dashboard/chat?c=${encodeURIComponent(m.conversationId)}`}
+                className="font-medium text-stone-100 hover:text-accent-300 hover:underline"
+              >
+                {m.name}
+              </Link>
+            ) : (
+              <span className="font-medium text-stone-100">{m.name}</span>
+            )}
+          </div>
+        </div>
+      </td>
+      <td className="px-5 py-3 text-stone-400">{m.phone}</td>
+      <td className="px-5 py-3">
+        <OriginBadge origin={m.origin || (m.hasX1 ? 'x1' : 'group')} />
+      </td>
+      <td className="px-5 py-3">
+        <MetaSourceCell meta={m.metaAttribution} />
+      </td>
+      <td className="max-w-[200px] px-5 py-3 text-stone-300">
+        <span className="line-clamp-2">
+          {(m.groupNames || (m.groups || []).filter((g) => g !== 'WhatsApp direto')).join(', ') || '—'}
+        </span>
+      </td>
+      <td className="px-5 py-3">
+        <div className="flex flex-wrap gap-1">
+          {(m.crmTags || []).map((t) => (
+            <Badge key={`${m.id}-crm-${t}`} variant="success" title="Tag do CRM (chat)">
+              {displayTag(normalizeTag(t))}
+            </Badge>
+          ))}
+          {(m.tags || []).length ? (
+            m.tags.map((t) => {
+              const norm = normalizeTag(t)
+              if (norm === 'admin') {
+                return (
+                  <Badge key={`${m.id}-admin`} variant="warning">
+                    admin
+                  </Badge>
+                )
+              }
+              return (
+                <span
+                  key={`${m.id}-${norm}`}
+                  className="inline-flex items-center gap-0.5 rounded-full border border-brand-600 bg-brand-800/80 py-0.5 pl-2.5 pr-1 text-xs text-stone-200"
+                >
+                  {displayTag(norm)}
+                  <button
+                    type="button"
+                    className="cursor-pointer rounded p-0.5 text-stone-500 hover:bg-white/10 hover:text-accent-400"
+                    aria-label={`Remover tag ${displayTag(norm)}`}
+                    onClick={() => onRemoveTag(m.id, norm)}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              )
+            })
+          ) : !(m.crmTags || []).length ? (
+            <span className="text-stone-600">—</span>
+          ) : null}
+        </div>
+      </td>
+      <td className="px-5 py-3 text-xs text-stone-500">
+        {fmtActivity(periodUsesTagDate ? m.tagAppliedAt || m.lastActivity : m.lastActivity)}
+      </td>
+    </tr>
   )
 }
 
@@ -216,6 +393,9 @@ export function Members() {
       if (originFilter) params.origin = originFilter
       if (dateFrom) params.dateFrom = dateFrom
       if (dateTo) params.dateTo = dateTo
+      // Com tag + período: filtrar pela data em que a tag foi adicionada (não última atividade).
+      if (tagFilter && (dateFrom || dateTo)) params.dateMode = 'tag'
+      else if (dateFrom || dateTo) params.dateMode = 'activity'
       if (debouncedQ.trim()) params.q = debouncedQ.trim()
       const { data } = await getMembers(params, { signal: controller.signal })
       if (controller.signal.aborted) return
@@ -302,22 +482,12 @@ export function Members() {
     [apiMembers, persistStore],
   )
 
+  const periodUsesTagDate = Boolean(tagFilter && (dateFrom || dateTo))
+
   // Enquanto a API responde, pré-filtra a lista local (feedback imediato no "Hoje", etc.).
   const displayedMembers = useMemo(() => {
     if (!refreshing) return members
     let list = members
-    if (dateFrom || dateTo) {
-      const from = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null
-      const to = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null
-      list = list.filter((m) => {
-        const last = new Date(m.lastActivity).getTime()
-        if (Number.isNaN(last)) return false
-        if (from != null && last < from) return false
-        if (to != null && last > to) return false
-        return true
-      })
-    }
-    if (originFilter) list = list.filter((m) => (m.origin || (m.hasX1 ? 'x1' : 'group')) === originFilter)
     if (tagFilter) {
       const t = tagFilter.toLowerCase()
       list = list.filter(
@@ -326,15 +496,44 @@ export function Members() {
           (m.crmTags || []).some((x) => String(x).toLowerCase() === t),
       )
     }
+    if (dateFrom || dateTo) {
+      const from = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null
+      const to = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null
+      const useTagDate = Boolean(tagFilter)
+      list = list.filter((m) => {
+        const iso = useTagDate
+          ? m.tagAppliedAt ||
+            (m.crmTagLinks || []).find((l) => String(l.name || '').toLowerCase() === tagFilter.toLowerCase())
+              ?.createdAt
+          : m.lastActivity
+        if (useTagDate && !iso) return false
+        const ts = new Date(iso).getTime()
+        if (Number.isNaN(ts)) return false
+        if (from != null && ts < from) return false
+        if (to != null && ts > to) return false
+        return true
+      })
+    }
+    if (originFilter) list = list.filter((m) => (m.origin || (m.hasX1 ? 'x1' : 'group')) === originFilter)
     if (debouncedQ.trim()) {
       const qn = debouncedQ.trim().toLowerCase()
       list = list.filter((m) => {
-        const hay = [m.name, m.phone, ...(m.groupNames || m.groups || [])].join(' ').toLowerCase()
+        const hay = [m.name, m.phone, ...(m.groupNames || m.groups || []), m.metaAttribution?.campaign]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
         return hay.includes(qn)
       })
     }
     return list
   }, [members, refreshing, dateFrom, dateTo, originFilter, tagFilter, debouncedQ])
+
+  const tableScrollRef = useRef(null)
+  const virtual = useVirtualRows(displayedMembers.length, tableScrollRef, loading ? 1 : 0)
+  const virtualRows = useMemo(
+    () => displayedMembers.slice(virtual.start, virtual.end),
+    [displayedMembers, virtual.start, virtual.end],
+  )
 
   const allVisibleSelected =
     displayedMembers.length > 0 && displayedMembers.every((m) => selected.has(m.id))
@@ -513,19 +712,41 @@ export function Members() {
           : 'Nenhum lead para exportar.',
       )
     }
-    const header = ['nome', 'telefone', 'origem', 'grupos', 'tags', 'ultima_atividade']
-    const rows = toExport.map((m) =>
-      [
+    const header = [
+      'nome',
+      'telefone',
+      'origem',
+      'campanha_meta',
+      'veio_de',
+      'campanha_computou',
+      'grupos',
+      'tags',
+      periodUsesTagDate ? 'tag_adicionada' : 'ultima_atividade',
+    ]
+    const rows = toExport.map((m) => {
+      const ma = m.metaAttribution || {}
+      const veio =
+        ma.source === 'both'
+          ? 'ctwa+lp'
+          : ma.source === 'ctwa'
+            ? 'ctwa'
+            : ma.source === 'lp'
+              ? 'lp'
+              : ''
+      return [
         m.name,
         m.phone,
         m.origin === 'both' ? 'nos_dois' : m.origin === 'x1' ? 'lead_1x1' : 'so_grupo',
+        ma.campaign || '',
+        veio,
+        ma.campaignComputed ? 'sim' : ma.qualifiedSentToMeta ? 'enviado_sem_atribuicao' : 'nao',
         (m.groupNames || (m.groups || []).filter((g) => g !== 'WhatsApp direto')).join('; '),
         [...(m.crmTags || []), ...(m.tags || [])].join('; '),
-        m.lastActivity || '',
+        periodUsesTagDate ? m.tagAppliedAt || m.lastActivity || '' : m.lastActivity || '',
       ]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)
-        .join(','),
-    )
+        .join(',')
+    })
     const blob = new Blob([`\uFEFF${header.join(',')}\n${rows.join('\n')}`], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -680,6 +901,11 @@ export function Members() {
                     ? formatYmdShort(dateFrom)
                     : `${dateFrom ? formatYmdShort(dateFrom) : '…'} → ${dateTo ? formatYmdShort(dateTo) : '…'}`}
                 </strong>
+                {periodUsesTagDate || meta?.dateMode === 'tag' ? (
+                  <span className="text-stone-500"> (pela data da tag)</span>
+                ) : (
+                  <span className="text-stone-500"> (pela última atividade)</span>
+                )}
               </>
             ) : null}
           </p>
@@ -689,6 +915,18 @@ export function Members() {
             <span className="text-sky-300/90">{meta.filteredGroupOnly ?? 0} só grupo</span>
             {' · '}
             <span className="text-violet-300/90">{meta.filteredBoth ?? 0} nos dois</span>
+            {meta.withMetaAttribution != null ? (
+              <>
+                {' · '}
+                <span className="text-sky-300/80">{meta.withMetaAttribution} com Meta</span>
+              </>
+            ) : null}
+            {meta.campaignComputed != null ? (
+              <>
+                {' · '}
+                <span className="text-emerald-300/80">{meta.campaignComputed} campanha computou</span>
+              </>
+            ) : null}
             {meta.crmLeadsTotal != null ? (
               <span className="text-stone-600"> · base CRM: {meta.crmLeadsTotal}</span>
             ) : null}
@@ -847,18 +1085,45 @@ export function Members() {
           </div>
         </div>
         {(period || tagFilter || originFilter) && (
-          <p className="mb-3 text-xs text-stone-500">
-            Dica: combine <strong className="text-stone-400">tag QUALIFICADO</strong> + período para ver quantos
-            qualificados tiveram atividade nessas datas.
-            {period ? (
-              <button
-                type="button"
-                className="ml-2 cursor-pointer text-accent-400 hover:underline"
-                onClick={() => selectPeriod('')}
-              >
-                Limpar período
-              </button>
-            ) : null}
+          <p className="mb-3 flex flex-wrap items-start gap-1.5 text-xs text-stone-500">
+            <span
+              className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-brand-600 text-stone-400"
+              title={
+                periodUsesTagDate
+                  ? 'Com tag + período, o filtro usa a data em que a tag foi adicionada no CRM (não a última mensagem).'
+                  : 'Sem tag selecionada, o período filtra pela última atividade do lead.'
+              }
+            >
+              <Info className="h-2.5 w-2.5" aria-hidden />
+            </span>
+            <span>
+              {periodUsesTagDate ? (
+                <>
+                  Período filtra pela <strong className="text-stone-400">data em que a tag foi adicionada</strong>
+                  {tagFilter ? (
+                    <>
+                      {' '}
+                      (<strong className="text-accent-300">{displayTag(tagFilter)}</strong>)
+                    </>
+                  ) : null}
+                  , não pela última atividade.
+                </>
+              ) : (
+                <>
+                  Dica: combine <strong className="text-stone-400">tag QUALIFICADO</strong> + período para ver
+                  quantos receberam essa tag nas datas escolhidas.
+                </>
+              )}
+              {period ? (
+                <button
+                  type="button"
+                  className="ml-2 cursor-pointer text-accent-400 hover:underline"
+                  onClick={() => selectPeriod('')}
+                >
+                  Limpar período
+                </button>
+              ) : null}
+            </span>
           </p>
         )}
 
@@ -869,11 +1134,15 @@ export function Members() {
           </div>
         ) : displayedMembers.length === 0 && !refreshing ? (
           <p className="px-5 py-8 text-sm text-stone-500">
-            {period === '1d'
-              ? 'Nenhum lead com atividade hoje.'
-              : period
-                ? 'Nenhum lead com atividade no período selecionado.'
-                : 'Nenhum lead encontrado com os filtros atuais.'}
+            {periodUsesTagDate
+              ? period === '1d'
+                ? 'Nenhum lead recebeu essa tag hoje.'
+                : 'Nenhum lead recebeu essa tag no período selecionado.'
+              : period === '1d'
+                ? 'Nenhum lead com atividade hoje.'
+                : period
+                  ? 'Nenhum lead com atividade no período selecionado.'
+                  : 'Nenhum lead encontrado com os filtros atuais.'}
             {!period && groups.length === 0 && meta?.crmLeadsTotal === 0
               ? ' Sincronize seus grupos em Conectar WhatsApp → Grupos.'
               : null}
@@ -883,20 +1152,21 @@ export function Members() {
           </p>
         ) : (
           <div
-            className={`relative -mx-5 overflow-x-auto transition-opacity duration-150 ${
+            ref={tableScrollRef}
+            className={`relative -mx-5 max-h-[min(70vh,720px)] overflow-auto transition-opacity duration-150 ${
               refreshing ? 'pointer-events-none opacity-55' : 'opacity-100'
             }`}
           >
             {refreshing ? (
-              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
+              <div className="pointer-events-none sticky top-0 z-10 flex justify-center pt-3">
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-accent-500/35 bg-brand-950/95 px-3 py-1 text-[11px] text-accent-200 shadow-lg shadow-black/40">
                   <Loader2 className="h-3 w-3 animate-spin text-accent-400" />
                   Aplicando filtro… {Math.round(loadProgress)}%
                 </span>
               </div>
             ) : null}
-            <table className="w-full min-w-[720px] text-sm">
-              <thead>
+            <table className="w-full min-w-[900px] text-sm">
+              <thead className="sticky top-0 z-[5] bg-brand-950/95 backdrop-blur-sm">
                 <tr className="border-y border-brand-800 text-left text-stone-400">
                   <th className="w-10 px-3 py-3">
                     <input
@@ -911,91 +1181,45 @@ export function Members() {
                   <th className="px-5 py-3">Pessoa</th>
                   <th className="px-5 py-3">Telefone</th>
                   <th className="px-5 py-3">Origem</th>
+                  <th className="px-5 py-3">
+                    <span className="inline-flex items-center gap-1">
+                      Meta / campanha
+                      <span
+                        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-brand-600"
+                        title="Se veio de anúncio Meta (CTWA/LP), nome da campanha e se o LeadQualified foi enviado (campanha computou)."
+                      >
+                        <Info className="h-2 w-2" aria-hidden />
+                      </span>
+                    </span>
+                  </th>
                   <th className="px-5 py-3">Grupos</th>
                   <th className="px-5 py-3">Tags</th>
-                  <th className="px-5 py-3">Última atividade</th>
+                  <th className="px-5 py-3">
+                    {periodUsesTagDate ? 'Tag adicionada' : 'Última atividade'}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {displayedMembers.map((m) => (
-                  <tr key={m.id} className="border-b border-brand-800/80 hover:bg-white/[0.02]">
-                    <td className="px-3 py-3 align-middle">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(m.id)}
-                        onChange={() => toggleRow(m.id)}
-                        className="vg-checkbox"
-                        aria-label={`Selecionar ${m.name}`}
-                      />
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-2">
-                        <img src={m.avatar} alt="" className="h-9 w-9 rounded-full border border-brand-700" />
-                        <div className="min-w-0">
-                          {m.conversationId ? (
-                            <Link
-                              to={`/dashboard/chat?c=${encodeURIComponent(m.conversationId)}`}
-                              className="font-medium text-stone-100 hover:text-accent-300 hover:underline"
-                            >
-                              {m.name}
-                            </Link>
-                          ) : (
-                            <span className="font-medium text-stone-100">{m.name}</span>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-stone-400">{m.phone}</td>
-                    <td className="px-5 py-3">
-                      <OriginBadge origin={m.origin || (m.hasX1 ? 'x1' : 'group')} />
-                    </td>
-                    <td className="max-w-[200px] px-5 py-3 text-stone-300">
-                      <span className="line-clamp-2">
-                        {(m.groupNames || (m.groups || []).filter((g) => g !== 'WhatsApp direto')).join(', ') || '—'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {(m.crmTags || []).map((t) => (
-                          <Badge key={`${m.id}-crm-${t}`} variant="success" title="Tag do CRM (chat)">
-                            {displayTag(normalizeTag(t))}
-                          </Badge>
-                        ))}
-                        {(m.tags || []).length ? (
-                          m.tags.map((t) => {
-                            const norm = normalizeTag(t)
-                            if (norm === 'admin') {
-                              return (
-                                <Badge key={`${m.id}-admin`} variant="warning">
-                                  admin
-                                </Badge>
-                              )
-                            }
-                            return (
-                              <span
-                                key={`${m.id}-${norm}`}
-                                className="inline-flex items-center gap-0.5 rounded-full border border-brand-600 bg-brand-800/80 py-0.5 pl-2.5 pr-1 text-xs text-stone-200"
-                              >
-                                {displayTag(norm)}
-                                <button
-                                  type="button"
-                                  className="cursor-pointer rounded p-0.5 text-stone-500 hover:bg-white/10 hover:text-accent-400"
-                                  aria-label={`Remover tag ${displayTag(norm)}`}
-                                  onClick={() => removeTagFromMember(m.id, norm)}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </span>
-                            )
-                          })
-                        ) : !(m.crmTags || []).length ? (
-                          <span className="text-stone-600">—</span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-xs text-stone-500">{fmtActivity(m.lastActivity)}</td>
+                {virtual.topPad > 0 ? (
+                  <tr aria-hidden>
+                    <td colSpan={8} style={{ height: virtual.topPad, padding: 0, border: 0 }} />
                   </tr>
+                ) : null}
+                {virtualRows.map((m) => (
+                  <MemberTableRow
+                    key={m.id}
+                    m={m}
+                    selected={selected.has(m.id)}
+                    periodUsesTagDate={periodUsesTagDate}
+                    onToggle={toggleRow}
+                    onRemoveTag={removeTagFromMember}
+                  />
                 ))}
+                {virtual.bottomPad > 0 ? (
+                  <tr aria-hidden>
+                    <td colSpan={8} style={{ height: virtual.bottomPad, padding: 0, border: 0 }} />
+                  </tr>
+                ) : null}
               </tbody>
             </table>
             {displayedMembers.length === 0 && refreshing ? (

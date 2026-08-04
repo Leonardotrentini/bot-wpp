@@ -121,7 +121,7 @@ const { maybeReplyWithAi } = require("./lib/crmAiAgent")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
 const { processDueContactReminders } = require("./lib/crmContactReminders")
 const { trackConversationStartedEvent } = require("./lib/metaConversions")
-const { mergeCrmContactsIntoMembers } = require("./lib/membersDirectory")
+const { mergeCrmContactsIntoMembers, resolveTagAppliedAt } = require("./lib/membersDirectory")
 
 const GROUP_SYNC_MIN_INTERVAL_MS = Number(process.env.GROUP_SYNC_MIN_INTERVAL_MS || 5 * 60 * 1000)
 const GROUP_SYNC_RATE_LIMIT_BACKOFF_MS = Number(process.env.GROUP_SYNC_RATE_LIMIT_BACKOFF_MS || 10 * 60 * 1000)
@@ -2297,33 +2297,103 @@ app.get("/api/members", authMiddleware, async (req, res) => {
     const dateTo = dateToRaw ? new Date(`${dateToRaw}T23:59:59.999`) : null
     const dateFromOk = dateFrom && !Number.isNaN(dateFrom.getTime())
     const dateToOk = dateTo && !Number.isNaN(dateTo.getTime())
+    const dateModeRaw = typeof req.query.dateMode === "string" ? req.query.dateMode.trim().toLowerCase() : ""
+    // Com tag + período: padrão = data em que a tag foi adicionada (não última atividade).
+    const dateMode =
+      dateModeRaw === "activity" || dateModeRaw === "tag"
+        ? dateModeRaw
+        : tag && (dateFromOk || dateToOk)
+          ? "tag"
+          : "activity"
 
     const groupWhere = { ...readUserFilter(req.dataScope) }
     if (groupId) groupWhere.groupJid = groupId
+    if (activeGroupsOnly) groupWhere.status = "ativo"
 
-    const groupRows = await prisma.whatsAppGroup.findMany({
-      where: groupWhere,
-      include: { participants: true },
-      orderBy: { name: "asc" },
-    })
+    const lightGroupSelect = {
+      groupJid: true,
+      name: true,
+      status: true,
+      memberCount: true,
+      participantsSyncedAt: true,
+      monitoringEnabled: true,
+      activatedAt: true,
+      image: true,
+      lastMessage: true,
+      lastMessageAt: true,
+      description: true,
+      announce: true,
+      restrict: true,
+      owner: true,
+    }
+
+    const membersGroupSelect = {
+      ...lightGroupSelect,
+      participants: {
+        select: {
+          participantJid: true,
+          name: true,
+          phone: true,
+          role: true,
+          status: true,
+          lastSyncedAt: true,
+          leftAt: true,
+          createdAt: true,
+        },
+      },
+    }
+
+    const crmContactSelect = {
+      id: true,
+      remoteJid: true,
+      phone: true,
+      name: true,
+      pushName: true,
+      avatarUrl: true,
+      isLid: true,
+      customFields: true,
+      lastSeenAt: true,
+      createdAt: true,
+      qualifiedEventSentAt: true,
+      quoteEventSentAt: true,
+      purchaseEventSentAt: true,
+      contactEventSentAt: true,
+      conversation: { select: { id: true, lastMessageAt: true } },
+      tags: {
+        select: {
+          createdAt: true,
+          tag: { select: { name: true } },
+        },
+      },
+    }
+
+    // Dropdown de grupos: escopo completo (leve). Merge: só grupos do filtro (com participantes).
+    const [groupRows, allGroupRows, crmContacts] = await Promise.all([
+      prisma.whatsAppGroup.findMany({
+        where: groupWhere,
+        select: membersGroupSelect,
+        orderBy: { name: "asc" },
+      }),
+      prisma.whatsAppGroup.findMany({
+        where: readUserFilter(req.dataScope),
+        select: lightGroupSelect,
+        orderBy: [{ status: "asc" }, { name: "asc" }],
+      }),
+      prisma.crmContact.findMany({
+        where: readUserFilter(req.dataScope),
+        select: crmContactSelect,
+        orderBy: { updatedAt: "desc" },
+      }),
+    ])
 
     const map = new Map()
     for (const row of groupRows) {
       const groupApi = getGroupApiPayload(row)
-      if (activeGroupsOnly && groupApi.status !== "ativo") continue
-      for (const p of row.participants) {
+      for (const p of row.participants || []) {
         mergeGlobalMember(map, p, groupApi)
       }
     }
 
-    const crmContacts = await prisma.crmContact.findMany({
-      where: readUserFilter(req.dataScope),
-      include: {
-        conversation: { select: { id: true, lastMessageAt: true } },
-        tags: { include: { tag: { select: { name: true } } } },
-      },
-      orderBy: { updatedAt: "desc" },
-    })
     const crmMerge = mergeCrmContactsIntoMembers(map, crmContacts, {
       fallbackAvatar: (seed) => fallbackGroupImage(seed),
     })
@@ -2346,30 +2416,7 @@ app.get("/api/members", authMiddleware, async (req, res) => {
     })
 
     if (activeGroupsOnly) {
-      const activeIds = new Set(
-        (
-          await prisma.whatsAppGroup.findMany({
-            where: { ...readUserFilter(req.dataScope), status: "ativo" },
-            select: { groupJid: true },
-          })
-        ).map((g) => g.groupJid),
-      )
-      members = members
-        .map((m) => {
-          const pairs = (m.groupIds || [])
-            .map((id, i) => ({ id, name: m.groups[i] }))
-            .filter((p) => activeIds.has(p.id))
-          return {
-            ...m,
-            groupIds: pairs.map((p) => p.id),
-            groups: pairs.map((p) => p.name),
-            groupNames: pairs.map((p) => p.name).filter((n) => n && n !== "WhatsApp direto"),
-            hasGroup: pairs.length > 0,
-            origin:
-              m.hasX1 && pairs.length > 0 ? "both" : m.hasX1 ? "x1" : pairs.length > 0 ? "group" : m.origin,
-          }
-        })
-        .filter((m) => m.hasGroup || m.hasX1 || m.isCrmLead)
+      members = members.filter((m) => m.hasGroup || m.hasX1 || m.isCrmLead)
     }
 
     if (groupId) {
@@ -2386,18 +2433,39 @@ app.get("/api/members", authMiddleware, async (req, res) => {
         return local.includes(tagNorm) || crm.includes(tagNorm)
       })
     }
+
+    // Anexa data em que a tag filtrada foi aplicada (CRM) para UI e filtro de período.
+    if (tag) {
+      members = members.map((m) => ({
+        ...m,
+        tagAppliedAt: resolveTagAppliedAt(m, tag),
+      }))
+    }
+
     if (dateFromOk || dateToOk) {
+      const useTagDate = dateMode === "tag" && Boolean(tag)
       members = members.filter((m) => {
-        const last = new Date(m.lastActivity).getTime()
-        if (Number.isNaN(last)) return false
-        if (dateFromOk && last < dateFrom.getTime()) return false
-        if (dateToOk && last > dateTo.getTime()) return false
+        const iso = useTagDate ? m.tagAppliedAt || resolveTagAppliedAt(m, tag) : m.lastActivity
+        // Sem data da tag no CRM → não entra no filtro por data da tag.
+        if (useTagDate && !iso) return false
+        const ts = new Date(iso).getTime()
+        if (Number.isNaN(ts)) return false
+        if (dateFromOk && ts < dateFrom.getTime()) return false
+        if (dateToOk && ts > dateTo.getTime()) return false
         return true
       })
     }
     if (q) {
       members = members.filter((m) => {
-        const hay = [m.name, m.phone, ...(m.groupNames || m.groups || []), ...(m.crmTags || []), ...(m.tags || [])]
+        const hay = [
+          m.name,
+          m.phone,
+          ...(m.groupNames || m.groups || []),
+          ...(m.crmTags || []),
+          ...(m.tags || []),
+          m.metaAttribution?.campaign,
+        ]
+          .filter(Boolean)
           .join(" ")
           .toLowerCase()
         return hay.includes(q)
@@ -2406,14 +2474,18 @@ app.get("/api/members", authMiddleware, async (req, res) => {
 
     members.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"))
 
-    const groups = await readCachedGroups(req.user.sub)
-    const groupsWithParticipants = await prisma.whatsAppGroup.count({
-      where: { userId: req.user.sub, participantsSyncedAt: { not: null } },
-    })
+    // Dropdown + meta: lista leve de todos os grupos do escopo (sem participantes/JSON pesado).
+    const groups = allGroupRows
+      .filter((row) => row.monitoringEnabled || isPlausibleWhatsAppGroup(row))
+      .map(getGroupApiPayload)
+    const groupsWithParticipants = allGroupRows.filter((row) => row.participantsSyncedAt != null).length
 
     const x1Only = members.filter((m) => m.origin === "x1").length
     const groupOnly = members.filter((m) => m.origin === "group").length
     const both = members.filter((m) => m.origin === "both").length
+    const withMetaAttribution = members.filter((m) => m.metaAttribution?.hasAttribution).length
+    const qualifiedSentToMeta = members.filter((m) => m.metaAttribution?.qualifiedSentToMeta).length
+    const campaignComputed = members.filter((m) => m.metaAttribution?.campaignComputed).length
 
     res.json({
       members,
@@ -2430,6 +2502,10 @@ app.get("/api/members", authMiddleware, async (req, res) => {
         filteredX1Only: x1Only,
         filteredGroupOnly: groupOnly,
         filteredBoth: both,
+        withMetaAttribution,
+        qualifiedSentToMeta,
+        campaignComputed,
+        dateMode,
         dateFrom: dateFromOk ? dateFromRaw : null,
         dateTo: dateToOk ? dateToRaw : null,
         tag: tag || null,
