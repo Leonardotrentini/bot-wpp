@@ -44,12 +44,16 @@ function formatYmdShort(ymd) {
 }
 
 function ymdDaysAgo(days) {
-  const d = new Date()
-  d.setDate(d.getDate() - days)
-  return d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+  if (!days) return todayYmd()
+  // Ancora no calendário de São Paulo (evita drift de fuso com setDate local).
+  const [y, m, d] = todayYmd().split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() - days)
+  return dt.toISOString().slice(0, 10)
 }
 
 const PERIOD_PRESETS = [
+  { id: '1d', label: 'Hoje', days: 1 },
   { id: '7d', label: '7 dias', days: 7 },
   { id: '14d', label: '14 dias', days: 14 },
   { id: '30d', label: '30 dias', days: 30 },
@@ -121,6 +125,7 @@ export function Members() {
   const [dateTo, setDateTo] = useState('')
   const [calendarOpen, setCalendarOpen] = useState(false)
   const calendarRef = useRef(null)
+  const membersAbortRef = useRef(null)
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
 
@@ -144,21 +149,6 @@ export function Members() {
   }, [q])
 
   useEffect(() => {
-    if (period === 'custom') return
-    if (!period) {
-      setDateFrom('')
-      setDateTo('')
-      setCalendarOpen(false)
-      return
-    }
-    const preset = PERIOD_PRESETS.find((p) => p.id === period)
-    if (!preset?.days) return
-    setDateFrom(ymdDaysAgo(preset.days - 1))
-    setDateTo(todayYmd())
-    setCalendarOpen(false)
-  }, [period])
-
-  useEffect(() => {
     if (!calendarOpen) return undefined
     const onDoc = (e) => {
       if (calendarRef.current && !calendarRef.current.contains(e.target)) {
@@ -173,7 +163,19 @@ export function Members() {
     setPeriod(id)
     if (id === 'custom') {
       setCalendarOpen(true)
+      return
     }
+    setCalendarOpen(false)
+    if (!id) {
+      setDateFrom('')
+      setDateTo('')
+      return
+    }
+    const preset = PERIOD_PRESETS.find((p) => p.id === id)
+    if (!preset?.days) return
+    // Datas no mesmo tick → uma só requisição (evita corrida com filtro anterior).
+    setDateFrom(ymdDaysAgo(preset.days - 1))
+    setDateTo(todayYmd())
   }
 
   const persistStore = useCallback(
@@ -192,6 +194,9 @@ export function Members() {
   }, [userId])
 
   const loadMembers = useCallback(async () => {
+    membersAbortRef.current?.abort()
+    const controller = new AbortController()
+    membersAbortRef.current = controller
     setLoading(true)
     try {
       const params = { activeGroupsOnly: activeGroupsOnly ? '1' : '0' }
@@ -201,7 +206,8 @@ export function Members() {
       if (dateFrom) params.dateFrom = dateFrom
       if (dateTo) params.dateTo = dateTo
       if (debouncedQ.trim()) params.q = debouncedQ.trim()
-      const { data } = await getMembers(params)
+      const { data } = await getMembers(params, { signal: controller.signal })
+      if (controller.signal.aborted) return
       const list = data.members || []
       setApiMembers(list)
       setGroups(data.groups || [])
@@ -211,16 +217,18 @@ export function Members() {
       setTagOverrides(store.overrides)
       setMembers(applyStoreToMembers(list, store))
     } catch (err) {
+      if (controller.signal.aborted || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') return
       toast.error(err?.response?.data?.message || 'Falha ao carregar leads.')
       setApiMembers([])
       setMembers([])
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted) setLoading(false)
     }
   }, [activeGroupsOnly, groupId, tagFilter, originFilter, dateFrom, dateTo, debouncedQ, toast, userId])
 
   useEffect(() => {
     loadMembers()
+    return () => membersAbortRef.current?.abort()
   }, [loadMembers])
 
   useEffect(() => {
@@ -750,9 +758,17 @@ export function Members() {
           <p className="px-5 py-8 text-sm text-stone-500">Carregando leads…</p>
         ) : displayedMembers.length === 0 ? (
           <p className="px-5 py-8 text-sm text-stone-500">
-            Nenhum lead encontrado com os filtros atuais.
-            {groups.length === 0 && meta?.crmLeadsTotal === 0 && ' Sincronize seus grupos em Conectar WhatsApp → Grupos.'}
-            {meta?.crmLeadsTotal > 0 && ' Leads do WhatsApp direto aparecem aqui assim que chegam no CRM.'}
+            {period === '1d'
+              ? 'Nenhum lead com atividade hoje.'
+              : period
+                ? 'Nenhum lead com atividade no período selecionado.'
+                : 'Nenhum lead encontrado com os filtros atuais.'}
+            {!period && groups.length === 0 && meta?.crmLeadsTotal === 0
+              ? ' Sincronize seus grupos em Conectar WhatsApp → Grupos.'
+              : null}
+            {!period && meta?.crmLeadsTotal > 0
+              ? ' Leads do WhatsApp direto aparecem aqui assim que chegam no CRM.'
+              : null}
           </p>
         ) : (
           <div className="overflow-x-auto -mx-5">

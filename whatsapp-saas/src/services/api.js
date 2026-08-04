@@ -539,8 +539,8 @@ export async function getAutomations() {
   return mockResponse({ automations: [] })
 }
 
-export async function getMembers(params = {}) {
-  if (resolveUseRealApi()) return apiClient.get('/members', { params })
+export async function getMembers(params = {}, config = {}) {
+  if (resolveUseRealApi()) return apiClient.get('/members', { params, timeout: 60000, ...config })
   await delay()
   let members = [...mockMembersGlobal].map((m) => {
     const hasGroup = (m.groupIds || []).length > 0
