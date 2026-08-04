@@ -1,12 +1,12 @@
 const MB = 1024 * 1024
 
-export const IMAGE_MAX_BYTES = 5 * MB
+export const IMAGE_MAX_BYTES = 16 * MB
 /** Criativos de clientes costumam ficar entre ~45MB e ~430MB. */
 export const VIDEO_MAX_BYTES = 512 * MB
 /** Áudios de voz / PTT — limite conservador do WhatsApp. */
 export const AUDIO_MAX_BYTES = 16 * MB
-/** Catálogos e PDFs nos atalhos. */
-export const DOCUMENT_MAX_BYTES = 20 * MB
+/** Catálogos e PDFs na biblioteca / atalhos. */
+export const DOCUMENT_MAX_BYTES = 64 * MB
 
 export const imageMaxLabel = `${IMAGE_MAX_BYTES / MB}MB`
 export const videoMaxLabel = `${VIDEO_MAX_BYTES / MB}MB`

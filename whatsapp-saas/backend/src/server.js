@@ -2345,7 +2345,7 @@ function stripDataUrlPrefix(b64) {
 function getMessageContent(source) {
   const body = source?.body || ""
   const mergedMentions = mergeMentionsFromBody(body, source?.mentionsJson)
-  const hasMentions = mergedMentions.mentions.some((m) => m.type === "user")
+  const hasMentions = mergedMentions.mentionAll || mergedMentions.mentions.some((m) => m.type === "user")
   return {
     body,
     mediaType: source?.mediaType || "none",
@@ -2386,18 +2386,19 @@ async function deliverToGroup(instanceName, groupJid, content, userId) {
   const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
   const sendOpts = buildEvolutionSendOptions(mentionOpts)
   const text = mentionOpts.whatsappBody ?? content.body
-  if (sendOpts.mentioned?.length) {
+  if (sendOpts.mentioned?.length || sendOpts.mentionsEveryOne) {
     console.log(
       "[mentions]",
       JSON.stringify({
         groupJid,
         bodyPreview: String(text || "").slice(0, 80),
-        mentioned: sendOpts.mentioned,
+        mentioned: sendOpts.mentioned || [],
+        mentionsEveryOne: Boolean(sendOpts.mentionsEveryOne),
         debug: mentionOpts.mentionDebug,
       }),
     )
   }
-  if (content.mediaType === "image" || content.mediaType === "video") {
+  if (content.mediaType === "image" || content.mediaType === "video" || content.mediaType === "document") {
     return sendMedia(instanceName, groupJid, {
       mediatype: content.mediaType,
       media: stripDataUrlPrefix(content.mediaBase64),
@@ -2639,7 +2640,7 @@ const mentionsJsonSchema = z
 const templateBodySchema = z.object({
   name: z.string().min(1),
   body: z.string().optional(),
-  mediaType: z.enum(["none", "image", "video"]).optional(),
+  mediaType: z.enum(["none", "image", "video", "document"]).optional(),
   mediaBase64: z.string().optional().nullable(),
   mediaMime: z.string().optional().nullable(),
   mediaName: z.string().optional().nullable(),
@@ -2702,7 +2703,7 @@ app.post("/api/messages/send", authMiddleware, async (req, res) => {
       groupIds: z.array(z.string()).min(1),
       templateId: z.string().optional(),
       body: z.string().optional(),
-      mediaType: z.enum(["none", "image", "video"]).optional(),
+      mediaType: z.enum(["none", "image", "video", "document"]).optional(),
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),
@@ -2831,7 +2832,7 @@ app.post("/api/automations", authMiddleware, async (req, res) => {
       groupIds: z.array(z.string()).min(1),
       templateId: z.string().optional(),
       body: z.string().optional(),
-      mediaType: z.enum(["none", "image", "video"]).optional(),
+      mediaType: z.enum(["none", "image", "video", "document"]).optional(),
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),
@@ -2985,7 +2986,7 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
       groupIds: z.array(z.string()).min(1),
       templateId: z.string().optional(),
       body: z.string().optional(),
-      mediaType: z.enum(["none", "image", "video"]).optional(),
+      mediaType: z.enum(["none", "image", "video", "document"]).optional(),
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),
@@ -3001,7 +3002,10 @@ app.put("/api/automations/:id", authMiddleware, async (req, res) => {
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da automação inválidos." })
 
     const bodyForContent = { ...parsed.data }
-    const hasNewMedia = bodyForContent.mediaType === "image" || bodyForContent.mediaType === "video"
+    const hasNewMedia =
+      bodyForContent.mediaType === "image" ||
+      bodyForContent.mediaType === "video" ||
+      bodyForContent.mediaType === "document"
     if (!bodyForContent.templateId && hasNewMedia && !bodyForContent.mediaBase64 && existing.mediaBase64) {
       bodyForContent.mediaBase64 = existing.mediaBase64
       bodyForContent.mediaMime = existing.mediaMime

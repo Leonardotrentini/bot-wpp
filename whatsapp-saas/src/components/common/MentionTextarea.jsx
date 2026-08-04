@@ -104,7 +104,9 @@ export function MentionTextarea({
         </div>
         {children}
       </div>
-      <p className="mt-1.5 text-[11px] text-stone-500">Digite @ para mencionar · máximo 2 pessoas por mensagem</p>
+      <p className="mt-1.5 text-[11px] text-stone-500">
+        Digite @ para mencionar · @todos marca o grupo · máx. 2 pessoas (ou filtre só admins)
+      </p>
     </label>
   )
 }

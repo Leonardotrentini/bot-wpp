@@ -232,7 +232,7 @@ model MessageTemplate {
   userId       String
   name         String
   body         String?
-  mediaType    String   @default("none") // none | image | video
+  mediaType    String   @default("none") // none | image | video | document
   mediaBase64  String?
   mediaMime    String?
   mediaName    String?
@@ -501,7 +501,7 @@ model CrmQuickReply {
   shortcut    String
   title       String?
   body        String
-  mediaType   String   @default("none") // none | image | video
+  mediaType   String   @default("none") // none | image | video | document
   mediaBase64 String?
   mediaMime   String?
   mediaName   String?

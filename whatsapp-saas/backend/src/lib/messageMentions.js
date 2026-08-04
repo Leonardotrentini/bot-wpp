@@ -18,6 +18,11 @@ function escapeRegex(str) {
 
 function normalizeMentionsInput(raw) {
   if (!raw || typeof raw !== "object") return emptyMentionsJson()
+
+  if (raw.mentionAll === true) {
+    return { mentionAll: true, mentions: [] }
+  }
+
   const mentions = Array.isArray(raw.mentions)
     ? raw.mentions
         .filter((m) => m && typeof m === "object" && m.type === "user" && m.label)
@@ -102,6 +107,8 @@ function formatWhatsAppMentionBody(body, mentionsJson, participants, participant
   let text = String(body || "")
   const normalized = normalizeMentionsInput(mentionsJson)
 
+  if (normalized.mentionAll) return text
+
   for (const m of normalized.mentions) {
     if (!m.label) continue
     const p = findParticipantForMention(m, participantByJid, participants)
@@ -123,6 +130,21 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
 
   const participants = group?.participants || []
   const participantByJid = new Map(participants.map((p) => [p.participantJid, p]))
+
+  if (mentionsJson.mentionAll) {
+    return {
+      mentioned: [],
+      mentionsEveryOne: true,
+      mentionAll: true,
+      linkPreview,
+      whatsappBody: content?.body || "",
+      mentionDebug: {
+        mentionStrategy: "everyone",
+        mentionedCount: 0,
+        participantCount: participants.length,
+      },
+    }
+  }
 
   if (!mentionsJson.mentions.some((m) => m.type === "user")) {
     return {
@@ -159,6 +181,11 @@ async function resolveMentionsForGroup(prisma, userId, groupJid, content) {
 function buildEvolutionSendOptions(mentionOpts = {}) {
   const opts = {}
   if (mentionOpts.linkPreview === true) opts.linkPreview = true
+  if (mentionOpts.mentionsEveryOne === true || mentionOpts.mentionAll === true) {
+    opts.mentionsEveryOne = true
+    opts.mentionAll = true
+    return opts
+  }
   if (Array.isArray(mentionOpts.mentioned) && mentionOpts.mentioned.length) {
     opts.mentioned = mentionOpts.mentioned.slice(0, MAX_MENTIONS)
   }

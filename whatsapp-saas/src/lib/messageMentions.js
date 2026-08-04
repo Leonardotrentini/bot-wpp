@@ -1,4 +1,5 @@
 export const MAX_MENTIONS = 2
+export const MENTION_ALL_LABEL = 'todos'
 
 export function emptyMentionsJson() {
   return { mentionAll: false, mentions: [] }
@@ -10,6 +11,11 @@ export function countUserMentions(mentionsJson) {
 
 export function normalizeMentionsJson(raw) {
   if (!raw || typeof raw !== 'object') return emptyMentionsJson()
+
+  if (raw.mentionAll === true) {
+    return { mentionAll: true, mentions: [] }
+  }
+
   const mentions = Array.isArray(raw.mentions)
     ? raw.mentions
         .filter((m) => m && m.type === 'user' && m.label)
@@ -36,7 +42,7 @@ export function normalizeMentionsJson(raw) {
 
 export function appendComposerFields(payload, form) {
   const mentionsJson = normalizeMentionsJson(form.mentionsJson)
-  if (mentionsJson.mentions.length) {
+  if (mentionsJson.mentionAll || mentionsJson.mentions.length) {
     payload.mentionsJson = mentionsJson
   }
   payload.linkPreview = form.linkPreview !== false
@@ -56,8 +62,15 @@ export function isMemberMentionable(member) {
   return phone.length === 10 || phone.length === 11
 }
 
-export function filterMembersForMention(members, groupIds, query = '') {
+export function isMemberAdmin(member) {
+  if (!member) return false
+  if (member.role === 'admin' || member.role === 'superadmin') return true
+  return Array.isArray(member.tags) && member.tags.includes('admin')
+}
+
+export function filterMembersForMention(members, groupIds, query = '', { adminsOnly = false } = {}) {
   let list = (members || []).filter(isMemberMentionable)
+  if (adminsOnly) list = list.filter(isMemberAdmin)
   if (groupIds?.length) {
     list = list.filter((m) => (m.groupIds || []).some((id) => groupIds.includes(id)))
   }
@@ -89,6 +102,10 @@ export function renderMessageBodyParts(text) {
 export function highlightMentionsInText(text, mentionsJson) {
   const normalized = normalizeMentionsJson(mentionsJson)
   const labels = new Set()
+  if (normalized.mentionAll) {
+    labels.add('todos')
+    labels.add('all')
+  }
   for (const m of normalized.mentions) {
     if (m.label) labels.add(m.label)
   }

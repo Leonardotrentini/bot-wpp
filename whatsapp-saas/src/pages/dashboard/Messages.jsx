@@ -55,12 +55,12 @@ import {
   getMembers,
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, imageMaxLabel, videoMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
+import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, DOCUMENT_MAX_BYTES, imageMaxLabel, videoMaxLabel, documentMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
 import { appendComposerFields, emptyMentionsJson, highlightMentionsInText, mentionPartClass } from '../../lib/messageMentions.js'
-import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
+import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
 
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
-const FILE_ACCEPT_MEDIA = 'image/*,video/mp4,.mp4'
+const FILE_ACCEPT_MEDIA = 'image/*,video/mp4,.mp4,application/pdf,.pdf'
 const HIST_PAGE_SIZE = 20
 const AUTO_LIST_PAGE = 5
 const ACTIVITY_LIST_PAGE = 8
@@ -83,10 +83,17 @@ function isMp4Video(file) {
   return t === 'video/mp4' || t === 'application/mp4'
 }
 
+function isPdfFile(file) {
+  const t = (file.type || '').toLowerCase()
+  if (t === 'application/pdf') return true
+  return /\.pdf$/i.test(file.name || '')
+}
+
 function fileKind(file) {
   if (file.type.startsWith('image/')) return 'image'
   if (isMp4Video(file)) return 'video'
   if (file.type.startsWith('video/') || /\.(mov|avi|mkv|webm|m4v)$/i.test(file.name || '')) return 'unsupported-video'
+  if (isPdfFile(file)) return 'document'
   return 'file'
 }
 
@@ -145,7 +152,7 @@ function emptyCadStep() {
 }
 
 function inlineHasContent(f) {
-  return Boolean(f.body?.trim()) || f.mediaType === 'image' || f.mediaType === 'video'
+  return Boolean(f.body?.trim()) || f.mediaType === 'image' || f.mediaType === 'video' || f.mediaType === 'document'
 }
 
 function appendInlineMedia(payload, f) {
@@ -233,6 +240,7 @@ function mediaPreviewSrc(content) {
 function templateTypeMeta(t) {
   if (t.mediaType === 'image') return { label: 'Imagem', variant: 'success', icon: ImageIcon }
   if (t.mediaType === 'video') return { label: 'Vídeo', variant: 'warning', icon: Film }
+  if (t.mediaType === 'document') return { label: 'PDF', variant: 'default', icon: FileText }
   return { label: 'Texto', variant: 'muted', icon: FileText }
 }
 
@@ -324,7 +332,7 @@ function MessageBodyPreview({ text, mentionsJson }) {
 }
 
 function PreviewBubble({ content }) {
-  const hasMedia = content.mediaType === 'image' || content.mediaType === 'video'
+  const hasMedia = content.mediaType === 'image' || content.mediaType === 'video' || content.mediaType === 'document'
   if (!hasMedia && !content.body?.trim()) {
     return <p className="text-sm text-stone-500">A prévia da mensagem aparece aqui.</p>
   }
@@ -342,6 +350,14 @@ function PreviewBubble({ content }) {
           className="mb-2 max-h-44 w-full rounded-lg bg-black"
         />
       )}
+      {content.mediaType === 'document' && (src || content.mediaName) && (
+        <DocumentMediaPreview
+          src={src}
+          mediaName={content.mediaName}
+          mimetype={content.mediaMime}
+          className="mb-2"
+        />
+      )}
       {content.body?.trim() ? (
         <MessageBodyPreview text={content.body} mentionsJson={content.mentionsJson} />
       ) : (
@@ -351,23 +367,29 @@ function PreviewBubble({ content }) {
   )
 }
 
-function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaName, mediaSize, onPick, onClear }) {
+function mediaTypeIcon(mediaType) {
+  if (mediaType === 'image') return <ImageIcon className="h-4 w-4" />
+  if (mediaType === 'video') return <Film className="h-4 w-4" />
+  return <FileText className="h-4 w-4" />
+}
+
+function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaName, mediaSize, mediaMime, onPick, onClear }) {
   const src = mediaPreviewUrl || mediaBase64
   return (
     <div className="space-y-2">
       <p className="text-sm text-stone-200">
-        Mídia (imagem até {imageMaxLabel} ou vídeo MP4 até {videoMaxLabel})
+        Mídia (imagem até {imageMaxLabel}, vídeo MP4 até {videoMaxLabel} ou PDF até {documentMaxLabel})
       </p>
       {mediaType === 'none' ? (
         <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-700 px-4 py-4 text-sm text-stone-400 hover:bg-white/5">
-          Clique para anexar imagem ou vídeo MP4
+          Clique para anexar imagem, vídeo MP4 ou PDF
           <input type="file" accept={FILE_ACCEPT_MEDIA} className="hidden" onChange={onPick} />
         </label>
       ) : (
         <div className="rounded-lg border border-brand-800 p-3">
           <div className="flex items-center justify-between gap-2">
             <p className="inline-flex items-center gap-2 truncate text-xs text-stone-300">
-              {mediaType === 'image' ? <ImageIcon className="h-4 w-4" /> : <Film className="h-4 w-4" />}
+              {mediaTypeIcon(mediaType)}
               {mediaName || mediaType}
             </p>
             <button type="button" onClick={onClear} className="text-stone-500 hover:text-red-300" aria-label="Remover mídia">
@@ -377,6 +399,8 @@ function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaNa
           <div className="mt-2">
             {mediaType === 'image' ? (
               <ImageMediaPreview src={src} className="h-28 w-full rounded border border-brand-700 object-cover" />
+            ) : mediaType === 'document' ? (
+              <DocumentMediaPreview src={src} mediaName={mediaName} mimetype={mediaMime} />
             ) : (
               <VideoMediaPreview
                 src={src}
@@ -500,6 +524,7 @@ export function Messages({ defaultTab = 'criar' }) {
       text: templates.filter((t) => t.mediaType === 'none' || !t.mediaType).length,
       image: templates.filter((t) => t.mediaType === 'image').length,
       video: templates.filter((t) => t.mediaType === 'video').length,
+      document: templates.filter((t) => t.mediaType === 'document').length,
     }),
     [templates],
   )
@@ -602,16 +627,18 @@ export function Messages({ defaultTab = 'criar' }) {
       return
     }
     if (kind === 'file') {
-      toast.error('Tipo não suportado. Use imagem ou vídeo MP4.')
+      toast.error('Tipo não suportado. Use imagem, vídeo MP4 ou PDF.')
       return
     }
-    const max = kind === 'video' ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES
+    const max = kind === 'video' ? VIDEO_MAX_BYTES : kind === 'document' ? DOCUMENT_MAX_BYTES : IMAGE_MAX_BYTES
     if (file.size > max) {
       toast.error(`Arquivo grande demais. Limite: ${mediaLimitLabel(kind)}.`)
       return
     }
     const previewUrl = kind === 'video' || kind === 'image' ? URL.createObjectURL(file) : null
-    const mime = kind === 'video' ? 'video/mp4' : file.type || 'image/jpeg'
+    let mime = file.type || 'image/jpeg'
+    if (kind === 'video') mime = 'video/mp4'
+    if (kind === 'document') mime = 'application/pdf'
     const dataUrl = await readFileAsDataUrl(file)
     apply({
       mediaType: kind,
@@ -985,7 +1012,7 @@ export function Messages({ defaultTab = 'criar' }) {
     const base =
       f.source === 'template'
         ? templates.find((t) => t.id === f.templateId)?.name || 'Disparo'
-        : f.body.trim().slice(0, 24) || (f.mediaType === 'video' ? 'Vídeo' : f.mediaType === 'image' ? 'Imagem' : 'Disparo')
+        : f.body.trim().slice(0, 24) || (f.mediaType === 'video' ? 'Vídeo' : f.mediaType === 'document' ? 'PDF' : f.mediaType === 'image' ? 'Imagem' : 'Disparo')
     const timeLabel = f.frequency === 'once' ? (f.scheduledAt ? f.scheduledAt.replace('T', ' ') : '') : f.timeOfDay
     const name = f.name.trim() || `${base}${timeLabel ? ` • ${timeLabel}` : ''}`
     const payload = { name, cadenceId: activeCadence.id, groupIds: f.groupIds, frequency: f.frequency, status: f.status }
@@ -1183,10 +1210,12 @@ export function Messages({ defaultTab = 'criar' }) {
                 <option value="text">Texto</option>
                 <option value="image">Imagem</option>
                 <option value="video">Vídeo</option>
+                <option value="document">PDF</option>
               </Select>
               {templates.length > 0 && (
                 <span className="hidden text-xs text-stone-500 sm:inline">
-                  {templateTypeStats.text} texto • {templateTypeStats.image} imagem • {templateTypeStats.video} vídeo
+                  {templateTypeStats.text} texto • {templateTypeStats.image} imagem • {templateTypeStats.video} vídeo •{' '}
+                  {templateTypeStats.document} PDF
                 </span>
               )}
             </div>
@@ -1215,7 +1244,7 @@ export function Messages({ defaultTab = 'criar' }) {
                   <div>
                     <p className="font-medium text-stone-100">Nenhuma mensagem na biblioteca</p>
                     <p className="mt-1 text-sm text-stone-400">
-                      Crie modelos de texto, imagem ou vídeo para reutilizar em disparos e cadências.
+                      Crie modelos de texto, imagem, vídeo ou PDF para reutilizar em disparos e cadências.
                     </p>
                   </div>
                   <Button className="gap-2" onClick={openNewTemplate}>
@@ -1298,6 +1327,7 @@ export function Messages({ defaultTab = 'criar' }) {
                   mediaPreviewUrl={autoForm.mediaPreviewUrl}
                   mediaName={autoForm.mediaName}
                   mediaSize={autoForm.mediaSize}
+                  mediaMime={autoForm.mediaMime}
                   onPick={onPickAutoMedia}
                   onClear={clearAutoMedia}
                 />
@@ -1784,6 +1814,7 @@ export function Messages({ defaultTab = 'criar' }) {
                         mediaPreviewUrl={cadStep.mediaPreviewUrl}
                         mediaName={cadStep.mediaName}
                         mediaSize={cadStep.mediaSize}
+                        mediaMime={cadStep.mediaMime}
                         onPick={onPickCadMedia}
                         onClear={clearCadMedia}
                       />
@@ -1955,6 +1986,7 @@ export function Messages({ defaultTab = 'criar' }) {
             mediaPreviewUrl={tplForm.mediaPreviewUrl}
             mediaName={tplForm.mediaName}
             mediaSize={tplForm.mediaSize}
+            mediaMime={tplForm.mediaMime}
             onPick={onPickMedia}
             onClear={clearMedia}
           />

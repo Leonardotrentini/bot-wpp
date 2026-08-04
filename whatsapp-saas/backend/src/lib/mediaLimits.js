@@ -1,7 +1,7 @@
 const MB = 1024 * 1024
 
 /** Binário máximo (bytes) antes do base64. */
-const IMAGE_MAX_BYTES = Number(process.env.MEDIA_MAX_IMAGE_BYTES || 5 * MB)
+const IMAGE_MAX_BYTES = Number(process.env.MEDIA_MAX_IMAGE_BYTES || 16 * MB)
 const VIDEO_MAX_BYTES = Number(process.env.MEDIA_MAX_VIDEO_BYTES || 512 * MB)
 
 const AUDIO_MAX_BYTES = Number(process.env.MEDIA_MAX_AUDIO_BYTES || 16 * MB)
@@ -18,7 +18,7 @@ const AUDIO_MAX_BASE64_LEN = Number(
   process.env.MEDIA_MAX_AUDIO_BASE64_LEN || Math.ceil((AUDIO_MAX_BYTES * 4) / 3) + 512,
 )
 
-const DOCUMENT_MAX_BYTES = Number(process.env.MEDIA_MAX_DOCUMENT_BYTES || 20 * MB)
+const DOCUMENT_MAX_BYTES = Number(process.env.MEDIA_MAX_DOCUMENT_BYTES || 64 * MB)
 
 const DOCUMENT_MAX_BASE64_LEN = Number(
   process.env.MEDIA_MAX_DOCUMENT_BASE64_LEN || Math.ceil((DOCUMENT_MAX_BYTES * 4) / 3) + 1024,
