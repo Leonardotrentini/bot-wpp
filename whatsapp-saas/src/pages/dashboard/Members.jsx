@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle, Users, Calendar } from 'lucide-react'
+import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle, Users, Calendar, Loader2 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -109,6 +109,8 @@ export function Members() {
   const userId = user?.id || user?.email || 'default'
 
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadProgress, setLoadProgress] = useState(0)
   const [syncing, setSyncing] = useState(false)
   const [apiMembers, setApiMembers] = useState([])
   const [members, setMembers] = useState([])
@@ -120,12 +122,13 @@ export function Members() {
   const [tagFilter, setTagFilter] = useState('')
   const [originFilter, setOriginFilter] = useState('') // '' | x1 | group | both
   const [activeGroupsOnly, setActiveGroupsOnly] = useState(true)
-  const [period, setPeriod] = useState('') // '' = todo período | 7d | 14d | 30d | custom
+  const [period, setPeriod] = useState('') // '' = todo período | 1d | 7d | 14d | 30d | custom
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [calendarOpen, setCalendarOpen] = useState(false)
   const calendarRef = useRef(null)
   const membersAbortRef = useRef(null)
+  const hasLoadedOnceRef = useRef(false)
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
 
@@ -160,6 +163,7 @@ export function Members() {
   }, [calendarOpen])
 
   function selectPeriod(id) {
+    if (id !== 'custom' && id === period) return
     setPeriod(id)
     if (id === 'custom') {
       setCalendarOpen(true)
@@ -197,7 +201,14 @@ export function Members() {
     membersAbortRef.current?.abort()
     const controller = new AbortController()
     membersAbortRef.current = controller
-    setLoading(true)
+    const soft = hasLoadedOnceRef.current
+    if (soft) {
+      setRefreshing(true)
+      setLoadProgress((p) => (p > 0 ? p : 8))
+    } else {
+      setLoading(true)
+      setLoadProgress(6)
+    }
     try {
       const params = { activeGroupsOnly: activeGroupsOnly ? '1' : '0' }
       if (groupId) params.groupId = groupId
@@ -208,6 +219,7 @@ export function Members() {
       if (debouncedQ.trim()) params.q = debouncedQ.trim()
       const { data } = await getMembers(params, { signal: controller.signal })
       if (controller.signal.aborted) return
+      setLoadProgress(96)
       const list = data.members || []
       setApiMembers(list)
       setGroups(data.groups || [])
@@ -216,20 +228,52 @@ export function Members() {
       setCatalogExtras(store.catalogExtras)
       setTagOverrides(store.overrides)
       setMembers(applyStoreToMembers(list, store))
+      hasLoadedOnceRef.current = true
+      setLoadProgress(100)
     } catch (err) {
       if (controller.signal.aborted || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') return
       toast.error(err?.response?.data?.message || 'Falha ao carregar leads.')
-      setApiMembers([])
-      setMembers([])
+      if (!hasLoadedOnceRef.current) {
+        setApiMembers([])
+        setMembers([])
+      }
     } finally {
-      if (!controller.signal.aborted) setLoading(false)
+      if (!controller.signal.aborted) {
+        setLoading(false)
+        setRefreshing(false)
+        window.setTimeout(() => setLoadProgress(0), 450)
+      }
     }
   }, [activeGroupsOnly, groupId, tagFilter, originFilter, dateFrom, dateTo, debouncedQ, toast, userId])
 
   useEffect(() => {
-    loadMembers()
-    return () => membersAbortRef.current?.abort()
+    // Feedback imediato ao mudar filtro (antes do debounce da API).
+    if (hasLoadedOnceRef.current) {
+      setRefreshing(true)
+      setLoadProgress((p) => (p > 0 ? p : 5))
+    }
+    const delay = hasLoadedOnceRef.current ? 120 : 0
+    const t = setTimeout(() => {
+      loadMembers()
+    }, delay)
+    return () => {
+      clearTimeout(t)
+      membersAbortRef.current?.abort()
+    }
   }, [loadMembers])
+
+  useEffect(() => {
+    if (!loading && !refreshing) return undefined
+    const id = window.setInterval(() => {
+      setLoadProgress((p) => {
+        if (p <= 0) return 8
+        if (p >= 90) return p
+        const step = p < 35 ? 6 : p < 65 ? 3.5 : 1.2
+        return Math.min(90, p + step)
+      })
+    }, 220)
+    return () => window.clearInterval(id)
+  }, [loading, refreshing])
 
   useEffect(() => {
     setMembers(applyStoreToMembers(apiMembers, { overrides: tagOverrides, catalogExtras }))
@@ -258,7 +302,39 @@ export function Members() {
     [apiMembers, persistStore],
   )
 
-  const displayedMembers = members
+  // Enquanto a API responde, pré-filtra a lista local (feedback imediato no "Hoje", etc.).
+  const displayedMembers = useMemo(() => {
+    if (!refreshing) return members
+    let list = members
+    if (dateFrom || dateTo) {
+      const from = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null
+      const to = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null
+      list = list.filter((m) => {
+        const last = new Date(m.lastActivity).getTime()
+        if (Number.isNaN(last)) return false
+        if (from != null && last < from) return false
+        if (to != null && last > to) return false
+        return true
+      })
+    }
+    if (originFilter) list = list.filter((m) => (m.origin || (m.hasX1 ? 'x1' : 'group')) === originFilter)
+    if (tagFilter) {
+      const t = tagFilter.toLowerCase()
+      list = list.filter(
+        (m) =>
+          (m.tags || []).some((x) => String(x).toLowerCase() === t) ||
+          (m.crmTags || []).some((x) => String(x).toLowerCase() === t),
+      )
+    }
+    if (debouncedQ.trim()) {
+      const qn = debouncedQ.trim().toLowerCase()
+      list = list.filter((m) => {
+        const hay = [m.name, m.phone, ...(m.groupNames || m.groups || [])].join(' ').toLowerCase()
+        return hay.includes(qn)
+      })
+    }
+    return list
+  }, [members, refreshing, dateFrom, dateTo, originFilter, tagFilter, debouncedQ])
 
   const allVisibleSelected =
     displayedMembers.length > 0 && displayedMembers.every((m) => selected.has(m.id))
@@ -598,7 +674,12 @@ export function Members() {
             {dateFrom || dateTo ? (
               <>
                 {' '}
-                · período {dateFrom || '…'} → {dateTo || '…'}
+                · período{' '}
+                <strong className="text-accent-200">
+                  {dateFrom && dateTo && dateFrom === dateTo
+                    ? formatYmdShort(dateFrom)
+                    : `${dateFrom ? formatYmdShort(dateFrom) : '…'} → ${dateTo ? formatYmdShort(dateTo) : '…'}`}
+                </strong>
               </>
             ) : null}
           </p>
@@ -630,7 +711,7 @@ export function Members() {
               <button
                 type="button"
                 onClick={() => selectPeriod('')}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium transition-colors duration-150 active:scale-[0.97] ${
                   !period
                     ? 'bg-accent-500/20 text-accent-200 shadow-sm shadow-accent-500/10'
                     : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
@@ -643,7 +724,7 @@ export function Members() {
                   key={p.id}
                   type="button"
                   onClick={() => selectPeriod(p.id)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium transition-colors duration-150 active:scale-[0.97] ${
                     period === p.id
                       ? 'bg-accent-500/20 text-accent-200 shadow-sm shadow-accent-500/10'
                       : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
@@ -662,7 +743,7 @@ export function Members() {
                       selectPeriod('custom')
                     }
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors duration-150 active:scale-[0.97] ${
                     period === 'custom'
                       ? 'bg-accent-500/20 text-accent-200 shadow-sm shadow-accent-500/10'
                       : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
@@ -703,7 +784,30 @@ export function Members() {
                 ) : null}
               </div>
             </div>
+            {refreshing || loadProgress > 0 ? (
+              <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-stone-400" aria-live="polite">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-accent-400" />
+                {Math.round(loadProgress)}%
+              </span>
+            ) : null}
           </div>
+
+          {(loading || refreshing || loadProgress > 0) && (
+            <div className="space-y-1.5" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(loadProgress)} aria-label="Progresso do carregamento">
+              <div className="flex items-center justify-between gap-3 text-[11px] text-stone-400">
+                <span>
+                  {loading ? 'Carregando leads…' : refreshing ? 'Filtrando e sincronizando com o servidor…' : 'Concluído'}
+                </span>
+                <span className="tabular-nums text-accent-300/90">{Math.round(loadProgress)}%</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-brand-800/90">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-accent-600 via-accent-400 to-accent-300 transition-[width] duration-200 ease-out"
+                  style={{ width: `${Math.max(loadProgress, 4)}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             <Select value={originFilter} onChange={(e) => setOriginFilter(e.target.value)} aria-label="Origem do lead">
@@ -747,7 +851,11 @@ export function Members() {
             Dica: combine <strong className="text-stone-400">tag QUALIFICADO</strong> + período para ver quantos
             qualificados tiveram atividade nessas datas.
             {period ? (
-              <button type="button" className="ml-2 text-accent-400 hover:underline" onClick={() => selectPeriod('')}>
+              <button
+                type="button"
+                className="ml-2 cursor-pointer text-accent-400 hover:underline"
+                onClick={() => selectPeriod('')}
+              >
                 Limpar período
               </button>
             ) : null}
@@ -755,8 +863,11 @@ export function Members() {
         )}
 
         {loading ? (
-          <p className="px-5 py-8 text-sm text-stone-500">Carregando leads…</p>
-        ) : displayedMembers.length === 0 ? (
+          <div className="flex items-center gap-2 px-5 py-10 text-sm text-stone-500">
+            <Loader2 className="h-4 w-4 animate-spin text-accent-400" />
+            Carregando leads…
+          </div>
+        ) : displayedMembers.length === 0 && !refreshing ? (
           <p className="px-5 py-8 text-sm text-stone-500">
             {period === '1d'
               ? 'Nenhum lead com atividade hoje.'
@@ -771,8 +882,20 @@ export function Members() {
               : null}
           </p>
         ) : (
-          <div className="overflow-x-auto -mx-5">
-            <table className="w-full text-sm min-w-[720px]">
+          <div
+            className={`relative -mx-5 overflow-x-auto transition-opacity duration-150 ${
+              refreshing ? 'pointer-events-none opacity-55' : 'opacity-100'
+            }`}
+          >
+            {refreshing ? (
+              <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-accent-500/35 bg-brand-950/95 px-3 py-1 text-[11px] text-accent-200 shadow-lg shadow-black/40">
+                  <Loader2 className="h-3 w-3 animate-spin text-accent-400" />
+                  Aplicando filtro… {Math.round(loadProgress)}%
+                </span>
+              </div>
+            ) : null}
+            <table className="w-full min-w-[720px] text-sm">
               <thead>
                 <tr className="border-y border-brand-800 text-left text-stone-400">
                   <th className="w-10 px-3 py-3">
@@ -826,7 +949,7 @@ export function Members() {
                     <td className="px-5 py-3">
                       <OriginBadge origin={m.origin || (m.hasX1 ? 'x1' : 'group')} />
                     </td>
-                    <td className="px-5 py-3 text-stone-300 max-w-[200px]">
+                    <td className="max-w-[200px] px-5 py-3 text-stone-300">
                       <span className="line-clamp-2">
                         {(m.groupNames || (m.groups || []).filter((g) => g !== 'WhatsApp direto')).join(', ') || '—'}
                       </span>
@@ -851,12 +974,12 @@ export function Members() {
                             return (
                               <span
                                 key={`${m.id}-${norm}`}
-                                className="inline-flex items-center gap-0.5 rounded-full border border-brand-600 bg-brand-800/80 pl-2.5 pr-1 py-0.5 text-xs text-stone-200"
+                                className="inline-flex items-center gap-0.5 rounded-full border border-brand-600 bg-brand-800/80 py-0.5 pl-2.5 pr-1 text-xs text-stone-200"
                               >
                                 {displayTag(norm)}
                                 <button
                                   type="button"
-                                  className="rounded p-0.5 text-stone-500 hover:bg-white/10 hover:text-accent-400"
+                                  className="cursor-pointer rounded p-0.5 text-stone-500 hover:bg-white/10 hover:text-accent-400"
                                   aria-label={`Remover tag ${displayTag(norm)}`}
                                   onClick={() => removeTagFromMember(m.id, norm)}
                                 >
@@ -870,11 +993,14 @@ export function Members() {
                         ) : null}
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-stone-500 text-xs">{fmtActivity(m.lastActivity)}</td>
+                    <td className="px-5 py-3 text-xs text-stone-500">{fmtActivity(m.lastActivity)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {displayedMembers.length === 0 && refreshing ? (
+              <p className="px-5 py-8 text-center text-sm text-stone-500">Filtrando leads…</p>
+            ) : null}
           </div>
         )}
         {!loading && displayedMembers.length > 0 && (
@@ -883,6 +1009,7 @@ export function Members() {
             {meta?.filteredX1Only != null
               ? ` · ${meta.filteredX1Only} 1:1 · ${meta.filteredGroupOnly} grupo · ${meta.filteredBoth} nos dois`
               : ''}
+            {refreshing ? ' · atualizando…' : ''}
           </p>
         )}
       </Card>
