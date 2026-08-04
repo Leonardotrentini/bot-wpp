@@ -2609,7 +2609,7 @@ const { validateMediaContentSize } = require("./lib/mediaLimits.js")
 const ENABLE_SCHEDULER = process.env.ENABLE_SCHEDULER !== "false"
 
 function getX1Deps() {
-  return { prisma, sendText }
+  return { prisma, sendText, sendMedia, sendWhatsAppAudio }
 }
 const SCHEDULER_CATCHUP_HOURS = Number(process.env.SCHEDULER_CATCHUP_HOURS || 6)
 const SCHEDULER_MAX_AUTOMATIONS_PER_TICK = Number(process.env.SCHEDULER_MAX_AUTOMATIONS_PER_TICK || 5)

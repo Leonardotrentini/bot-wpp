@@ -615,6 +615,10 @@ model GroupX1Delivery {
   participantName   String?
   kind              String // join | leave | test
   body              String?
+  mediaType         String    @default("none")
+  mediaBase64       String?
+  mediaMime         String?
+  mediaName         String?
   status            String    @default("pending") // pending | sending | sent | failed | skipped
   error             String?
   source            String    @default("webhook") // webhook | sync | test

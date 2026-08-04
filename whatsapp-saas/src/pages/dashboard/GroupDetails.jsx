@@ -26,6 +26,10 @@ import {
   Send,
   RefreshCw,
   ListChecks,
+  Paperclip,
+  Film,
+  FileText,
+  ImageIcon,
 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Tabs } from '../../components/common/Tabs.jsx'
@@ -41,6 +45,19 @@ import { getGroupDetails, getGroupMemberTimeline, getGroupX1Deliveries, setGroup
 import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { avatar, mockGroupSettings } from '../../utils/mockData.js'
+import {
+  QUICK_REPLY_FILE_ACCEPT,
+  attachQuickReplyMediaFromFile,
+  emptyQuickReplyMedia,
+} from '../../lib/quickReplyMedia.js'
+import {
+  DocumentMediaPreview,
+  ImageMediaPreview,
+  VideoMediaPreview,
+  formatMediaSize,
+  revokeMediaPreviewUrl,
+} from '../../components/common/MediaPreview.jsx'
+import { documentMaxLabel, imageMaxLabel, videoMaxLabel, audioMaxLabel } from '../../lib/mediaLimits.js'
 
 function normalizeTag(t) {
   return String(t || '')
@@ -146,13 +163,20 @@ function memberMatchesInactivityRule(member, rules, nowMs = Date.now()) {
 const X1_MAX_TEMPLATES = 5
 const X1_RECOMMENDED_MIN_DELAY = 20
 
+function emptyX1TemplateEntry(text = '') {
+  return {
+    text: String(text || ''),
+    ...emptyQuickReplyMedia(),
+  }
+}
+
 const DEFAULT_JOIN_TEMPLATES = [
   'Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.',
   'Bem-vindo(a) ao grupo! Qualquer dúvida, me chama aqui no privado.',
   'Oi! Que bom ter você no grupo. Posso te enviar o material no privado?',
   'Seja bem-vindo(a)! Se quiser o passo a passo, me chama no X1.',
   'Olá! Entrou no grupo agora? Me chama no privado que eu te ajudo.',
-]
+].map((text) => emptyX1TemplateEntry(text))
 
 const DEFAULT_LEAVE_TEMPLATES = [
   'Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?',
@@ -160,14 +184,111 @@ const DEFAULT_LEAVE_TEMPLATES = [
   'Saiu do grupo? Sem problema — posso te atender no privado.',
   'Notei sua saída. Se precisar de algo, estou aqui no X1.',
   'Se saiu por engano ou quiser falar à parte, me chama no privado.',
-]
+].map((text) => emptyX1TemplateEntry(text))
+
+function stripNomePlaceholder(template) {
+  return String(template || '')
+    .replace(/\{\{\s*nome\s*\}\}/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([!?.,:;])/g, '$1')
+    .trim()
+}
+
+function normalizeX1TemplateEntry(raw, { keepEmpty = true } = {}) {
+  if (raw == null) return keepEmpty ? emptyX1TemplateEntry('') : null
+  if (typeof raw === 'string') {
+    const text = stripNomePlaceholder(raw)
+    if (!text && !keepEmpty) return null
+    return emptyX1TemplateEntry(text)
+  }
+  if (typeof raw !== 'object') return keepEmpty ? emptyX1TemplateEntry('') : null
+  const text = stripNomePlaceholder(raw.text ?? raw.template ?? raw.body ?? '')
+  const mediaType = ['image', 'video', 'audio', 'document'].includes(raw.mediaType) ? raw.mediaType : 'none'
+  const mediaBase64 = mediaType !== 'none' && raw.mediaBase64 ? String(raw.mediaBase64) : null
+  const entry = {
+    text,
+    mediaType: mediaBase64 ? mediaType : 'none',
+    mediaBase64: mediaBase64 || null,
+    mediaMime: mediaBase64 ? raw.mediaMime || null : null,
+    mediaName: mediaBase64 ? raw.mediaName || null : null,
+    mediaPreviewUrl: raw.mediaPreviewUrl || null,
+    mediaSize: raw.mediaSize ?? null,
+  }
+  const hasMedia = entry.mediaType !== 'none' && Boolean(entry.mediaBase64)
+  if (!entry.text && !hasMedia && !keepEmpty) return null
+  return entry
+}
+
+function templateEntryHasContent(entry) {
+  const e = normalizeX1TemplateEntry(entry)
+  return Boolean(e.text?.trim()) || (e.mediaType !== 'none' && Boolean(e.mediaBase64))
+}
+
+function normalizeTemplatesForUi(block, fallbackTemplates = [emptyX1TemplateEntry('')]) {
+  let list = []
+  if (Array.isArray(block?.templates) && block.templates.length) {
+    list = block.templates.map((t) => normalizeX1TemplateEntry(t, { keepEmpty: true }))
+  } else if (block?.template) {
+    list = [normalizeX1TemplateEntry(block.template, { keepEmpty: true })]
+  } else {
+    list = fallbackTemplates.map((t) => normalizeX1TemplateEntry(t, { keepEmpty: true }))
+  }
+  list = list.slice(0, X1_MAX_TEMPLATES)
+  if (!list.length) list = [emptyX1TemplateEntry('')]
+  return list
+}
+
+function sanitizeX1KindBlock(block, fallbackTemplates = DEFAULT_JOIN_TEMPLATES) {
+  const uiList = normalizeTemplatesForUi(block, fallbackTemplates)
+  const filled = uiList
+    .map((t) => normalizeX1TemplateEntry(t, { keepEmpty: false }))
+    .filter(Boolean)
+    .slice(0, X1_MAX_TEMPLATES)
+    .map((t) => ({
+      text: t.text,
+      mediaType: t.mediaType,
+      mediaBase64: t.mediaBase64,
+      mediaMime: t.mediaMime,
+      mediaName: t.mediaName,
+    }))
+  const templates = filled.length
+    ? filled
+    : [
+        {
+          text: stripNomePlaceholder(fallbackTemplates[0]?.text || fallbackTemplates[0] || '') || '',
+          ...emptyQuickReplyMedia(),
+        },
+      ].map((t) => ({
+        text: t.text,
+        mediaType: 'none',
+        mediaBase64: null,
+        mediaMime: null,
+        mediaName: null,
+      }))
+  const safe = {
+    ...block,
+    templates,
+    template: templates[0]?.text || '',
+    minDelaySec: Math.max(0, Number(block?.minDelaySec) || 0),
+    maxDelaySec: Math.max(0, Number(block?.maxDelaySec) || 0),
+    maxX1PerUser24h: Math.max(1, Number(block?.maxX1PerUser24h) || 1),
+    quietHoursEnabled: block?.quietHoursEnabled !== false,
+    quietHoursStart: block?.quietHoursStart || '22:00',
+    quietHoursEnd: block?.quietHoursEnd || '08:00',
+  }
+  if (safe.maxDelaySec < safe.minDelaySec) safe.maxDelaySec = safe.minDelaySec
+  return safe
+}
 
 const defaultX1KindSettings = (templates) => {
-  const list = (Array.isArray(templates) ? templates : [templates]).map((t) => String(t || '')).slice(0, X1_MAX_TEMPLATES)
-  const filled = list.filter((t) => t.trim())
+  const list = (Array.isArray(templates) ? templates : [templates])
+    .map((t) => normalizeX1TemplateEntry(t, { keepEmpty: true }))
+    .slice(0, X1_MAX_TEMPLATES)
+  const filled = list.filter((t) => templateEntryHasContent(t))
+  const templatesUi = filled.length ? list : [emptyX1TemplateEntry('')]
   return {
-    templates: filled.length ? list : [''],
-    template: filled[0] || list[0] || '',
+    templates: templatesUi,
+    template: templatesUi[0]?.text || '',
     minDelaySec: X1_RECOMMENDED_MIN_DELAY,
     maxDelaySec: 75,
     maxX1PerUser24h: 2,
@@ -184,47 +305,6 @@ const defaultX1Automation = () => ({
   join: defaultX1KindSettings(DEFAULT_JOIN_TEMPLATES),
   leave: defaultX1KindSettings(DEFAULT_LEAVE_TEMPLATES),
 })
-
-function stripNomePlaceholder(template) {
-  return String(template || '')
-    .replace(/\{\{\s*nome\s*\}\}/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([!?.,:;])/g, '$1')
-    .trim()
-}
-
-function normalizeTemplatesForUi(block, fallbackTemplates = ['']) {
-  let list = []
-  if (Array.isArray(block?.templates) && block.templates.length) {
-    list = block.templates.map((t) => String(t ?? ''))
-  } else if (block?.template) {
-    list = [String(block.template)]
-  } else {
-    list = [...fallbackTemplates]
-  }
-  list = list.slice(0, X1_MAX_TEMPLATES)
-  if (!list.length) list = ['']
-  return list
-}
-
-function sanitizeX1KindBlock(block, fallbackTemplates = ['']) {
-  const uiList = normalizeTemplatesForUi(block, fallbackTemplates)
-  const filled = uiList.map((t) => stripNomePlaceholder(t)).filter(Boolean).slice(0, X1_MAX_TEMPLATES)
-  const templates = filled.length ? filled : [stripNomePlaceholder(fallbackTemplates[0] || '') || '']
-  const safe = {
-    ...block,
-    templates,
-    template: templates[0] || '',
-    minDelaySec: Math.max(0, Number(block?.minDelaySec) || 0),
-    maxDelaySec: Math.max(0, Number(block?.maxDelaySec) || 0),
-    maxX1PerUser24h: Math.max(1, Number(block?.maxX1PerUser24h) || 1),
-    quietHoursEnabled: block?.quietHoursEnabled !== false,
-    quietHoursStart: block?.quietHoursStart || '22:00',
-    quietHoursEnd: block?.quietHoursEnd || '08:00',
-  }
-  if (safe.maxDelaySec < safe.minDelaySec) safe.maxDelaySec = safe.minDelaySec
-  return safe
-}
 
 function migrateX1Automation(raw) {
   const base = defaultX1Automation()
@@ -277,18 +357,19 @@ function patchX1Kind(setter, kind, patch) {
   setter((s) => ({ ...s, [kind]: { ...s[kind], ...patch } }))
 }
 
-function setX1TemplateAt(setter, kind, index, value) {
+function setX1TemplateAt(setter, kind, index, patch) {
   setter((s) => {
-    const prev = normalizeTemplatesForUi(s[kind], [s[kind]?.template || ''])
+    const prev = normalizeTemplatesForUi(s[kind], [emptyX1TemplateEntry(s[kind]?.template || '')])
     const next = [...prev]
-    next[index] = value
-    const filled = next.map((t) => t.trim()).filter(Boolean)
+    const current = normalizeX1TemplateEntry(next[index] || emptyX1TemplateEntry(''))
+    next[index] = typeof patch === 'string' ? { ...current, text: patch } : { ...current, ...patch }
+    const first = next.find((t) => templateEntryHasContent(t)) || next[0]
     return {
       ...s,
       [kind]: {
         ...s[kind],
         templates: next,
-        template: filled[0] || next[0] || '',
+        template: first?.text || '',
       },
     }
   })
@@ -296,13 +377,13 @@ function setX1TemplateAt(setter, kind, index, value) {
 
 function addX1Template(setter, kind) {
   setter((s) => {
-    const prev = normalizeTemplatesForUi(s[kind], [s[kind]?.template || ''])
+    const prev = normalizeTemplatesForUi(s[kind], [emptyX1TemplateEntry(s[kind]?.template || '')])
     if (prev.length >= X1_MAX_TEMPLATES) return s
     return {
       ...s,
       [kind]: {
         ...s[kind],
-        templates: [...prev, ''],
+        templates: [...prev, emptyX1TemplateEntry('')],
       },
     }
   })
@@ -310,16 +391,18 @@ function addX1Template(setter, kind) {
 
 function removeX1Template(setter, kind, index) {
   setter((s) => {
-    const prev = normalizeTemplatesForUi(s[kind], [s[kind]?.template || ''])
+    const prev = normalizeTemplatesForUi(s[kind], [emptyX1TemplateEntry(s[kind]?.template || '')])
     if (prev.length <= 1) return s
+    const removed = prev[index]
+    if (removed?.mediaPreviewUrl) revokeMediaPreviewUrl(removed.mediaPreviewUrl)
     const next = prev.filter((_, i) => i !== index)
-    const filled = next.map((t) => t.trim()).filter(Boolean)
+    const first = next.find((t) => templateEntryHasContent(t)) || next[0]
     return {
       ...s,
       [kind]: {
         ...s[kind],
         templates: next,
-        template: filled[0] || next[0] || '',
+        template: first?.text || '',
       },
     }
   })
@@ -331,8 +414,8 @@ function applyRecommendedX1Templates(setter, kind) {
     ...s,
     [kind]: {
       ...s[kind],
-      templates: [...samples],
-      template: samples[0],
+      templates: samples.map((t) => ({ ...t })),
+      template: samples[0].text,
       minDelaySec: Math.max(s[kind]?.minDelaySec || 0, X1_RECOMMENDED_MIN_DELAY),
       maxDelaySec: Math.max(s[kind]?.maxDelaySec || 0, 75),
     },
@@ -340,7 +423,107 @@ function applyRecommendedX1Templates(setter, kind) {
 }
 
 function countFilledTemplates(block) {
-  return normalizeTemplatesForUi(block).filter((t) => t.trim()).length
+  return normalizeTemplatesForUi(block).filter((t) => templateEntryHasContent(t)).length
+}
+
+function X1TemplateMediaUpload({ entry, disabled, onChange, onError }) {
+  const inputRef = useRef(null)
+  const mediaType = entry?.mediaType || 'none'
+  const previewSrc = entry?.mediaPreviewUrl || entry?.mediaBase64 || null
+
+  async function onPick(ev) {
+    const file = ev.target.files?.[0]
+    ev.target.value = ''
+    if (!file) return
+    const result = await attachQuickReplyMediaFromFile(file)
+    if (result.error) {
+      onError?.(result.error)
+      return
+    }
+    if (entry?.mediaPreviewUrl) revokeMediaPreviewUrl(entry.mediaPreviewUrl)
+    onChange(result.patch)
+  }
+
+  function clear() {
+    revokeMediaPreviewUrl(entry?.mediaPreviewUrl)
+    onChange(emptyQuickReplyMedia())
+  }
+
+  return (
+    <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-stone-400">Anexo (imagem, vídeo, áudio ou PDF)</p>
+        {mediaType === 'none' ? (
+          <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => inputRef.current?.click()}>
+            <Paperclip className="h-3.5 w-3.5" />
+            Upload
+          </Button>
+        ) : (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={clear}
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-stone-400 transition hover:bg-white/5 hover:text-red-300"
+          >
+            <X className="h-3.5 w-3.5" />
+            Remover mídia
+          </button>
+        )}
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={QUICK_REPLY_FILE_ACCEPT}
+        className="hidden"
+        disabled={disabled}
+        onChange={(e) => void onPick(e)}
+      />
+      {mediaType === 'none' ? (
+        <p className="text-[11px] leading-relaxed text-stone-500">
+          Imagem até {imageMaxLabel} · Vídeo MP4 até {videoMaxLabel} · PDF até {documentMaxLabel} · Áudio até{' '}
+          {audioMaxLabel}
+        </p>
+      ) : (
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-accent-500/15 text-accent-300">
+            {mediaType === 'video' ? (
+              <Film className="h-5 w-5" />
+            ) : mediaType === 'document' ? (
+              <FileText className="h-5 w-5" />
+            ) : mediaType === 'image' ? (
+              <ImageIcon className="h-5 w-5" />
+            ) : (
+              <Paperclip className="h-5 w-5" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1 space-y-2">
+            <p className="truncate text-xs text-stone-300">
+              {entry.mediaName || mediaType}
+              {entry.mediaSize ? ` · ${formatMediaSize(entry.mediaSize)}` : ''}
+            </p>
+            {mediaType === 'image' && previewSrc && (
+              <ImageMediaPreview src={previewSrc} className="h-24 w-full rounded border border-brand-700 object-cover" />
+            )}
+            {mediaType === 'video' && (
+              <VideoMediaPreview
+                src={previewSrc}
+                mediaName={entry.mediaName}
+                mediaSize={entry.mediaSize}
+                compact
+                className="h-24 w-full rounded border border-brand-700 bg-black"
+              />
+            )}
+            {mediaType === 'document' && (
+              <DocumentMediaPreview src={previewSrc} mediaName={entry.mediaName} mimetype={entry.mediaMime} />
+            )}
+            {mediaType === 'audio' && previewSrc && (
+              <audio controls src={previewSrc} className="w-full" />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function formatActivity(iso) {
@@ -2186,8 +2369,8 @@ export function GroupDetails() {
                 </p>
               )}
               <div className="space-y-3">
-                {normalizeTemplatesForUi(x1Automation.join).map((text, idx) => (
-                  <div key={`join-tpl-${idx}`} className="space-y-1.5">
+                {normalizeTemplatesForUi(x1Automation.join).map((entry, idx) => (
+                  <div key={`join-tpl-${idx}`} className="space-y-2 rounded-xl border border-brand-800/80 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-medium text-stone-400">Variação {idx + 1}</span>
                       {normalizeTemplatesForUi(x1Automation.join).length > 1 && (
@@ -2203,10 +2386,16 @@ export function GroupDetails() {
                     </div>
                     <Textarea
                       rows={2}
-                      value={text}
+                      value={entry.text || ''}
                       disabled={x1ControlsDisabled}
                       onChange={(e) => setX1TemplateAt(setX1Automation, 'join', idx, e.target.value)}
                       placeholder={`Texto ${idx + 1} enviado no privado quando alguém entra`}
+                    />
+                    <X1TemplateMediaUpload
+                      entry={entry}
+                      disabled={x1ControlsDisabled}
+                      onError={(msg) => toast.error(msg)}
+                      onChange={(mediaPatch) => setX1TemplateAt(setX1Automation, 'join', idx, mediaPatch)}
                     />
                   </div>
                 ))}
@@ -2296,8 +2485,8 @@ export function GroupDetails() {
                 </p>
               )}
               <div className="space-y-3">
-                {normalizeTemplatesForUi(x1Automation.leave).map((text, idx) => (
-                  <div key={`leave-tpl-${idx}`} className="space-y-1.5">
+                {normalizeTemplatesForUi(x1Automation.leave).map((entry, idx) => (
+                  <div key={`leave-tpl-${idx}`} className="space-y-2 rounded-xl border border-brand-800/80 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-medium text-stone-400">Variação {idx + 1}</span>
                       {normalizeTemplatesForUi(x1Automation.leave).length > 1 && (
@@ -2313,10 +2502,16 @@ export function GroupDetails() {
                     </div>
                     <Textarea
                       rows={2}
-                      value={text}
+                      value={entry.text || ''}
                       disabled={x1ControlsDisabled}
                       onChange={(e) => setX1TemplateAt(setX1Automation, 'leave', idx, e.target.value)}
                       placeholder={`Texto ${idx + 1} enviado no privado quando alguém sai`}
+                    />
+                    <X1TemplateMediaUpload
+                      entry={entry}
+                      disabled={x1ControlsDisabled}
+                      onError={(msg) => toast.error(msg)}
+                      onChange={(mediaPatch) => setX1TemplateAt(setX1Automation, 'leave', idx, mediaPatch)}
                     />
                   </div>
                 ))}
@@ -2450,6 +2645,11 @@ export function GroupDetails() {
                   </div>
                   <p className="text-stone-300 mt-1">{d.participantName || d.participantJid}</p>
                   {d.bodyPreview && <p className="text-stone-500 mt-1 truncate">{d.bodyPreview}</p>}
+                  {d.mediaType && d.mediaType !== 'none' && (
+                    <p className="text-stone-500 mt-1">
+                      Anexo: {d.mediaName || d.mediaType}
+                    </p>
+                  )}
                   {d.error && <p className="text-red-400/90 mt-1">{d.error}</p>}
                   <p className="text-stone-600 mt-1">{formatActivity(d.sentAt || d.createdAt)}</p>
                 </li>

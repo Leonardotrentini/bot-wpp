@@ -15,7 +15,7 @@ const DEFAULT_JOIN_TEMPLATES = [
   "Oi! Que bom ter você no grupo. Posso te enviar o material no privado?",
   "Seja bem-vindo(a)! Se quiser o passo a passo, me chama no X1.",
   "Olá! Entrou no grupo agora? Me chama no privado que eu te ajudo.",
-]
+].map((text) => emptyTemplateEntry(text))
 
 const DEFAULT_LEAVE_TEMPLATES = [
   "Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?",
@@ -23,7 +23,7 @@ const DEFAULT_LEAVE_TEMPLATES = [
   "Saiu do grupo? Sem problema — posso te atender no privado.",
   "Notei sua saída. Se precisar de algo, estou aqui no X1.",
   "Se saiu por engano ou quiser falar à parte, me chama no privado.",
-]
+].map((text) => emptyTemplateEntry(text))
 
 const DEFAULT_X1_CONFIG = {
   enabled: false,
@@ -31,19 +31,29 @@ const DEFAULT_X1_CONFIG = {
   sendX1OnLeave: false,
   join: {
     ...DEFAULT_KIND_SETTINGS,
-    templates: [...DEFAULT_JOIN_TEMPLATES],
-    template: DEFAULT_JOIN_TEMPLATES[0],
+    templates: DEFAULT_JOIN_TEMPLATES.map((t) => ({ ...t })),
+    template: DEFAULT_JOIN_TEMPLATES[0].text,
   },
   leave: {
     ...DEFAULT_KIND_SETTINGS,
-    templates: [...DEFAULT_LEAVE_TEMPLATES],
-    template: DEFAULT_LEAVE_TEMPLATES[0],
+    templates: DEFAULT_LEAVE_TEMPLATES.map((t) => ({ ...t })),
+    template: DEFAULT_LEAVE_TEMPLATES[0].text,
   },
 }
 
 const X1_TIMEZONE = "America/Sao_Paulo"
 const X1_MAX_TEMPLATES = 5
 const processingLock = new Set()
+
+function emptyTemplateEntry(text = "") {
+  return {
+    text: String(text || ""),
+    mediaType: "none",
+    mediaBase64: null,
+    mediaMime: null,
+    mediaName: null,
+  }
+}
 
 function stripNomePlaceholder(template) {
   return String(template || "")
@@ -53,30 +63,65 @@ function stripNomePlaceholder(template) {
     .trim()
 }
 
+function normalizeMediaType(value) {
+  const t = String(value || "none")
+  return ["image", "video", "audio", "document"].includes(t) ? t : "none"
+}
+
+/** Aceita string legada ou objeto { text, media* }. */
+function normalizeTemplateEntry(raw, { keepEmpty = false } = {}) {
+  if (raw == null) return null
+  if (typeof raw === "string") {
+    const text = stripNomePlaceholder(raw)
+    if (!text && !keepEmpty) return null
+    return emptyTemplateEntry(text)
+  }
+  if (typeof raw !== "object") return null
+  const text = stripNomePlaceholder(raw.text ?? raw.template ?? raw.body ?? "")
+  const mediaType = normalizeMediaType(raw.mediaType)
+  const mediaBase64 = mediaType !== "none" && raw.mediaBase64 ? String(raw.mediaBase64) : null
+  const mediaMime = mediaBase64 ? String(raw.mediaMime || "") || null : null
+  const mediaName = mediaBase64 ? String(raw.mediaName || "") || null : null
+  const hasMedia = mediaType !== "none" && Boolean(mediaBase64)
+  if (!text && !hasMedia && !keepEmpty) return null
+  return {
+    text,
+    mediaType: hasMedia ? mediaType : "none",
+    mediaBase64: hasMedia ? mediaBase64 : null,
+    mediaMime: hasMedia ? mediaMime : null,
+    mediaName: hasMedia ? mediaName : null,
+  }
+}
+
 function normalizeTemplatesList(src, fallbackTemplates, legacyTemplate) {
-  const fallback = Array.isArray(fallbackTemplates) && fallbackTemplates.length
+  const fallbackRaw = Array.isArray(fallbackTemplates) && fallbackTemplates.length
     ? fallbackTemplates
-    : [String(legacyTemplate || "")]
+    : [legacyTemplate || ""]
   let list = []
   if (Array.isArray(src?.templates)) {
-    list = src.templates.map((t) => stripNomePlaceholder(String(t || ""))).filter(Boolean)
+    list = src.templates.map((t) => normalizeTemplateEntry(t)).filter(Boolean)
   }
   if (!list.length) {
-    const single = stripNomePlaceholder(String(src?.template ?? legacyTemplate ?? fallback[0] ?? ""))
+    const single = normalizeTemplateEntry(src?.template ?? legacyTemplate ?? fallbackRaw[0])
     if (single) list = [single]
   }
   if (!list.length) {
-    list = fallback.map((t) => stripNomePlaceholder(String(t || ""))).filter(Boolean)
+    list = fallbackRaw.map((t) => normalizeTemplateEntry(t)).filter(Boolean)
   }
   list = list.slice(0, X1_MAX_TEMPLATES)
-  if (!list.length) list = [stripNomePlaceholder(fallback[0] || "")]
+  if (!list.length) list = [emptyTemplateEntry(stripNomePlaceholder(String(fallbackRaw[0]?.text || fallbackRaw[0] || "")))]
   return list
 }
 
-function pickRandomTemplate(kindConfig) {
+function pickRandomTemplateEntry(kindConfig) {
   const list = normalizeTemplatesList(kindConfig || {}, [kindConfig?.template || ""], kindConfig?.template)
-  if (!list.length) return ""
+  if (!list.length) return emptyTemplateEntry("")
   return list[randomInt(0, list.length - 1)]
+}
+
+/** @deprecated use pickRandomTemplateEntry — mantido para testes/compat */
+function pickRandomTemplate(kindConfig) {
+  return pickRandomTemplateEntry(kindConfig).text
 }
 
 function normalizeDelayPair(src, fallback) {
@@ -114,7 +159,7 @@ function normalizeKindBlock(rawBlock, { kind, legacyFlat }) {
 
   return {
     templates,
-    template: templates[0] || "",
+    template: templates[0]?.text || "",
     minDelaySec,
     maxDelaySec,
     maxX1PerUser24h: Math.max(
@@ -388,8 +433,27 @@ async function enqueueX1ForParticipant(deps, ctx) {
   }
 
   const effectiveKind = kind === "test" ? eventKind : kind
-  const template = pickRandomTemplate(kindConfig)
-  const body = renderX1Template(template, { nome: participantName })
+  const picked = pickRandomTemplateEntry(kindConfig)
+  const body = renderX1Template(picked.text, { nome: participantName })
+  const mediaType = normalizeMediaType(picked.mediaType)
+  const hasMedia = mediaType !== "none" && Boolean(picked.mediaBase64)
+  const mediaFields = hasMedia
+    ? {
+        mediaType,
+        mediaBase64: String(picked.mediaBase64),
+        mediaMime: picked.mediaMime || null,
+        mediaName: picked.mediaName || null,
+      }
+    : {
+        mediaType: "none",
+        mediaBase64: null,
+        mediaMime: null,
+        mediaName: null,
+      }
+
+  if (!body && !hasMedia) {
+    return { ok: false, reason: "EMPTY_TEMPLATE" }
+  }
 
   if (!force && effectiveKind !== "test") {
     const duplicate = await prisma.groupX1Delivery.findFirst({
@@ -425,6 +489,7 @@ async function enqueueX1ForParticipant(deps, ctx) {
           participantName,
           kind: effectiveKind,
           body,
+          ...mediaFields,
           status: "skipped",
           error: "Limite de X1 por usuário (24h) atingido.",
           source,
@@ -447,6 +512,7 @@ async function enqueueX1ForParticipant(deps, ctx) {
         participantName,
         kind: effectiveKind,
         body,
+        ...mediaFields,
         status: "failed",
         error: isLid
           ? "Número oculto (LID) sem telefone resolvível — não é possível enviar X1 privado."
@@ -477,6 +543,7 @@ async function enqueueX1ForParticipant(deps, ctx) {
       participantName,
       kind: effectiveKind,
       body,
+      ...mediaFields,
       status: "pending",
       source,
       scheduledAt,
@@ -493,7 +560,7 @@ async function processOneDelivery(deps, deliveryId) {
   if (processingLock.has(deliveryId)) return null
   processingLock.add(deliveryId)
 
-  const { prisma, sendText } = deps
+  const { prisma, sendText, sendMedia, sendWhatsAppAudio } = deps
   try {
     const claim = await prisma.groupX1Delivery.updateMany({
       where: { id: deliveryId, status: "pending", scheduledAt: { lte: new Date() } },
@@ -563,10 +630,39 @@ async function processOneDelivery(deps, deliveryId) {
     const kindConfig = getKindConfig(normalizeX1Config(groupRow.groupX1Automation), delivery.kind)
     const body =
       delivery.body ||
-      renderX1Template(pickRandomTemplate(kindConfig), { nome: delivery.participantName })
-    console.log(`[x1] enviando DM ${delivery.kind} → ${sendNumber} (grupo ${groupRow.groupJid})`)
+      renderX1Template(pickRandomTemplateEntry(kindConfig).text, { nome: delivery.participantName })
+    const mediaType = normalizeMediaType(delivery.mediaType)
+    const hasMedia = mediaType !== "none" && Boolean(delivery.mediaBase64)
 
-    const resp = await sendText(conn.instanceName, sendNumber, body)
+    console.log(
+      `[x1] enviando DM ${delivery.kind}${hasMedia ? `:${mediaType}` : ""} → ${sendNumber} (grupo ${groupRow.groupJid})`,
+    )
+
+    let resp
+    if (hasMedia) {
+      const media = String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
+      if (mediaType === "audio" && typeof sendWhatsAppAudio === "function") {
+        const mimetype = delivery.mediaMime || "audio/ogg; codecs=opus"
+        const audioPayload = media.startsWith("data:") ? media : `data:${mimetype};base64,${media}`
+        resp = await sendWhatsAppAudio(conn.instanceName, sendNumber, {
+          audio: audioPayload,
+          mimetype,
+          encoding: true,
+        })
+      } else if (typeof sendMedia === "function") {
+        resp = await sendMedia(conn.instanceName, sendNumber, {
+          mediatype: mediaType,
+          media,
+          mimetype: delivery.mediaMime || undefined,
+          caption: body || undefined,
+          fileName: delivery.mediaName || undefined,
+        })
+      } else {
+        throw new Error("Envio de mídia indisponível neste servidor.")
+      }
+    } else {
+      resp = await sendText(conn.instanceName, sendNumber, body || "")
+    }
     const providerMessageId = extractProviderId(resp)
 
     const sent = await prisma.groupX1Delivery.update({
@@ -700,6 +796,8 @@ async function getX1Deliveries(prisma, userId, groupId, { limit = 30 } = {}) {
       participantName: true,
       kind: true,
       body: true,
+      mediaType: true,
+      mediaName: true,
       status: true,
       error: true,
       source: true,
@@ -717,6 +815,8 @@ function formatDeliveryRow(row) {
     participantName: row.participantName,
     kind: row.kind,
     bodyPreview: row.body ? row.body.slice(0, 120) : null,
+    mediaType: row.mediaType || "none",
+    mediaName: row.mediaName || null,
     status: row.status,
     error: row.error,
     source: row.source,
@@ -759,6 +859,9 @@ module.exports = {
   normalizeKindBlock,
   normalizeTemplatesList,
   pickRandomTemplate,
+  pickRandomTemplateEntry,
+  emptyTemplateEntry,
+  normalizeTemplateEntry,
   getKindConfig,
   renderX1Template,
   parseParticipantsUpdatePayload,
