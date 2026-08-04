@@ -4,13 +4,13 @@ import { ChevronDown } from 'lucide-react'
 
 const MENU_MAX_HEIGHT = 224 // max-h-56
 
-function computeMenuStyle(triggerEl, menuEl, placement) {
+function computeMenuStyle(triggerEl, menuEl, placement, minMenuWidth = 0) {
   if (!triggerEl) return { style: {}, resolved: 'bottom' }
 
   const rect = triggerEl.getBoundingClientRect()
   const menuHeight = menuEl?.offsetHeight || MENU_MAX_HEIGHT
-  // Largura sempre igual ao trigger — evita menu full-width no portal (body)
-  const menuWidth = Math.max(rect.width, 1)
+  // Menu nunca fica mais estreito que o trigger nem que o mínimo pedido (evita "Enviado" quebrado).
+  const menuWidth = Math.max(rect.width, minMenuWidth, 1)
   const gap = 4
 
   let resolved = placement
@@ -24,7 +24,12 @@ function computeMenuStyle(triggerEl, menuEl, placement) {
   let top = resolved === 'top' ? rect.top - gap - menuHeight : rect.bottom + gap
   top = Math.max(8, Math.min(top, window.innerHeight - menuHeight - 8))
 
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))
+  // Prefer alinhamento à esquerda do trigger; se estourar a viewport, ancora à direita.
+  let left = rect.left
+  if (left + menuWidth > window.innerWidth - 8) {
+    left = Math.max(8, rect.right - menuWidth)
+  }
+  left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8))
 
   return {
     resolved,
@@ -52,6 +57,7 @@ export function DarkDropdown({
   triggerClassName = '',
   menuClassName = '',
   placement = 'auto',
+  minMenuWidth = 0,
   leadingIcon = null,
   ariaLabel,
 }) {
@@ -68,10 +74,15 @@ export function DarkDropdown({
 
   const reposition = useCallback(() => {
     if (!open || !triggerRef.current) return
-    const { style, resolved } = computeMenuStyle(triggerRef.current, menuRef.current, placement)
+    const { style, resolved } = computeMenuStyle(
+      triggerRef.current,
+      menuRef.current,
+      placement,
+      minMenuWidth,
+    )
     setMenuStyle(style)
     setResolvedPlacement(resolved)
-  }, [open, placement])
+  }, [open, placement, minMenuWidth])
 
   useLayoutEffect(() => {
     reposition()
@@ -112,11 +123,16 @@ export function DarkDropdown({
       if (wasOpen) return false
       const rect = triggerRef.current?.getBoundingClientRect()
       if (rect) {
+        const menuWidth = Math.max(rect.width, minMenuWidth, 1)
+        let left = rect.left
+        if (left + menuWidth > window.innerWidth - 8) {
+          left = Math.max(8, rect.right - menuWidth)
+        }
         setMenuStyle({
           position: 'fixed',
           top: `${rect.bottom + 4}px`,
-          left: `${rect.left}px`,
-          width: `${Math.max(rect.width, 1)}px`,
+          left: `${left}px`,
+          width: `${menuWidth}px`,
           zIndex: 10050,
         })
       }
@@ -145,7 +161,7 @@ export function DarkDropdown({
                   e.preventDefault()
                   if (!opt.disabled) pick(opt.value)
                 }}
-                className={`w-full px-4 py-2.5 text-left text-sm whitespace-normal break-words transition disabled:opacity-40 ${
+                className={`w-full px-4 py-2.5 text-left text-sm whitespace-nowrap transition disabled:opacity-40 ${
                   active ? 'bg-accent-500/15 font-medium text-accent-300' : 'text-white hover:bg-white/10'
                 }`}
               >

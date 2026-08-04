@@ -20,6 +20,8 @@ import {
   Layers,
   ListChecks,
   ArrowLeft,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { Tabs } from '../../components/common/Tabs.jsx'
 import { Card } from '../../components/common/Card.jsx'
@@ -60,6 +62,8 @@ import { ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 const FILE_ACCEPT_MEDIA = 'image/*,video/mp4,.mp4'
 const HIST_PAGE_SIZE = 20
+const AUTO_LIST_PAGE = 5
+const ACTIVITY_LIST_PAGE = 8
 
 const TAB_ROUTES = {
   criar: '/dashboard/automations/library',
@@ -434,6 +438,9 @@ export function Messages({ defaultTab = 'criar' }) {
   const [existingSel, setExistingSel] = useState([])
   const [cadStep, setCadStep] = useState(emptyCadStep)
   const [mentionMembers, setMentionMembers] = useState([])
+  const [autoVisibleCount, setAutoVisibleCount] = useState(AUTO_LIST_PAGE)
+  const [showDoneAutos, setShowDoneAutos] = useState(false)
+  const [activityVisibleCount, setActivityVisibleCount] = useState(ACTIVITY_LIST_PAGE)
 
   const refreshTemplates = useCallback(() => getTemplates().then((r) => setTemplates(r.data.templates || [])), [])
   const refreshAutomations = useCallback(() => getAutomations().then((r) => setAutomations(r.data.automations || [])), [])
@@ -1043,9 +1050,71 @@ export function Messages({ defaultTab = 'criar' }) {
 
   const activeCount = automations.filter((a) => a.status === 'ativa').length
   const orphanAutomations = automations.filter((a) => !a.cadenceId)
+  const liveAutomations = useMemo(
+    () => automations.filter((a) => a.status !== 'concluida'),
+    [automations],
+  )
+  const doneAutomations = useMemo(
+    () => automations.filter((a) => a.status === 'concluida'),
+    [automations],
+  )
+  const visibleLiveAutos = liveAutomations.slice(0, autoVisibleCount)
+  const visibleActivity = groupActivity.slice(0, activityVisibleCount)
   const previewContent = currentAutoContent()
   const histPages = Math.ceil(histTotal / HIST_PAGE_SIZE) || 1
   const histPage = Math.floor(histOffset / HIST_PAGE_SIZE) + 1
+
+  const renderAutomationItem = (a) => (
+    <div key={a.id} className="rounded-xl border border-brand-800 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex gap-2 min-w-0">
+          <div className="h-fit rounded-lg bg-accent-500/15 p-1.5 text-accent-400">
+            <Zap className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate font-medium text-stone-50">{a.name}</p>
+            <p className="mt-0.5 text-xs text-stone-500">{frequencyLabel(a)}</p>
+            <p className="text-xs text-stone-500">{a.groupNames?.length || 0} grupo(s)</p>
+            {a.body && <p className="mt-0.5 truncate text-xs text-stone-400">“{a.body}”</p>}
+            {a.nextRunAt && a.status === 'ativa' && (
+              <p className="mt-0.5 text-xs text-accent-400/80">Próximo: {fmtDate(a.nextRunAt)}</p>
+            )}
+          </div>
+        </div>
+        <Badge variant={a.status === 'ativa' ? 'success' : a.status === 'concluida' ? 'default' : 'muted'}>
+          {a.status}
+        </Badge>
+      </div>
+      <div className="mt-2 flex items-center gap-3">
+        {a.frequency !== 'now' && a.status !== 'concluida' && (
+          <>
+            <button
+              type="button"
+              onClick={() => openEditAuto(a)}
+              className="inline-flex items-center gap-1 text-xs text-accent-400 hover:underline"
+            >
+              <Pencil className="h-3.5 w-3.5" /> Editar
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleAutomation(a)}
+              className="inline-flex items-center gap-1 text-xs text-stone-300 hover:underline"
+            >
+              {a.status === 'pausada' ? <PlayCircle className="h-3.5 w-3.5" /> : <PauseCircle className="h-3.5 w-3.5" />}
+              {a.status === 'pausada' ? 'Retomar' : 'Pausar'}
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => setConfirmAuto(a.id)}
+          className="inline-flex items-center gap-1 text-xs text-red-300 hover:underline"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Excluir
+        </button>
+      </div>
+    </div>
+  )
 
   return (
     <div className="space-y-6">
@@ -1306,7 +1375,12 @@ export function Messages({ defaultTab = 'criar' }) {
 
           <div className="space-y-4">
             <Card>
-              <h3 className="mb-3 font-semibold text-stone-50">Automações salvas</h3>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-stone-50">Automações salvas</h3>
+                {automations.length > 0 && (
+                  <span className="text-xs text-stone-500">{automations.length}</span>
+                )}
+              </div>
               {loadingInit ? (
                 <div className="space-y-2">
                   {[0, 1].map((i) => (
@@ -1317,41 +1391,57 @@ export function Messages({ defaultTab = 'criar' }) {
                 <p className="text-sm text-stone-400">Nenhuma automação ainda.</p>
               ) : (
                 <div className="space-y-3">
-                  {automations.map((a) => (
-                    <div key={a.id} className="rounded-xl border border-brand-800 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex gap-2 min-w-0">
-                          <div className="h-fit rounded-lg bg-accent-500/15 p-1.5 text-accent-400">
-                            <Zap className="h-4 w-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-stone-50">{a.name}</p>
-                            <p className="mt-0.5 text-xs text-stone-500">{frequencyLabel(a)}</p>
-                            <p className="text-xs text-stone-500">{a.groupNames?.length || 0} grupo(s)</p>
-                            {a.body && <p className="mt-0.5 truncate text-xs text-stone-400">“{a.body}”</p>}
-                            {a.nextRunAt && a.status === 'ativa' && <p className="mt-0.5 text-xs text-accent-400/80">Próximo: {fmtDate(a.nextRunAt)}</p>}
-                          </div>
-                        </div>
-                        <Badge variant={a.status === 'ativa' ? 'success' : a.status === 'concluida' ? 'default' : 'muted'}>{a.status}</Badge>
+                  {liveAutomations.length === 0 && doneAutomations.length > 0 ? (
+                    <p className="text-xs text-stone-500">Nenhuma automação ativa ou pausada.</p>
+                  ) : (
+                    <>
+                      <div className="max-h-[min(28rem,50vh)] space-y-3 overflow-y-auto vg-scrollbar pr-1">
+                        {visibleLiveAutos.map(renderAutomationItem)}
                       </div>
-                      <div className="mt-2 flex items-center gap-3">
-                        {a.frequency !== 'now' && a.status !== 'concluida' && (
-                          <>
-                            <button type="button" onClick={() => openEditAuto(a)} className="inline-flex items-center gap-1 text-xs text-accent-400 hover:underline">
-                              <Pencil className="h-3.5 w-3.5" /> Editar
-                            </button>
-                            <button type="button" onClick={() => toggleAutomation(a)} className="inline-flex items-center gap-1 text-xs text-stone-300 hover:underline">
-                              {a.status === 'pausada' ? <PlayCircle className="h-3.5 w-3.5" /> : <PauseCircle className="h-3.5 w-3.5" />}
-                              {a.status === 'pausada' ? 'Retomar' : 'Pausar'}
-                            </button>
-                          </>
-                        )}
-                        <button type="button" onClick={() => setConfirmAuto(a.id)} className="inline-flex items-center gap-1 text-xs text-red-300 hover:underline">
-                          <Trash2 className="h-3.5 w-3.5" /> Excluir
+                      {liveAutomations.length > autoVisibleCount && (
+                        <button
+                          type="button"
+                          onClick={() => setAutoVisibleCount((n) => n + AUTO_LIST_PAGE)}
+                          className="w-full rounded-lg border border-brand-800 px-3 py-2 text-xs text-accent-400 hover:bg-white/5"
+                        >
+                          Ver mais ({liveAutomations.length - autoVisibleCount} restantes)
                         </button>
-                      </div>
+                      )}
+                      {autoVisibleCount > AUTO_LIST_PAGE && liveAutomations.length > AUTO_LIST_PAGE && (
+                        <button
+                          type="button"
+                          onClick={() => setAutoVisibleCount(AUTO_LIST_PAGE)}
+                          className="w-full text-xs text-stone-500 hover:text-stone-300 hover:underline"
+                        >
+                          Mostrar menos
+                        </button>
+                      )}
+                    </>
+                  )}
+
+                  {doneAutomations.length > 0 && (
+                    <div className="border-t border-brand-800/80 pt-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowDoneAutos((v) => !v)}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1.5 text-left text-xs text-stone-400 hover:text-stone-200"
+                      >
+                        <span>
+                          Concluídas ({doneAutomations.length})
+                        </span>
+                        {showDoneAutos ? (
+                          <ChevronUp className="h-3.5 w-3.5 shrink-0" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                        )}
+                      </button>
+                      {showDoneAutos && (
+                        <div className="mt-2 max-h-[min(16rem,35vh)] space-y-3 overflow-y-auto vg-scrollbar pr-1">
+                          {doneAutomations.map(renderAutomationItem)}
+                        </div>
+                      )}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
             </Card>
@@ -1364,6 +1454,9 @@ export function Messages({ defaultTab = 'criar' }) {
                   </h3>
                   <p className="mt-0.5 text-xs text-stone-500">Importadas do WhatsApp + envios pela plataforma (sem duplicar).</p>
                 </div>
+                {groupActivity.length > 0 && (
+                  <span className="text-xs text-stone-500">{groupActivity.length}</span>
+                )}
               </div>
               {activityMeta?.onlyPlatformOutbound && (
                 <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200/90">
@@ -1373,36 +1466,79 @@ export function Messages({ defaultTab = 'criar' }) {
               {groupActivity.length === 0 ? (
                 <p className="text-sm text-stone-400">Nenhuma mensagem no período.</p>
               ) : (
-                <ul className="mb-6 divide-y divide-brand-800">
-                  {groupActivity.map((m) => (
-                    <li key={m.id} className="flex flex-wrap justify-between gap-2 py-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-stone-50">
-                          {m.senderName} · {m.group}
-                        </p>
-                        {m.body && <p className="mt-0.5 line-clamp-2 text-xs text-stone-400">{m.body}</p>}
-                      </div>
-                      <div className="shrink-0 text-right text-xs text-stone-500">
-                        <p>{fmtDate(m.sentAt)}</p>
-                        <p className="mt-1 text-accent-400/80">
-                          {m.isPlatformOutbound ? 'Plataforma' : m.fromMe ? 'Você' : 'Membro'}
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <div>
+                  <ul className="max-h-[min(24rem,45vh)] divide-y divide-brand-800 overflow-y-auto vg-scrollbar pr-1">
+                    {visibleActivity.map((m) => (
+                      <li key={m.id} className="flex flex-wrap justify-between gap-2 py-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-stone-50">
+                            {m.senderName} · {m.group}
+                          </p>
+                          {m.body && <p className="mt-0.5 line-clamp-2 text-xs text-stone-400">{m.body}</p>}
+                        </div>
+                        <div className="shrink-0 text-right text-xs text-stone-500">
+                          <p>{fmtDate(m.sentAt)}</p>
+                          <p className="mt-1 text-accent-400/80">
+                            {m.isPlatformOutbound ? 'Plataforma' : m.fromMe ? 'Você' : 'Membro'}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {groupActivity.length > activityVisibleCount && (
+                    <button
+                      type="button"
+                      onClick={() => setActivityVisibleCount((n) => n + ACTIVITY_LIST_PAGE)}
+                      className="mt-3 w-full rounded-lg border border-brand-800 px-3 py-2 text-xs text-accent-400 hover:bg-white/5"
+                    >
+                      Ver mais atividade ({groupActivity.length - activityVisibleCount} restantes)
+                    </button>
+                  )}
+                  {activityVisibleCount > ACTIVITY_LIST_PAGE && groupActivity.length > ACTIVITY_LIST_PAGE && (
+                    <button
+                      type="button"
+                      onClick={() => setActivityVisibleCount(ACTIVITY_LIST_PAGE)}
+                      className="mt-2 w-full text-xs text-stone-500 hover:text-stone-300 hover:underline"
+                    >
+                      Mostrar menos
+                    </button>
+                  )}
+                </div>
               )}
             </Card>
 
             <Card>
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div>
+              <div className="mb-3 space-y-3">
+                <div className="min-w-0">
                   <h3 className="font-semibold text-stone-50">Histórico de envios (plataforma)</h3>
                   <p className="mt-0.5 text-xs text-stone-500">Somente mensagens disparadas por você neste app.</p>
                 </div>
                 <div className="flex gap-2">
-                  <Input className="h-9 w-32 text-sm" placeholder="Grupo" value={histFilter.group} onChange={(e) => setHistFilter((f) => ({ ...f, group: e.target.value }))} />
-                  <Select className="h-9 w-auto text-sm" value={histFilter.status} onChange={(e) => setHistFilter((f) => ({ ...f, status: e.target.value }))}>
+                  <Select
+                    className="min-w-0 flex-1"
+                    aria-label="Filtrar por grupo"
+                    minMenuWidth={220}
+                    triggerClassName="h-9 py-1.5"
+                    value={histFilter.group}
+                    onChange={(e) => setHistFilter((f) => ({ ...f, group: e.target.value }))}
+                  >
+                    <option value="">Todos os grupos</option>
+                    {[...groups]
+                      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+                      .map((g) => (
+                        <option key={g.id} value={g.name}>
+                          {g.name}
+                        </option>
+                      ))}
+                  </Select>
+                  <Select
+                    className="w-[8.75rem] shrink-0"
+                    aria-label="Filtrar por status"
+                    minMenuWidth={140}
+                    triggerClassName="h-9 py-1.5"
+                    value={histFilter.status}
+                    onChange={(e) => setHistFilter((f) => ({ ...f, status: e.target.value }))}
+                  >
                     <option value="">Todos</option>
                     <option value="enviado">Enviado</option>
                     <option value="entregue">Entregue</option>
@@ -1419,14 +1555,18 @@ export function Messages({ defaultTab = 'criar' }) {
                     {history.map((h) => {
                       const sb = statusBadge(h.status)
                       return (
-                        <li key={h.id} className="flex flex-wrap justify-between gap-2 py-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-stone-50">{h.group}</p>
-                            {h.body && <p className="mt-0.5 line-clamp-2 text-xs text-stone-400">{h.body}</p>}
-                            {h.error && <p className="mt-0.5 text-xs text-red-300">{h.error}</p>}
+                        <li key={h.id} className="flex items-start justify-between gap-3 py-3">
+                          <div className="min-w-0 flex-1 overflow-hidden">
+                            <p className="truncate text-sm font-medium text-stone-50" title={h.group}>{h.group}</p>
+                            {h.body && (
+                              <p className="mt-0.5 line-clamp-2 break-words text-xs text-stone-400" title={h.body}>
+                                {h.body}
+                              </p>
+                            )}
+                            {h.error && <p className="mt-0.5 break-words text-xs text-red-300">{h.error}</p>}
                           </div>
-                          <div className="shrink-0 text-right text-xs text-stone-500">
-                            <p>{fmtDate(h.sentAt)}</p>
+                          <div className="w-[7.5rem] shrink-0 text-right text-xs text-stone-500">
+                            <p className="whitespace-nowrap">{fmtDate(h.sentAt)}</p>
                             <Badge variant={sb.variant} className="mt-1 inline-flex items-center gap-1">
                               {h.status === 'lido' && <CheckCheck className="h-3 w-3" />}
                               {sb.label}

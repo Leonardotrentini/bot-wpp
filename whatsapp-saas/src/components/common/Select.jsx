@@ -22,13 +22,15 @@ export function Select({
   id,
   placement,
   menuClassName,
+  minMenuWidth,
+  triggerClassName = '',
   ...rest
 }) {
   const options = useMemo(() => optionsFromChildren(children), [children])
   const placeholder = options.find((o) => o.value === '')?.label || 'Selecionar…'
 
   return (
-    <div className={`block w-full ${className}`}>
+    <div className={`block ${className || 'w-full'}`}>
       {label && (
         <span id={id ? `${id}-label` : undefined} className="mb-1.5 block text-sm font-medium text-stone-300">
           {label}
@@ -42,8 +44,9 @@ export function Select({
         disabled={disabled}
         placement={placement ?? 'auto'}
         menuClassName={menuClassName}
+        minMenuWidth={minMenuWidth}
         ariaLabel={label || rest['aria-label']}
-        triggerClassName={error ? 'border-red-500/60' : ''}
+        triggerClassName={`${error ? 'border-red-500/60' : ''} ${triggerClassName}`.trim()}
       />
       {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
     </div>
