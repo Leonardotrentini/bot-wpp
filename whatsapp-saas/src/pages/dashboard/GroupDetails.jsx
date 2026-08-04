@@ -143,24 +143,46 @@ function memberMatchesInactivityRule(member, rules, nowMs = Date.now()) {
   return hoursWithoutActivity(member, nowMs) >= rules.inactiveAfterHours
 }
 
-const defaultX1KindSettings = (template) => ({
-  template,
-  minDelaySec: 15,
-  maxDelaySec: 75,
-  maxX1PerUser24h: 2,
-  quietHoursEnabled: true,
-  quietHoursStart: '22:00',
-  quietHoursEnd: '08:00',
-})
+const X1_MAX_TEMPLATES = 5
+const X1_RECOMMENDED_MIN_DELAY = 20
+
+const DEFAULT_JOIN_TEMPLATES = [
+  'Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.',
+  'Bem-vindo(a) ao grupo! Qualquer dúvida, me chama aqui no privado.',
+  'Oi! Que bom ter você no grupo. Posso te enviar o material no privado?',
+  'Seja bem-vindo(a)! Se quiser o passo a passo, me chama no X1.',
+  'Olá! Entrou no grupo agora? Me chama no privado que eu te ajudo.',
+]
+
+const DEFAULT_LEAVE_TEMPLATES = [
+  'Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?',
+  'Vi que saiu do grupo. Se quiser continuar por aqui no privado, me chama.',
+  'Saiu do grupo? Sem problema — posso te atender no privado.',
+  'Notei sua saída. Se precisar de algo, estou aqui no X1.',
+  'Se saiu por engano ou quiser falar à parte, me chama no privado.',
+]
+
+const defaultX1KindSettings = (templates) => {
+  const list = (Array.isArray(templates) ? templates : [templates]).map((t) => String(t || '')).slice(0, X1_MAX_TEMPLATES)
+  const filled = list.filter((t) => t.trim())
+  return {
+    templates: filled.length ? list : [''],
+    template: filled[0] || list[0] || '',
+    minDelaySec: X1_RECOMMENDED_MIN_DELAY,
+    maxDelaySec: 75,
+    maxX1PerUser24h: 2,
+    quietHoursEnabled: true,
+    quietHoursStart: '22:00',
+    quietHoursEnd: '08:00',
+  }
+}
 
 const defaultX1Automation = () => ({
   enabled: false,
   sendX1OnJoin: false,
   sendX1OnLeave: false,
-  join: defaultX1KindSettings(
-    'Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.',
-  ),
-  leave: defaultX1KindSettings('Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?'),
+  join: defaultX1KindSettings(DEFAULT_JOIN_TEMPLATES),
+  leave: defaultX1KindSettings(DEFAULT_LEAVE_TEMPLATES),
 })
 
 function stripNomePlaceholder(template) {
@@ -171,10 +193,28 @@ function stripNomePlaceholder(template) {
     .trim()
 }
 
-function sanitizeX1KindBlock(block) {
+function normalizeTemplatesForUi(block, fallbackTemplates = ['']) {
+  let list = []
+  if (Array.isArray(block?.templates) && block.templates.length) {
+    list = block.templates.map((t) => String(t ?? ''))
+  } else if (block?.template) {
+    list = [String(block.template)]
+  } else {
+    list = [...fallbackTemplates]
+  }
+  list = list.slice(0, X1_MAX_TEMPLATES)
+  if (!list.length) list = ['']
+  return list
+}
+
+function sanitizeX1KindBlock(block, fallbackTemplates = ['']) {
+  const uiList = normalizeTemplatesForUi(block, fallbackTemplates)
+  const filled = uiList.map((t) => stripNomePlaceholder(t)).filter(Boolean).slice(0, X1_MAX_TEMPLATES)
+  const templates = filled.length ? filled : [stripNomePlaceholder(fallbackTemplates[0] || '') || '']
   const safe = {
     ...block,
-    template: stripNomePlaceholder(block?.template || ''),
+    templates,
+    template: templates[0] || '',
     minDelaySec: Math.max(0, Number(block?.minDelaySec) || 0),
     maxDelaySec: Math.max(0, Number(block?.maxDelaySec) || 0),
     maxX1PerUser24h: Math.max(1, Number(block?.maxX1PerUser24h) || 1),
@@ -190,41 +230,117 @@ function migrateX1Automation(raw) {
   const base = defaultX1Automation()
   if (!raw || typeof raw !== 'object') return base
 
-  const join = sanitizeX1KindBlock({
+  const joinRaw = {
     ...base.join,
     ...(raw.join || {}),
     template: raw.join?.template ?? raw.joinTemplate ?? base.join.template,
+    templates: raw.join?.templates,
     minDelaySec: raw.join?.minDelaySec ?? raw.minDelaySec ?? base.join.minDelaySec,
     maxDelaySec: raw.join?.maxDelaySec ?? raw.maxDelaySec ?? base.join.maxDelaySec,
     maxX1PerUser24h: raw.join?.maxX1PerUser24h ?? raw.maxX1PerUser24h ?? base.join.maxX1PerUser24h,
     quietHoursEnabled: raw.join?.quietHoursEnabled ?? raw.quietHoursEnabled ?? base.join.quietHoursEnabled,
     quietHoursStart: raw.join?.quietHoursStart ?? raw.quietHoursStart ?? base.join.quietHoursStart,
     quietHoursEnd: raw.join?.quietHoursEnd ?? raw.quietHoursEnd ?? base.join.quietHoursEnd,
-  })
-
-  const leave = sanitizeX1KindBlock({
+  }
+  const leaveRaw = {
     ...base.leave,
     ...(raw.leave || {}),
     template: raw.leave?.template ?? raw.leaveTemplate ?? base.leave.template,
+    templates: raw.leave?.templates,
     minDelaySec: raw.leave?.minDelaySec ?? raw.minDelaySec ?? base.leave.minDelaySec,
     maxDelaySec: raw.leave?.maxDelaySec ?? raw.maxDelaySec ?? base.leave.maxDelaySec,
     maxX1PerUser24h: raw.leave?.maxX1PerUser24h ?? raw.maxX1PerUser24h ?? base.leave.maxX1PerUser24h,
     quietHoursEnabled: raw.leave?.quietHoursEnabled ?? raw.quietHoursEnabled ?? base.leave.quietHoursEnabled,
     quietHoursStart: raw.leave?.quietHoursStart ?? raw.quietHoursStart ?? base.leave.quietHoursStart,
     quietHoursEnd: raw.leave?.quietHoursEnd ?? raw.quietHoursEnd ?? base.leave.quietHoursEnd,
-  })
+  }
+
+  const joinSafe = sanitizeX1KindBlock(joinRaw, DEFAULT_JOIN_TEMPLATES)
+  const leaveSafe = sanitizeX1KindBlock(leaveRaw, DEFAULT_LEAVE_TEMPLATES)
 
   return {
     enabled: raw.enabled === true,
     sendX1OnJoin: raw.sendX1OnJoin === true,
     sendX1OnLeave: raw.sendX1OnLeave === true,
-    join,
-    leave,
+    join: {
+      ...joinSafe,
+      templates: normalizeTemplatesForUi(joinRaw, joinSafe.templates),
+    },
+    leave: {
+      ...leaveSafe,
+      templates: normalizeTemplatesForUi(leaveRaw, leaveSafe.templates),
+    },
   }
 }
 
 function patchX1Kind(setter, kind, patch) {
   setter((s) => ({ ...s, [kind]: { ...s[kind], ...patch } }))
+}
+
+function setX1TemplateAt(setter, kind, index, value) {
+  setter((s) => {
+    const prev = normalizeTemplatesForUi(s[kind], [s[kind]?.template || ''])
+    const next = [...prev]
+    next[index] = value
+    const filled = next.map((t) => t.trim()).filter(Boolean)
+    return {
+      ...s,
+      [kind]: {
+        ...s[kind],
+        templates: next,
+        template: filled[0] || next[0] || '',
+      },
+    }
+  })
+}
+
+function addX1Template(setter, kind) {
+  setter((s) => {
+    const prev = normalizeTemplatesForUi(s[kind], [s[kind]?.template || ''])
+    if (prev.length >= X1_MAX_TEMPLATES) return s
+    return {
+      ...s,
+      [kind]: {
+        ...s[kind],
+        templates: [...prev, ''],
+      },
+    }
+  })
+}
+
+function removeX1Template(setter, kind, index) {
+  setter((s) => {
+    const prev = normalizeTemplatesForUi(s[kind], [s[kind]?.template || ''])
+    if (prev.length <= 1) return s
+    const next = prev.filter((_, i) => i !== index)
+    const filled = next.map((t) => t.trim()).filter(Boolean)
+    return {
+      ...s,
+      [kind]: {
+        ...s[kind],
+        templates: next,
+        template: filled[0] || next[0] || '',
+      },
+    }
+  })
+}
+
+function applyRecommendedX1Templates(setter, kind) {
+  const samples = kind === 'leave' ? DEFAULT_LEAVE_TEMPLATES : DEFAULT_JOIN_TEMPLATES
+  setter((s) => ({
+    ...s,
+    [kind]: {
+      ...s[kind],
+      templates: [...samples],
+      template: samples[0],
+      minDelaySec: Math.max(s[kind]?.minDelaySec || 0, X1_RECOMMENDED_MIN_DELAY),
+      maxDelaySec: Math.max(s[kind]?.maxDelaySec || 0, 75),
+    },
+  }))
+}
+
+function countFilledTemplates(block) {
+  return normalizeTemplatesForUi(block).filter((t) => t.trim()).length
 }
 
 function formatActivity(iso) {
@@ -1010,8 +1126,8 @@ export function GroupDetails() {
     const safe = migrateX1Automation({
       ...x1Automation,
       ...(monitoringActive ? {} : { enabled: false, sendX1OnJoin: false, sendX1OnLeave: false }),
-      join: sanitizeX1KindBlock(x1Automation.join),
-      leave: sanitizeX1KindBlock(x1Automation.leave),
+      join: sanitizeX1KindBlock(x1Automation.join, DEFAULT_JOIN_TEMPLATES),
+      leave: sanitizeX1KindBlock(x1Automation.leave, DEFAULT_LEAVE_TEMPLATES),
     })
     setX1Automation(safe)
     const nextAudit = [{ id: crypto.randomUUID(), at: nowIso(), action: 'x1.settings_save', details: 'Automação de entrada/saída atualizada' }, ...auditLogRef.current].slice(0, 50)
@@ -2016,6 +2132,22 @@ export function GroupDetails() {
               />
             </div>
 
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-xs text-amber-100/90 space-y-1.5">
+              <p className="font-medium text-amber-200 flex items-center gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Recomendações anti-bloqueio
+              </p>
+              <ul className="list-disc pl-4 space-y-1 text-amber-100/80">
+                <li>
+                  Use <strong className="text-amber-50">até 5 variações</strong> de texto — o sistema sorteia uma a cada envio.
+                </li>
+                <li>
+                  Delay mínimo recomendado: <strong className="text-amber-50">20 segundos</strong> (ideal 20–75s).
+                </li>
+                <li>Evite o mesmo texto idêntico em todos os disparos.</li>
+              </ul>
+            </div>
+
             <div className="grid gap-4 md:grid-cols-2">
               <Toggle
                 checked={monitoringActive && x1Automation.sendX1OnJoin}
@@ -2032,21 +2164,77 @@ export function GroupDetails() {
             </div>
 
             <div className="space-y-4 rounded-xl border border-emerald-900/50 bg-emerald-950/10 p-4">
-              <p className="text-sm font-semibold text-emerald-300">Mensagem de entrada</p>
-              <Textarea
-                label="Texto enviado no privado quando alguém entra"
-                rows={3}
-                value={x1Automation.join?.template || ''}
-                onChange={(e) => patchX1Kind(setX1Automation, 'join', { template: e.target.value })}
-                placeholder="Mensagem enviada no privado quando alguém entra no grupo"
-              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-emerald-300">Mensagem de entrada</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={x1ControlsDisabled}
+                  onClick={() => applyRecommendedX1Templates(setX1Automation, 'join')}
+                >
+                  Preencher 5 exemplos
+                </Button>
+              </div>
+              <p className="text-xs text-stone-500">
+                Variações ({countFilledTemplates(x1Automation.join)}/{X1_MAX_TEMPLATES} preenchidas) — uma é escolhida
+                aleatoriamente a cada entrada.
+              </p>
+              {countFilledTemplates(x1Automation.join) < X1_MAX_TEMPLATES && (
+                <p className="text-xs text-amber-300/90">
+                  Recomendado: complete as 5 variações para reduzir risco de bloqueio.
+                </p>
+              )}
+              <div className="space-y-3">
+                {normalizeTemplatesForUi(x1Automation.join).map((text, idx) => (
+                  <div key={`join-tpl-${idx}`} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-stone-400">Variação {idx + 1}</span>
+                      {normalizeTemplatesForUi(x1Automation.join).length > 1 && (
+                        <button
+                          type="button"
+                          className="text-xs text-stone-500 hover:text-red-400"
+                          disabled={x1ControlsDisabled}
+                          onClick={() => removeX1Template(setX1Automation, 'join', idx)}
+                        >
+                          Remover
+                        </button>
+                      )}
+                    </div>
+                    <Textarea
+                      rows={2}
+                      value={text}
+                      disabled={x1ControlsDisabled}
+                      onChange={(e) => setX1TemplateAt(setX1Automation, 'join', idx, e.target.value)}
+                      placeholder={`Texto ${idx + 1} enviado no privado quando alguém entra`}
+                    />
+                  </div>
+                ))}
+              </div>
+              {normalizeTemplatesForUi(x1Automation.join).length < X1_MAX_TEMPLATES && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="gap-1"
+                  disabled={x1ControlsDisabled}
+                  onClick={() => addX1Template(setX1Automation, 'join')}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Adicionar variação
+                </Button>
+              )}
               <div className="grid gap-4 md:grid-cols-3">
-                <Input
-                  label="Delay mínimo (seg)"
-                  type="number"
-                  value={x1Automation.join?.minDelaySec ?? 0}
-                  onChange={(e) => patchX1Kind(setX1Automation, 'join', { minDelaySec: Number(e.target.value) || 0 })}
-                />
+                <div>
+                  <Input
+                    label="Delay mínimo (seg)"
+                    type="number"
+                    value={x1Automation.join?.minDelaySec ?? 0}
+                    onChange={(e) => patchX1Kind(setX1Automation, 'join', { minDelaySec: Number(e.target.value) || 0 })}
+                  />
+                  {(x1Automation.join?.minDelaySec ?? 0) < X1_RECOMMENDED_MIN_DELAY && (
+                    <p className="mt-1 text-[11px] text-amber-300/90">Recomendado: ≥ {X1_RECOMMENDED_MIN_DELAY}s</p>
+                  )}
+                </div>
                 <Input
                   label="Delay máximo (seg)"
                   type="number"
@@ -2086,21 +2274,77 @@ export function GroupDetails() {
             </div>
 
             <div className="space-y-4 rounded-xl border border-amber-900/40 bg-amber-950/10 p-4">
-              <p className="text-sm font-semibold text-amber-200">Mensagem de saída</p>
-              <Textarea
-                label="Texto enviado no privado quando alguém sai"
-                rows={3}
-                value={x1Automation.leave?.template || ''}
-                onChange={(e) => patchX1Kind(setX1Automation, 'leave', { template: e.target.value })}
-                placeholder="Mensagem enviada no privado quando alguém sai do grupo"
-              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-amber-200">Mensagem de saída</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={x1ControlsDisabled}
+                  onClick={() => applyRecommendedX1Templates(setX1Automation, 'leave')}
+                >
+                  Preencher 5 exemplos
+                </Button>
+              </div>
+              <p className="text-xs text-stone-500">
+                Variações ({countFilledTemplates(x1Automation.leave)}/{X1_MAX_TEMPLATES} preenchidas) — uma é escolhida
+                aleatoriamente a cada saída.
+              </p>
+              {countFilledTemplates(x1Automation.leave) < X1_MAX_TEMPLATES && (
+                <p className="text-xs text-amber-300/90">
+                  Recomendado: complete as 5 variações para reduzir risco de bloqueio.
+                </p>
+              )}
+              <div className="space-y-3">
+                {normalizeTemplatesForUi(x1Automation.leave).map((text, idx) => (
+                  <div key={`leave-tpl-${idx}`} className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-stone-400">Variação {idx + 1}</span>
+                      {normalizeTemplatesForUi(x1Automation.leave).length > 1 && (
+                        <button
+                          type="button"
+                          className="text-xs text-stone-500 hover:text-red-400"
+                          disabled={x1ControlsDisabled}
+                          onClick={() => removeX1Template(setX1Automation, 'leave', idx)}
+                        >
+                          Remover
+                        </button>
+                      )}
+                    </div>
+                    <Textarea
+                      rows={2}
+                      value={text}
+                      disabled={x1ControlsDisabled}
+                      onChange={(e) => setX1TemplateAt(setX1Automation, 'leave', idx, e.target.value)}
+                      placeholder={`Texto ${idx + 1} enviado no privado quando alguém sai`}
+                    />
+                  </div>
+                ))}
+              </div>
+              {normalizeTemplatesForUi(x1Automation.leave).length < X1_MAX_TEMPLATES && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="gap-1"
+                  disabled={x1ControlsDisabled}
+                  onClick={() => addX1Template(setX1Automation, 'leave')}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Adicionar variação
+                </Button>
+              )}
               <div className="grid gap-4 md:grid-cols-3">
-                <Input
-                  label="Delay mínimo (seg)"
-                  type="number"
-                  value={x1Automation.leave?.minDelaySec ?? 0}
-                  onChange={(e) => patchX1Kind(setX1Automation, 'leave', { minDelaySec: Number(e.target.value) || 0 })}
-                />
+                <div>
+                  <Input
+                    label="Delay mínimo (seg)"
+                    type="number"
+                    value={x1Automation.leave?.minDelaySec ?? 0}
+                    onChange={(e) => patchX1Kind(setX1Automation, 'leave', { minDelaySec: Number(e.target.value) || 0 })}
+                  />
+                  {(x1Automation.leave?.minDelaySec ?? 0) < X1_RECOMMENDED_MIN_DELAY && (
+                    <p className="mt-1 text-[11px] text-amber-300/90">Recomendado: ≥ {X1_RECOMMENDED_MIN_DELAY}s</p>
+                  )}
+                </div>
                 <Input
                   label="Delay máximo (seg)"
                   type="number"

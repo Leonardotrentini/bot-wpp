@@ -1,7 +1,7 @@
 const { jidDomain, phoneDigitsFromJid, resolvePhoneDigits, digitsOnly } = require("./participantIdentity")
 
 const DEFAULT_KIND_SETTINGS = {
-  minDelaySec: 15,
+  minDelaySec: 20,
   maxDelaySec: 75,
   maxX1PerUser24h: 2,
   quietHoursEnabled: true,
@@ -9,21 +9,40 @@ const DEFAULT_KIND_SETTINGS = {
   quietHoursEnd: "08:00",
 }
 
+const DEFAULT_JOIN_TEMPLATES = [
+  "Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.",
+  "Bem-vindo(a) ao grupo! Qualquer dúvida, me chama aqui no privado.",
+  "Oi! Que bom ter você no grupo. Posso te enviar o material no privado?",
+  "Seja bem-vindo(a)! Se quiser o passo a passo, me chama no X1.",
+  "Olá! Entrou no grupo agora? Me chama no privado que eu te ajudo.",
+]
+
+const DEFAULT_LEAVE_TEMPLATES = [
+  "Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?",
+  "Vi que saiu do grupo. Se quiser continuar por aqui no privado, me chama.",
+  "Saiu do grupo? Sem problema — posso te atender no privado.",
+  "Notei sua saída. Se precisar de algo, estou aqui no X1.",
+  "Se saiu por engano ou quiser falar à parte, me chama no privado.",
+]
+
 const DEFAULT_X1_CONFIG = {
   enabled: false,
   sendX1OnJoin: false,
   sendX1OnLeave: false,
   join: {
     ...DEFAULT_KIND_SETTINGS,
-    template: "Olá! Seja bem-vindo(a)! Me chama no privado para receber o guia rápido.",
+    templates: [...DEFAULT_JOIN_TEMPLATES],
+    template: DEFAULT_JOIN_TEMPLATES[0],
   },
   leave: {
     ...DEFAULT_KIND_SETTINGS,
-    template: "Percebi que você saiu do grupo. Posso te ajudar por aqui no X1?",
+    templates: [...DEFAULT_LEAVE_TEMPLATES],
+    template: DEFAULT_LEAVE_TEMPLATES[0],
   },
 }
 
 const X1_TIMEZONE = "America/Sao_Paulo"
+const X1_MAX_TEMPLATES = 5
 const processingLock = new Set()
 
 function stripNomePlaceholder(template) {
@@ -32,6 +51,32 @@ function stripNomePlaceholder(template) {
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([!?.,:;])/g, "$1")
     .trim()
+}
+
+function normalizeTemplatesList(src, fallbackTemplates, legacyTemplate) {
+  const fallback = Array.isArray(fallbackTemplates) && fallbackTemplates.length
+    ? fallbackTemplates
+    : [String(legacyTemplate || "")]
+  let list = []
+  if (Array.isArray(src?.templates)) {
+    list = src.templates.map((t) => stripNomePlaceholder(String(t || ""))).filter(Boolean)
+  }
+  if (!list.length) {
+    const single = stripNomePlaceholder(String(src?.template ?? legacyTemplate ?? fallback[0] ?? ""))
+    if (single) list = [single]
+  }
+  if (!list.length) {
+    list = fallback.map((t) => stripNomePlaceholder(String(t || ""))).filter(Boolean)
+  }
+  list = list.slice(0, X1_MAX_TEMPLATES)
+  if (!list.length) list = [stripNomePlaceholder(fallback[0] || "")]
+  return list
+}
+
+function pickRandomTemplate(kindConfig) {
+  const list = normalizeTemplatesList(kindConfig || {}, [kindConfig?.template || ""], kindConfig?.template)
+  if (!list.length) return ""
+  return list[randomInt(0, list.length - 1)]
 }
 
 function normalizeDelayPair(src, fallback) {
@@ -61,8 +106,15 @@ function normalizeKindBlock(rawBlock, { kind, legacyFlat }) {
     fallback,
   )
 
+  const templates = normalizeTemplatesList(
+    src,
+    fallback.templates,
+    src.template ?? legacyFlat?.[templateKey] ?? fallback.template,
+  )
+
   return {
-    template: stripNomePlaceholder(String(src.template ?? legacyFlat?.[templateKey] ?? fallback.template)),
+    templates,
+    template: templates[0] || "",
     minDelaySec,
     maxDelaySec,
     maxX1PerUser24h: Math.max(
@@ -336,7 +388,7 @@ async function enqueueX1ForParticipant(deps, ctx) {
   }
 
   const effectiveKind = kind === "test" ? eventKind : kind
-  const template = kindConfig.template
+  const template = pickRandomTemplate(kindConfig)
   const body = renderX1Template(template, { nome: participantName })
 
   if (!force && effectiveKind !== "test") {
@@ -510,7 +562,8 @@ async function processOneDelivery(deps, deliveryId) {
 
     const kindConfig = getKindConfig(normalizeX1Config(groupRow.groupX1Automation), delivery.kind)
     const body =
-      delivery.body || renderX1Template(kindConfig.template, { nome: delivery.participantName })
+      delivery.body ||
+      renderX1Template(pickRandomTemplate(kindConfig), { nome: delivery.participantName })
     console.log(`[x1] enviando DM ${delivery.kind} → ${sendNumber} (grupo ${groupRow.groupJid})`)
 
     const resp = await sendText(conn.instanceName, sendNumber, body)
@@ -699,8 +752,13 @@ async function migrateStoredX1Templates(prisma) {
 module.exports = {
   DEFAULT_X1_CONFIG,
   DEFAULT_KIND_SETTINGS,
+  DEFAULT_JOIN_TEMPLATES,
+  DEFAULT_LEAVE_TEMPLATES,
+  X1_MAX_TEMPLATES,
   normalizeX1Config,
   normalizeKindBlock,
+  normalizeTemplatesList,
+  pickRandomTemplate,
   getKindConfig,
   renderX1Template,
   parseParticipantsUpdatePayload,
