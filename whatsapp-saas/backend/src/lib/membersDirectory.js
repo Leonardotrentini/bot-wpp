@@ -115,10 +115,46 @@ function applyCrmEnrichment(member, contact) {
   const tagLinks = buildCrmTagLinks(contact)
   member.crmContactId = contact.id
   member.metaAttribution = buildMetaAttributionSummary(contact)
-  member.crmTagLinks = tagLinks
+  member.crmTagLinks = mergeCrmTagLinks(member.crmTagLinks, tagLinks)
   if (crmTags.length) {
     member.crmTags = [...new Set([...(member.crmTags || []), ...crmTags])]
   }
+}
+
+/** Prioriza o contato CRM “mais rico” ao mesclar o mesmo telefone (ex.: dono vs vendedor). */
+function contactCrmPriority(contact) {
+  const tagCount = (contact.tags || []).filter((l) => l?.tag?.name).length
+  let score = tagCount * 1000
+  if (contact.qualifiedEventSentAt) score += 500
+  if (contact.quoteEventSentAt) score += 100
+  if (contact.purchaseEventSentAt) score += 100
+  if (contact.contactEventSentAt) score += 50
+  const lastAt =
+    contact.conversation?.lastMessageAt ||
+    contact.lastSeenAt ||
+    contact.updatedAt ||
+    contact.createdAt ||
+    0
+  score += Math.floor(new Date(lastAt).getTime() / 60000)
+  return score
+}
+
+function mergeCrmTagLinks(prev, next) {
+  const map = new Map()
+  for (const link of [...(prev || []), ...(next || [])]) {
+    if (!link?.name) continue
+    const key = String(link.name).toLowerCase()
+    const prevLink = map.get(key)
+    if (!prevLink) {
+      map.set(key, link)
+      continue
+    }
+    // Mantém a data mais antiga da tag (quando foi adicionada pela 1ª vez).
+    const a = prevLink.createdAt ? new Date(prevLink.createdAt).getTime() : Infinity
+    const b = link.createdAt ? new Date(link.createdAt).getTime() : Infinity
+    if (b < a) map.set(key, link)
+  }
+  return [...map.values()]
 }
 
 /**
@@ -143,12 +179,11 @@ function mergeCrmContactsIntoMembers(map, contacts, { fallbackAvatar }) {
       contact.createdAt?.toISOString?.() ||
       new Date().toISOString()
     const crmTags = (contact.tags || []).map((link) => link.tag?.name).filter(Boolean)
+    const priority = contactCrmPriority(contact)
 
     const existingKey = findMemberKeyForCrmContact(map, contact, phoneIndex)
     if (existingKey) {
       const existing = map.get(existingKey)
-      existing.crmContactId = contact.id
-      existing.conversationId = conversation?.id || existing.conversationId || null
       existing.isCrmLead = true
       existing.hasX1 = true
       if (!Array.isArray(existing.sources)) existing.sources = []
@@ -164,10 +199,27 @@ function mergeCrmContactsIntoMembers(map, contacts, { fallbackAvatar }) {
       if (new Date(lastAt).getTime() > new Date(existing.lastActivity || 0).getTime()) {
         existing.lastActivity = lastAt
       }
+      // Une tags de todos os contatos do mesmo telefone…
       if (crmTags.length) {
         existing.crmTags = [...new Set([...(existing.crmTags || []), ...crmTags])]
       }
-      applyCrmEnrichment(existing, contact)
+      existing.crmTagLinks = mergeCrmTagLinks(existing.crmTagLinks, buildCrmTagLinks(contact))
+
+      // …mas o link do chat / Meta aponta para o contato CRM mais completo
+      // (evita tag QUALIFICADO do dono + conversa vazia do vendedor).
+      const prevPriority = Number(existing._crmPriority) || 0
+      if (priority >= prevPriority) {
+        existing._crmPriority = priority
+        existing.crmContactId = contact.id
+        existing.conversationId = conversation?.id || existing.conversationId || null
+        existing.metaAttribution = buildMetaAttributionSummary(contact)
+        if (contact.isLid != null) existing.isLid = Boolean(contact.isLid)
+      } else if (!existing.crmContactId) {
+        existing.crmContactId = contact.id
+        existing.conversationId = conversation?.id || null
+        existing.metaAttribution = buildMetaAttributionSummary(contact)
+        existing._crmPriority = priority
+      }
       merged += 1
       continue
     }
@@ -193,11 +245,19 @@ function mergeCrmContactsIntoMembers(map, contacts, { fallbackAvatar }) {
       groupIds: [],
       lastActivity: lastAt,
       avatar: contact.avatarUrl || fallbackAvatar(name || jid),
+      _crmPriority: priority,
     }
     applyCrmEnrichment(row, contact)
     map.set(jid, row)
     if (phoneDigits && !phoneIndex.has(phoneDigits)) phoneIndex.set(phoneDigits, jid)
     added += 1
+  }
+
+  // Não enviar campo interno ao cliente.
+  for (const member of map.values()) {
+    if (member && Object.prototype.hasOwnProperty.call(member, "_crmPriority")) {
+      delete member._crmPriority
+    }
   }
 
   return { merged, added, x1Only: added }

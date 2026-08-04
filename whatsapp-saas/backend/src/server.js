@@ -2354,6 +2354,7 @@ app.get("/api/members", authMiddleware, async (req, res) => {
       customFields: true,
       lastSeenAt: true,
       createdAt: true,
+      updatedAt: true,
       qualifiedEventSentAt: true,
       quoteEventSentAt: true,
       purchaseEventSentAt: true,
