@@ -374,12 +374,57 @@ export async function getGroupDetails(id) {
   const members = rawMembers.map((m) => ({
     ...m,
     lastActivity: m.lastActivity || new Date().toISOString(),
+    joinedAt: m.joinedAt || new Date(Date.now() - 1000 * 60 * 60 * 24 * 5).toISOString(),
+    messageCount: m.messageCount ?? 2,
   }))
   const activity = mockDashboardMetrics.messagesLast7Days.map((d, i) => ({
     day: d.day,
     msgs: Math.round(40 + Math.random() * 80 + i * 5),
   }))
   return mockResponse({ group, members, activity, settings: { ...mockGroupSettings } })
+}
+
+export async function getGroupMemberTimeline(groupId, memberId) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(
+      `/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/timeline`,
+    )
+  }
+  await delay()
+  const now = Date.now()
+  return mockResponse({
+    member: {
+      id: memberId,
+      name: 'Membro',
+      phone: '—',
+      status: 'ativo',
+      joinedAt: new Date(now - 86400000 * 5).toISOString(),
+      lastActivity: new Date(now - 3600000).toISOString(),
+      messageCount: 2,
+    },
+    events: [
+      {
+        type: 'message',
+        at: new Date(now - 3600000).toISOString(),
+        label: 'Olá, tenho interesse no catálogo',
+        messageType: 'text',
+      },
+      {
+        type: 'joined',
+        at: new Date(now - 86400000 * 5).toISOString(),
+        label: 'Registrado no grupo (primeira sincronização)',
+      },
+    ],
+    meta: { retentionDays: 2, source: 'mock', messageSyncStatus: 'READY', messagesSyncedCount: 10 },
+  })
+}
+
+export async function syncGroupMessages(groupId) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/groups/${encodeURIComponent(groupId)}/messages/sync`)
+  }
+  await delay()
+  return mockResponse({ ok: true, message: 'Sincronização iniciada (mock).' })
 }
 
 export async function updateGroupConfig(groupId, payload = {}) {

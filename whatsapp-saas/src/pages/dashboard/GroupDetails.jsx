@@ -24,6 +24,7 @@ import {
   Users2,
   AlertTriangle,
   Send,
+  RefreshCw,
 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Tabs } from '../../components/common/Tabs.jsx'
@@ -35,7 +36,7 @@ import { Badge } from '../../components/common/Badge.jsx'
 import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
 import { Select } from '../../components/common/Select.jsx'
-import { getGroupDetails, getGroupX1Deliveries, setGroupParticipantsStatus, testGroupX1, updateGroupConfig } from '../../services/api.js'
+import { getGroupDetails, getGroupMemberTimeline, getGroupX1Deliveries, setGroupParticipantsStatus, syncGroupMessages, testGroupX1, updateGroupConfig } from '../../services/api.js'
 import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { avatar, mockGroupSettings } from '../../utils/mockData.js'
@@ -211,6 +212,10 @@ export function GroupDetails() {
   const [addTagModal, setAddTagModal] = useState(false)
   const [removeTagModal, setRemoveTagModal] = useState(false)
   const [memberTimeline, setMemberTimeline] = useState(null)
+  const [timelineMemberId, setTimelineMemberId] = useState(null)
+  const [timelineLoading, setTimelineLoading] = useState(false)
+  const [timelineSyncing, setTimelineSyncing] = useState(false)
+  const [timelineError, setTimelineError] = useState(null)
   const [routineModal, setRoutineModal] = useState(false)
   const [newRoutine, setNewRoutine] = useState({ type: 'privacidade', description: '' })
   const [newTagName, setNewTagName] = useState('')
@@ -344,7 +349,9 @@ export function GroupDetails() {
     const base = payload.members.map((m) => ({
       ...m,
       tags: [...(m.tags || [])],
-      lastActivity: m.lastActivity || new Date().toISOString(),
+      lastActivity: m.lastActivity || null,
+      joinedAt: m.joinedAt || null,
+      messageCount: m.messageCount ?? null,
       persona: m.persona || 'cliente',
     }))
     let initial = base
@@ -498,6 +505,89 @@ export function GroupDetails() {
       else n.add(memberId)
       return n
     })
+  }
+
+  async function openMemberTimeline(member) {
+    setTimelineError(null)
+    setTimelineLoading(true)
+    setTimelineMemberId(member.id)
+    setMemberTimeline({
+      name: member.name,
+      phone: member.phone,
+      status: member.status,
+      tags: member.tags || [],
+      joinedAt: member.joinedAt || null,
+      lastActivity: member.lastActivity || null,
+      messageCount: member.messageCount ?? null,
+      events: [],
+      meta: null,
+    })
+    try {
+      const { data } = await getGroupMemberTimeline(id, member.id)
+      setMemberTimeline({
+        name: data.member?.name || member.name,
+        phone: data.member?.phone || member.phone,
+        status: data.member?.status || member.status,
+        tags: member.tags || [],
+        joinedAt: data.member?.joinedAt || member.joinedAt || null,
+        leftAt: data.member?.leftAt || null,
+        lastActivity: data.member?.lastActivity || member.lastActivity || null,
+        lastSyncedAt: data.member?.lastSyncedAt || member.lastSyncedAt || null,
+        messageCount: data.member?.messageCount ?? member.messageCount ?? 0,
+        events: Array.isArray(data.events) ? data.events : [],
+        meta: data.meta || null,
+      })
+    } catch (err) {
+      const status = err?.response?.status
+      const apiMsg = err?.response?.data?.message
+      const msg =
+        apiMsg ||
+        (status === 404
+          ? 'Histórico indisponível no servidor (faça deploy/restart do backend).'
+          : status === 409
+            ? 'WhatsApp desconectado. Conecte e tente de novo.'
+            : 'Não foi possível carregar o histórico.')
+      setTimelineError(msg)
+      toast.error(msg)
+    } finally {
+      setTimelineLoading(false)
+    }
+  }
+
+  async function syncMemberTimeline() {
+    if (!id || !timelineMemberId) return
+    setTimelineSyncing(true)
+    setTimelineError(null)
+    try {
+      const { data } = await syncGroupMessages(id)
+      toast.success(data?.message || 'Sincronização iniciada. Aguarde e atualize o histórico.')
+      // Pequena espera para o import começar a gravar, depois recarrega timeline.
+      await new Promise((r) => setTimeout(r, 2500))
+      const member = members.find((m) => m.id === timelineMemberId)
+      if (member) await openMemberTimeline(member)
+      else {
+        const { data: tl } = await getGroupMemberTimeline(id, timelineMemberId)
+        setMemberTimeline((prev) => ({
+          ...(prev || {}),
+          name: tl.member?.name || prev?.name,
+          phone: tl.member?.phone || prev?.phone,
+          status: tl.member?.status || prev?.status,
+          joinedAt: tl.member?.joinedAt || prev?.joinedAt || null,
+          leftAt: tl.member?.leftAt || null,
+          lastActivity: tl.member?.lastActivity || prev?.lastActivity || null,
+          lastSyncedAt: tl.member?.lastSyncedAt || null,
+          messageCount: tl.member?.messageCount ?? 0,
+          events: Array.isArray(tl.events) ? tl.events : [],
+          meta: tl.meta || null,
+        }))
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.message || 'Falha ao sincronizar mensagens do grupo.'
+      setTimelineError(msg)
+      toast.error(msg)
+    } finally {
+      setTimelineSyncing(false)
+    }
   }
 
   const createGroupTag = () => {
@@ -1119,15 +1209,10 @@ export function GroupDetails() {
                         </select>
                       </td>
                       <td className="p-4 hidden text-stone-500 text-xs sm:table-cell whitespace-nowrap">
-                        {formatActivity(m.lastActivity)}
+                        {m.lastActivity ? formatActivity(m.lastActivity) : 'Sem msgs no período'}
                         <button
                           type="button"
-                          onClick={() =>
-                            setMemberTimeline({
-                              ...m,
-                              joinedAt: m.joinedAt || new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
-                            })
-                          }
+                          onClick={() => openMemberTimeline(m)}
                           className="ml-2 text-accent-400 hover:underline"
                         >
                           histórico
@@ -1265,18 +1350,159 @@ export function GroupDetails() {
 
           <Modal
             isOpen={!!memberTimeline}
-            onClose={() => setMemberTimeline(null)}
+            onClose={() => {
+              setMemberTimeline(null)
+              setTimelineMemberId(null)
+              setTimelineError(null)
+              setTimelineLoading(false)
+              setTimelineSyncing(false)
+            }}
             title={memberTimeline ? `Timeline • ${memberTimeline.name}` : 'Timeline'}
-            footer={<Button onClick={() => setMemberTimeline(null)}>Fechar</Button>}
+            footer={
+              <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={timelineSyncing || timelineLoading}
+                  onClick={syncMemberTimeline}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${timelineSyncing ? 'animate-spin' : ''}`} />
+                  {timelineSyncing ? 'Sincronizando…' : 'Sincronizar'}
+                </Button>
+                <Button
+                  onClick={() => {
+                    setMemberTimeline(null)
+                    setTimelineMemberId(null)
+                    setTimelineError(null)
+                  }}
+                >
+                  Fechar
+                </Button>
+              </div>
+            }
           >
             {memberTimeline && (
-              <ul className="space-y-2 text-sm text-stone-300">
-                <li>Entrou no grupo em: {formatActivity(memberTimeline.joinedAt)}</li>
-                <li>Última atividade: {formatActivity(memberTimeline.lastActivity)}</li>
-                <li>Status atual: {memberTimeline.status}</li>
-                <li>Tags: {(memberTimeline.tags || []).map(displayTag).join(', ') || 'sem tags'}</li>
-                <li>Ações recentes: abertura de mensagem, reação e participação em tópico (mock).</li>
-              </ul>
+              <div className="space-y-4 text-sm text-stone-300">
+                <ul className="space-y-1.5 text-xs text-stone-400">
+                  <li>
+                    <span className="text-stone-500">Telefone:</span> {memberTimeline.phone || '—'}
+                  </li>
+                  <li>
+                    <span className="text-stone-500">Registrado em:</span>{' '}
+                    {formatActivity(memberTimeline.joinedAt)}
+                  </li>
+                  {memberTimeline.leftAt ? (
+                    <li>
+                      <span className="text-stone-500">Saiu em:</span> {formatActivity(memberTimeline.leftAt)}
+                    </li>
+                  ) : null}
+                  <li>
+                    <span className="text-stone-500">Última mensagem:</span>{' '}
+                    {formatActivity(memberTimeline.lastActivity)}
+                  </li>
+                  <li>
+                    <span className="text-stone-500">Status:</span> {memberTimeline.status}
+                  </li>
+                  <li>
+                    <span className="text-stone-500">Tags:</span>{' '}
+                    {(memberTimeline.tags || []).map(displayTag).join(', ') || 'sem tags'}
+                  </li>
+                  <li>
+                    <span className="text-stone-500">Mensagens no período:</span>{' '}
+                    {memberTimeline.messageCount ?? 0}
+                    {memberTimeline.meta?.retentionDays
+                      ? ` (últimos ~${memberTimeline.meta.retentionDays} dias / desde ativação)`
+                      : ''}
+                  </li>
+                  {memberTimeline.meta?.messageSyncStatus ? (
+                    <li>
+                      <span className="text-stone-500">Sync do grupo:</span>{' '}
+                      {memberTimeline.meta.messageSyncStatus}
+                      {memberTimeline.meta.messagesSyncedCount != null
+                        ? ` · ${memberTimeline.meta.messagesSyncedCount} msgs salvas`
+                        : ''}
+                    </li>
+                  ) : null}
+                </ul>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      Atividade recente
+                    </h4>
+                    <button
+                      type="button"
+                      disabled={timelineLoading || timelineSyncing || !timelineMemberId}
+                      onClick={() => {
+                        const member = members.find((m) => m.id === timelineMemberId)
+                        if (member) openMemberTimeline(member)
+                      }}
+                      className="text-[11px] text-accent-400 hover:underline disabled:opacity-40"
+                    >
+                      Atualizar
+                    </button>
+                  </div>
+                  {timelineLoading ? (
+                    <p className="text-xs text-stone-500">Carregando histórico…</p>
+                  ) : timelineError ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-red-300">{timelineError}</p>
+                      <p className="text-[11px] text-stone-500">
+                        Use <strong className="text-stone-300">Sincronizar</strong> para importar mensagens deste grupo
+                        e depois clique em Atualizar.
+                      </p>
+                    </div>
+                  ) : !memberTimeline.events?.length ? (
+                    <div className="space-y-2">
+                      <p className="text-xs text-stone-500">
+                        Nenhuma mensagem deste membro no período sincronizado.
+                      </p>
+                      <p className="text-[11px] text-stone-500">
+                        Clique em <strong className="text-stone-300">Sincronizar</strong> para puxar o histórico do
+                        WhatsApp. Novas mensagens após a sync também entram sozinhas.
+                      </p>
+                    </div>
+                  ) : (
+                    <ul className="max-h-72 space-y-2 overflow-y-auto vg-scrollbar pr-1">
+                      {memberTimeline.events.map((ev, idx) => (
+                        <li
+                          key={`${ev.type}-${ev.at}-${ev.messageId || idx}`}
+                          className="rounded-lg border border-brand-800/80 bg-brand-900/40 px-3 py-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="min-w-0 text-sm text-stone-200">
+                              {ev.type === 'message' && (
+                                <Badge variant="muted" className="mr-1.5 align-middle">
+                                  msg
+                                </Badge>
+                              )}
+                              {ev.type === 'joined' && (
+                                <Badge variant="success" className="mr-1.5 align-middle">
+                                  entrada
+                                </Badge>
+                              )}
+                              {ev.type === 'left' && (
+                                <Badge variant="warning" className="mr-1.5 align-middle">
+                                  saída
+                                </Badge>
+                              )}
+                              {ev.type === 'status' && (
+                                <Badge variant="default" className="mr-1.5 align-middle">
+                                  status
+                                </Badge>
+                              )}
+                              {ev.label}
+                            </p>
+                            <span className="shrink-0 text-[11px] text-stone-500">{formatActivity(ev.at)}</span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
             )}
           </Modal>
         </div>

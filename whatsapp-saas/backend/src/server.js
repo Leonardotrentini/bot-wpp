@@ -502,7 +502,14 @@ function getGroupApiPayload(group) {
   }
 }
 
-function getParticipantApiPayload(participant, groupName) {
+function getParticipantApiPayload(participant, groupName, extras = {}) {
+  const lastSyncedIso = participant.lastSyncedAt?.toISOString?.() || participant.lastSyncedAt || null
+  const joinedIso =
+    extras.joinedAt ||
+    participant.createdAt?.toISOString?.() ||
+    participant.createdAt ||
+    null
+  const leftIso = extras.leftAt || participant.leftAt?.toISOString?.() || participant.leftAt || null
   return {
     id: participant.participantJid,
     name: participant.name || "Sem nome",
@@ -511,9 +518,59 @@ function getParticipantApiPayload(participant, groupName) {
     status: participant.status,
     tags: participant.role === "admin" || participant.role === "superadmin" ? ["admin"] : [],
     groups: groupName ? [groupName] : [],
-    lastActivity: participant.lastSyncedAt?.toISOString?.() || new Date().toISOString(),
+    lastActivity:
+      Object.prototype.hasOwnProperty.call(extras, "lastActivity") ? extras.lastActivity : lastSyncedIso,
+    lastSyncedAt: lastSyncedIso,
+    joinedAt: joinedIso,
+    leftAt: leftIso,
+    messageCount: extras.messageCount ?? null,
     avatar: fallbackGroupImage(participant.name || participant.phone || participant.participantJid),
   }
+}
+
+/** Última mensagem / contagem por senderJid no grupo (inbound). */
+async function loadParticipantMessageStats(groupId) {
+  const rows = await prisma.whatsAppMessage.groupBy({
+    by: ["senderJid"],
+    where: { groupId, fromMe: false, senderJid: { not: null } },
+    _max: { timestamp: true },
+    _count: { _all: true },
+  })
+  const byJid = new Map()
+  const byPhone = new Map()
+  for (const row of rows) {
+    const jid = row.senderJid
+    if (!jid) continue
+    const lastActivity = row._max.timestamp?.toISOString?.() || null
+    const messageCount = row._count._all || 0
+    const entry = { lastActivity, messageCount }
+    byJid.set(jid, entry)
+    const pd = phoneDigitsFromJid(jid)
+    if (pd) {
+      const prev = byPhone.get(pd)
+      if (!prev || (lastActivity && (!prev.lastActivity || lastActivity > prev.lastActivity))) {
+        byPhone.set(pd, entry)
+      }
+    }
+  }
+  return { byJid, byPhone }
+}
+
+function resolveParticipantMessageStats(participantJid, stats) {
+  if (!stats) return null
+  const direct = stats.byJid.get(participantJid)
+  if (direct) return direct
+  const pd = phoneDigitsFromJid(participantJid)
+  if (pd && stats.byPhone.has(pd)) return stats.byPhone.get(pd)
+  return null
+}
+
+function senderJidMatchesParticipant(senderJid, participantJid) {
+  if (!senderJid || !participantJid) return false
+  if (senderJid === participantJid) return true
+  const a = phoneDigitsFromJid(senderJid)
+  const b = phoneDigitsFromJid(participantJid)
+  return Boolean(a && b && a === b)
 }
 
 function participantTags(participant) {
@@ -1753,6 +1810,7 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       console.warn("[groups] findContacts:", err?.message || err)
     }
     const messageNames = await loadSenderNamesFromGroupMessages(groupRow.id)
+    const messageStats = await loadParticipantMessageStats(groupRow.id)
 
     const members = participantRows.map((p) => {
       let mapped = p.raw
@@ -1773,6 +1831,7 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
         if (p.phone && p.phone !== "—") mapped.phone = p.phone
       }
 
+      const msgStats = resolveParticipantMessageStats(p.participantJid, messageStats)
       return getParticipantApiPayload(
         {
           participantJid: p.participantJid,
@@ -1781,8 +1840,14 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
           role: mapped.role,
           status: mapped.status,
           lastSyncedAt: p.lastSyncedAt,
+          createdAt: p.createdAt,
+          leftAt: p.leftAt,
         },
         groupBase.name,
+        {
+          lastActivity: msgStats?.lastActivity || null,
+          messageCount: msgStats?.messageCount ?? 0,
+        },
       )
     })
 
@@ -1819,6 +1884,211 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       return res.status(409).json({ error: "WHATSAPP_NOT_CONNECTED", message: err.message })
     }
     return handleEvolutionError(res, err)
+  }
+})
+
+app.get("/api/groups/:id/members/:memberId/timeline", authMiddleware, async (req, res) => {
+  try {
+    const groupJid = decodeURIComponent(req.params.id)
+    const memberJid = decodeURIComponent(req.params.memberId)
+    const group = await prisma.whatsAppGroup.findUnique({
+      where: { userId_groupJid: { userId: req.user.sub, groupJid } },
+      select: {
+        id: true,
+        name: true,
+        activatedAt: true,
+        messageSyncStatus: true,
+        messagesSyncedCount: true,
+        messagesLastSyncAt: true,
+      },
+    })
+    if (!group) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado." })
+    }
+
+    let participant = await prisma.whatsAppGroupParticipant.findFirst({
+      where: { groupId: group.id, participantJid: memberJid },
+    })
+    if (!participant) {
+      const all = await prisma.whatsAppGroupParticipant.findMany({
+        where: { groupId: group.id },
+      })
+      participant = all.find((p) => senderJidMatchesParticipant(p.participantJid, memberJid)) || null
+    }
+    if (!participant) {
+      return res.status(404).json({
+        error: "NOT_FOUND",
+        message: "Membro não encontrado neste grupo. Sincronize os participantes e tente de novo.",
+      })
+    }
+
+    const floor = group.activatedAt ? new Date(group.activatedAt) : getRetentionCutoffDate()
+    const retentionDays = MESSAGE_RETENTION_DAYS
+
+    const phone = phoneDigitsFromJid(participant.participantJid)
+    const senderOr = [{ senderJid: participant.participantJid }]
+    if (phone) {
+      senderOr.push({ senderJid: `${phone}@s.whatsapp.net` })
+      senderOr.push({ senderJid: `${phone}@c.us` })
+    }
+
+    const memberMessages = await prisma.whatsAppMessage.findMany({
+      where: {
+        groupId: group.id,
+        fromMe: false,
+        timestamp: { gte: floor },
+        OR: senderOr,
+      },
+      orderBy: { timestamp: "desc" },
+      take: 25,
+      select: {
+        id: true,
+        body: true,
+        type: true,
+        timestamp: true,
+        senderJid: true,
+        senderName: true,
+      },
+    })
+
+    const totalInPeriod = await prisma.whatsAppMessage.count({
+      where: {
+        groupId: group.id,
+        fromMe: false,
+        timestamp: { gte: floor },
+        OR: senderOr,
+      },
+    })
+
+    const lastMessageAt = memberMessages[0]?.timestamp?.toISOString?.() || null
+
+    const events = []
+    if (participant.createdAt) {
+      events.push({
+        type: "joined",
+        at: participant.createdAt.toISOString(),
+        label: "Registrado no grupo (primeira sincronização)",
+      })
+    }
+    if (participant.leftAt) {
+      events.push({
+        type: "left",
+        at: participant.leftAt.toISOString(),
+        label: "Saiu do grupo",
+      })
+    }
+    if (participant.status === "inativo") {
+      events.push({
+        type: "status",
+        at: participant.updatedAt?.toISOString?.() || participant.lastSyncedAt?.toISOString?.() || null,
+        label: "Status marcado como inativo",
+      })
+    }
+
+    for (const m of memberMessages) {
+      const preview = String(m.body || "").trim()
+      events.push({
+        type: "message",
+        at: m.timestamp.toISOString(),
+        label: preview
+          ? preview.length > 120
+            ? `${preview.slice(0, 120)}…`
+            : preview
+          : m.type && m.type !== "text"
+            ? `Enviou ${m.type}`
+            : "Enviou mensagem",
+        messageType: m.type || "text",
+        messageId: m.id,
+      })
+    }
+
+    events.sort((a, b) => new Date(b.at || 0).getTime() - new Date(a.at || 0).getTime())
+
+    res.json({
+      member: {
+        id: participant.participantJid,
+        name: participant.name || "Sem nome",
+        phone: participant.phone || "—",
+        status: participant.status,
+        role: participant.role,
+        joinedAt: participant.createdAt?.toISOString?.() || null,
+        leftAt: participant.leftAt?.toISOString?.() || null,
+        lastActivity: lastMessageAt || null,
+        lastSyncedAt: participant.lastSyncedAt?.toISOString?.() || null,
+        messageCount: totalInPeriod,
+      },
+      events,
+      meta: {
+        retentionFloor: floor.toISOString(),
+        retentionDays,
+        source: "whatsapp_messages",
+        messageSyncStatus: group.messageSyncStatus || "IDLE",
+        messagesSyncedCount: group.messagesSyncedCount || 0,
+        messagesLastSyncAt: group.messagesLastSyncAt?.toISOString?.() || null,
+      },
+    })
+  } catch (err) {
+    console.error("[groups/member-timeline]", err)
+    return res.status(500).json({
+      error: "TIMELINE_FAILED",
+      message: err?.message || "Falha ao carregar histórico do membro.",
+    })
+  }
+})
+
+app.post("/api/groups/:id/messages/sync", authMiddleware, async (req, res) => {
+  try {
+    const groupJid = decodeURIComponent(req.params.id)
+    const conn = await getUserWhatsAppConnection(req.user.sub)
+    if (!conn.connected) {
+      return res.status(409).json({
+        error: "WHATSAPP_NOT_CONNECTED",
+        message: "Conecte o WhatsApp antes de sincronizar mensagens.",
+      })
+    }
+
+    const group = await prisma.whatsAppGroup.findUnique({
+      where: { userId_groupJid: { userId: req.user.sub, groupJid } },
+      select: { id: true, groupJid: true, monitoringEnabled: true, status: true },
+    })
+    if (!group) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado." })
+    }
+    if (!group.monitoringEnabled || group.status !== "ativo") {
+      return res.status(400).json({
+        error: "GROUP_NOT_ACTIVE",
+        message: "Ative o monitoramento deste grupo em Grupos antes de sincronizar mensagens.",
+      })
+    }
+
+    await prisma.whatsAppGroup.update({
+      where: { id: group.id },
+      data: {
+        messageSyncStatus: "SYNCING",
+        messageSyncProgress: 0,
+      },
+    })
+
+    void runMessageImport(req.user.sub, { onlyGroupJids: [group.groupJid], gradual: false }).catch((err) => {
+      console.warn("[msg-import] group sync button:", err?.message || err)
+    })
+
+    // Também atualiza participantes (nomes/JIDs) em background.
+    void syncParticipantsForGroupRow(conn, await prisma.whatsAppGroup.findUnique({ where: { id: group.id } })).catch(
+      (err) => console.warn("[groups] participant sync on messages/sync:", err?.message || err),
+    )
+
+    return res.status(202).json({
+      ok: true,
+      message: "Sincronização de mensagens iniciada para este grupo.",
+      import: getImportPayload(await getUserWhatsAppConnection(req.user.sub)),
+    })
+  } catch (err) {
+    console.error("[groups/messages-sync]", err)
+    return res.status(500).json({
+      error: "SYNC_FAILED",
+      message: err?.message || "Falha ao iniciar sincronização.",
+    })
   }
 })
 
