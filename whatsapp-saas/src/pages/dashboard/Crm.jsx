@@ -16,6 +16,7 @@ import {
   Trash2,
   Unplug,
   Upload,
+  X,
   Zap,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
@@ -719,6 +720,101 @@ const EMPTY_FLOW = {
   cooldownPerContactHours: DEFAULT_FLOW_COOLDOWN_HOURS,
 }
 
+function normalizeKeywordChip(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+function KeywordChipsInput({ keywords = [], onChange }) {
+  const [draft, setDraft] = useState('')
+  const inputRef = useRef(null)
+
+  function commitDraft(raw = draft) {
+    const parts = String(raw)
+      .split(/[,;\n]+/)
+      .map(normalizeKeywordChip)
+      .filter(Boolean)
+    if (!parts.length) {
+      setDraft('')
+      return
+    }
+    const existing = new Set((keywords || []).map(normalizeKeywordChip))
+    const next = [...(keywords || [])]
+    for (const part of parts) {
+      if (!existing.has(part)) {
+        existing.add(part)
+        next.push(part)
+      }
+    }
+    onChange(next)
+    setDraft('')
+  }
+
+  function removeKeyword(index) {
+    onChange((keywords || []).filter((_, i) => i !== index))
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault()
+      commitDraft(draft)
+      return
+    }
+    if (e.key === 'Backspace' && !draft && (keywords || []).length) {
+      e.preventDefault()
+      removeKeyword(keywords.length - 1)
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <p className="text-sm font-medium text-stone-300">Palavras-chave</p>
+      <div
+        className="flex min-h-[46px] cursor-text flex-wrap items-center gap-1.5 rounded-xl border border-brand-700 bg-brand-900/50 px-2.5 py-2 focus-within:border-accent-500/60 focus-within:ring-2 focus-within:ring-accent-500/20"
+        onClick={() => inputRef.current?.focus()}
+      >
+        {(keywords || []).map((kw, i) => (
+          <span
+            key={`${kw}-${i}`}
+            className="inline-flex items-center gap-1 rounded-full border border-accent-500/30 bg-accent-500/15 px-2.5 py-0.5 text-xs text-accent-200"
+          >
+            {kw}
+            <button
+              type="button"
+              className="rounded p-0.5 text-accent-300/70 hover:bg-white/10 hover:text-red-300"
+              aria-label={`Remover ${kw}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                removeKeyword(i)
+              }}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={() => {
+            if (draft.trim()) commitDraft()
+          }}
+          placeholder={(keywords || []).length ? 'Outra palavra…' : 'Digite e pressione Enter'}
+          className="min-w-[140px] flex-1 bg-transparent px-1 py-0.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none"
+        />
+      </div>
+      <p className="text-[11px] leading-relaxed text-stone-500">
+        Pressione <span className="text-stone-300">Enter</span> ou <span className="text-stone-300">vírgula</span> para
+        salvar cada palavra. Maiúsculas/minúsculas não importam: basta cadastrar{' '}
+        <span className="text-stone-300">preço</span> — também dispara com Preço, PREÇO, etc.
+      </p>
+    </div>
+  )
+}
+
 function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversations, waConnected, onSave, saving }) {
   const toast = useToast()
   const [flow, setFlow] = useState(EMPTY_FLOW)
@@ -799,21 +895,10 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             <option value="contact_reply">Quando o contato responde</option>
           </Select>
           {flow.trigger.type === 'keyword' && (
-            <div className="mt-2">
-              <Input
-                label="Palavras-chave (separadas por vírgula)"
-                value={(flow.trigger.keywords || []).join(', ')}
-                onChange={(e) =>
-                  setTrigger({
-                    keywords: e.target.value
-                      .split(',')
-                      .map((k) => k.trim())
-                      .filter(Boolean),
-                  })
-                }
-                placeholder="preço, orçamento, valor"
-              />
-            </div>
+            <KeywordChipsInput
+              keywords={flow.trigger.keywords || []}
+              onChange={(keywords) => setTrigger({ keywords })}
+            />
           )}
           {flow.trigger.type === 'no_reply' && (() => {
             const delay = getNoReplyDelayUi(flow.trigger)
