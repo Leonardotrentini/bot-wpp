@@ -436,7 +436,7 @@ export function Sales() {
               </div>
 
               {period === 'custom' ? (
-                <>
+                <div className="relative">
                   <button
                     type="button"
                     onClick={() => setCalendarOpen((v) => !v)}
@@ -454,7 +454,11 @@ export function Sales() {
                     </span>
                   </button>
                   {calendarOpen ? (
-                    <div className="absolute left-0 top-full z-40 mt-2">
+                    <div className="absolute left-0 top-[calc(100%+8px)] z-[60]">
+                      <div
+                        className="absolute -top-1.5 left-6 h-3 w-3 rotate-45 border-l border-t border-brand-600/80 bg-[#0b1511]"
+                        aria-hidden
+                      />
                       <DateRangeCalendar
                         start={startDate}
                         end={endDate}
@@ -475,7 +479,7 @@ export function Sales() {
                       />
                     </div>
                   ) : null}
-                </>
+                </div>
               ) : null}
             </div>
 

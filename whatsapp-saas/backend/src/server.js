@@ -1999,10 +1999,15 @@ app.get("/api/members", authMiddleware, async (req, res) => {
   try {
     const groupId = typeof req.query.groupId === "string" ? req.query.groupId.trim() : ""
     const tag = typeof req.query.tag === "string" ? req.query.tag.trim() : ""
-    const status = typeof req.query.status === "string" ? req.query.status.trim() : ""
+    const origin = typeof req.query.origin === "string" ? req.query.origin.trim().toLowerCase() : ""
     const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : ""
-    const inactiveDays = req.query.inactiveDays ? Number(req.query.inactiveDays) : 0
     const activeGroupsOnly = req.query.activeGroupsOnly === "true" || req.query.activeGroupsOnly === "1"
+    const dateFromRaw = typeof req.query.dateFrom === "string" ? req.query.dateFrom.trim() : ""
+    const dateToRaw = typeof req.query.dateTo === "string" ? req.query.dateTo.trim() : ""
+    const dateFrom = dateFromRaw ? new Date(`${dateFromRaw}T00:00:00`) : null
+    const dateTo = dateToRaw ? new Date(`${dateToRaw}T23:59:59.999`) : null
+    const dateFromOk = dateFrom && !Number.isNaN(dateFrom.getTime())
+    const dateToOk = dateTo && !Number.isNaN(dateTo.getTime())
 
     const groupWhere = { ...readUserFilter(req.dataScope) }
     if (groupId) groupWhere.groupJid = groupId
@@ -2034,47 +2039,76 @@ app.get("/api/members", authMiddleware, async (req, res) => {
       fallbackAvatar: (seed) => fallbackGroupImage(seed),
     })
 
-    let members = [...map.values()]
+    let members = [...map.values()].map((m) => {
+      const hasGroup = Array.isArray(m.groupIds) && m.groupIds.length > 0
+      const hasX1 = Boolean(m.hasX1 || m.isCrmLead)
+      let memberOrigin = "group"
+      if (hasX1 && hasGroup) memberOrigin = "both"
+      else if (hasX1) memberOrigin = "x1"
+      else if (hasGroup) memberOrigin = "group"
+      return {
+        ...m,
+        hasX1,
+        hasGroup,
+        origin: memberOrigin,
+        // Grupos reais só (sem o rótulo sintético "WhatsApp direto")
+        groupNames: (m.groups || []).filter((g) => g && g !== "WhatsApp direto"),
+      }
+    })
 
     if (activeGroupsOnly) {
       const activeIds = new Set(
-        (await prisma.whatsAppGroup.findMany({ where: { ...readUserFilter(req.dataScope), status: "ativo" }, select: { groupJid: true } })).map(
-          (g) => g.groupJid,
-        ),
+        (
+          await prisma.whatsAppGroup.findMany({
+            where: { ...readUserFilter(req.dataScope), status: "ativo" },
+            select: { groupJid: true },
+          })
+        ).map((g) => g.groupJid),
       )
       members = members
         .map((m) => {
-          const pairs = m.groupIds.map((id, i) => ({ id, name: m.groups[i] })).filter((p) => activeIds.has(p.id))
+          const pairs = (m.groupIds || [])
+            .map((id, i) => ({ id, name: m.groups[i] }))
+            .filter((p) => activeIds.has(p.id))
           return {
             ...m,
             groupIds: pairs.map((p) => p.id),
             groups: pairs.map((p) => p.name),
+            groupNames: pairs.map((p) => p.name).filter((n) => n && n !== "WhatsApp direto"),
+            hasGroup: pairs.length > 0,
+            origin:
+              m.hasX1 && pairs.length > 0 ? "both" : m.hasX1 ? "x1" : pairs.length > 0 ? "group" : m.origin,
           }
         })
-        .filter((m) => m.groupIds.length > 0 || m.hasX1 || m.isCrmLead)
+        .filter((m) => m.hasGroup || m.hasX1 || m.isCrmLead)
     }
 
     if (groupId) {
-      members = members.filter((m) => m.groupIds.includes(groupId))
+      members = members.filter((m) => (m.groupIds || []).includes(groupId))
     }
-    if (status) members = members.filter((m) => m.status === status)
-    if (tag) members = members.filter((m) => m.tags.includes(tag))
-    if (inactiveDays > 0) {
-      const now = Date.now()
+    if (origin === "x1" || origin === "group" || origin === "both") {
+      members = members.filter((m) => m.origin === origin)
+    }
+    if (tag) {
+      const tagNorm = tag.toLowerCase()
+      members = members.filter((m) => {
+        const local = (m.tags || []).map((t) => String(t).toLowerCase())
+        const crm = (m.crmTags || []).map((t) => String(t).toLowerCase())
+        return local.includes(tagNorm) || crm.includes(tagNorm)
+      })
+    }
+    if (dateFromOk || dateToOk) {
       members = members.filter((m) => {
         const last = new Date(m.lastActivity).getTime()
         if (Number.isNaN(last)) return false
-        return (now - last) / (1000 * 60 * 60 * 24) >= inactiveDays
+        if (dateFromOk && last < dateFrom.getTime()) return false
+        if (dateToOk && last > dateTo.getTime()) return false
+        return true
       })
     }
     if (q) {
       members = members.filter((m) => {
-        const hay = [
-          m.name,
-          m.phone,
-          ...(m.groups || []),
-          ...(m.crmTags || []),
-        ]
+        const hay = [m.name, m.phone, ...(m.groupNames || m.groups || []), ...(m.crmTags || []), ...(m.tags || [])]
           .join(" ")
           .toLowerCase()
         return hay.includes(q)
@@ -2088,6 +2122,10 @@ app.get("/api/members", authMiddleware, async (req, res) => {
       where: { userId: req.user.sub, participantsSyncedAt: { not: null } },
     })
 
+    const x1Only = members.filter((m) => m.origin === "x1").length
+    const groupOnly = members.filter((m) => m.origin === "group").length
+    const both = members.filter((m) => m.origin === "both").length
+
     res.json({
       members,
       groups,
@@ -2098,6 +2136,15 @@ app.get("/api/members", authMiddleware, async (req, res) => {
         crmLeadsTotal: crmContacts.length,
         crmLeadsMerged: crmMerge.merged,
         crmLeadsX1Only: crmMerge.added,
+        // Contagens da lista já filtrada (o que a tela está mostrando)
+        filteredTotal: members.length,
+        filteredX1Only: x1Only,
+        filteredGroupOnly: groupOnly,
+        filteredBoth: both,
+        dateFrom: dateFromOk ? dateFromRaw : null,
+        dateTo: dateToOk ? dateToRaw : null,
+        tag: tag || null,
+        origin: origin || null,
       },
     })
   } catch (err) {

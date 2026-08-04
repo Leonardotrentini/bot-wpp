@@ -18,7 +18,7 @@ const titles = {
   '/dashboard/crm': 'CRM',
   '/dashboard/messages': 'Mensagens',
   '/dashboard/automations': 'Automações',
-  '/dashboard/members': 'Membros de grupos',
+  '/dashboard/members': 'Lista de Leads',
   '/dashboard/integrations': 'Integrações',
   '/dashboard/settings': 'Configurações',
   '/dashboard/admin': 'Administração',

@@ -542,7 +542,12 @@ export async function getAutomations() {
 export async function getMembers(params = {}) {
   if (resolveUseRealApi()) return apiClient.get('/members', { params })
   await delay()
-  let members = [...mockMembersGlobal]
+  let members = [...mockMembersGlobal].map((m) => {
+    const hasGroup = (m.groupIds || []).length > 0
+    const hasX1 = Boolean(m.hasX1 || m.isCrmLead)
+    const origin = hasX1 && hasGroup ? 'both' : hasX1 ? 'x1' : 'group'
+    return { ...m, hasX1, hasGroup, origin, groupNames: m.groups || [] }
+  })
   const activeOnly = params.activeGroupsOnly === '1' || params.activeGroupsOnly === true
   const activeIds = new Set(mockGroups.filter((g) => g.status === 'ativo').map((g) => g.id))
   if (activeOnly) {
@@ -550,22 +555,60 @@ export async function getMembers(params = {}) {
       .map((m) => {
         const ids = (m.groupIds || []).filter((id) => activeIds.has(id))
         const names = ids.map((id) => mockGroups.find((g) => g.id === id)?.name).filter(Boolean)
-        return { ...m, groupIds: ids, groups: names }
+        const hasGroup = ids.length > 0
+        const hasX1 = Boolean(m.hasX1 || m.isCrmLead)
+        return {
+          ...m,
+          groupIds: ids,
+          groups: names,
+          groupNames: names,
+          hasGroup,
+          hasX1,
+          origin: hasX1 && hasGroup ? 'both' : hasX1 ? 'x1' : 'group',
+        }
       })
-      .filter((m) => m.groupIds.length > 0)
+      .filter((m) => m.groupIds.length > 0 || m.hasX1)
   }
   if (params.groupId) members = members.filter((m) => (m.groupIds || []).includes(params.groupId))
-  if (params.status) members = members.filter((m) => m.status === params.status)
-  if (params.tag) members = members.filter((m) => (m.tags || []).includes(params.tag))
+  if (params.origin) members = members.filter((m) => m.origin === params.origin)
+  if (params.tag) {
+    const t = String(params.tag).toLowerCase()
+    members = members.filter(
+      (m) =>
+        (m.tags || []).some((x) => String(x).toLowerCase() === t) ||
+        (m.crmTags || []).some((x) => String(x).toLowerCase() === t),
+    )
+  }
+  if (params.dateFrom || params.dateTo) {
+    const from = params.dateFrom ? new Date(`${params.dateFrom}T00:00:00`).getTime() : null
+    const to = params.dateTo ? new Date(`${params.dateTo}T23:59:59.999`).getTime() : null
+    members = members.filter((m) => {
+      const last = new Date(m.lastActivity).getTime()
+      if (Number.isNaN(last)) return false
+      if (from != null && last < from) return false
+      if (to != null && last > to) return false
+      return true
+    })
+  }
   if (params.q) {
     const q = String(params.q).toLowerCase()
     members = members.filter((m) => m.name.toLowerCase().includes(q) || m.phone.includes(q))
   }
+  const filteredX1Only = members.filter((m) => m.origin === 'x1').length
+  const filteredGroupOnly = members.filter((m) => m.origin === 'group').length
+  const filteredBoth = members.filter((m) => m.origin === 'both').length
   return mockResponse({
     members,
     groups: mockGroups,
     total: members.length,
-    meta: { groupsTotal: mockGroups.length, groupsWithParticipants: mockGroups.length },
+    meta: {
+      groupsTotal: mockGroups.length,
+      groupsWithParticipants: mockGroups.length,
+      filteredTotal: members.length,
+      filteredX1Only,
+      filteredGroupOnly,
+      filteredBoth,
+    },
   })
 }
 

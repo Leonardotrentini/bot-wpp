@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle } from 'lucide-react'
+import { Tag, Download, RefreshCw, Plus, X, CheckSquare, Eraser, Pencil, Trash2, Check, MessageCircle, Users, Calendar } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -8,6 +8,7 @@ import { Select } from '../../components/common/Select.jsx'
 import { DarkDropdown } from '../../components/common/DarkDropdown.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
 import { Modal } from '../../components/common/Modal.jsx'
+import { DateRangeCalendar } from '../../components/common/DateRangeCalendar.jsx'
 import { getMembers, syncMembersParticipants } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -31,6 +32,66 @@ function fmtActivity(iso) {
   }
 }
 
+function todayYmd() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+}
+
+function formatYmdShort(ymd) {
+  if (!ymd) return ''
+  const d = new Date(`${ymd}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return ymd
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+}
+
+function ymdDaysAgo(days) {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })
+}
+
+const PERIOD_PRESETS = [
+  { id: '7d', label: '7 dias', days: 7 },
+  { id: '14d', label: '14 dias', days: 14 },
+  { id: '30d', label: '30 dias', days: 30 },
+  { id: 'custom', label: 'Personalizado', days: null },
+]
+
+function OriginBadge({ origin }) {
+  if (origin === 'both') {
+    return (
+      <span
+        className="mt-0.5 inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-300"
+        title="Tem conversa 1:1 no CRM e também está em pelo menos um grupo"
+      >
+        <MessageCircle className="h-3 w-3" />
+        <Users className="h-3 w-3" />
+        Nos dois
+      </span>
+    )
+  }
+  if (origin === 'x1') {
+    return (
+      <span
+        className="mt-0.5 inline-flex items-center gap-1 rounded-full border border-accent-500/40 bg-accent-500/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-300"
+        title="Lead do chat 1:1 (WhatsApp direto) — ainda não aparece nos grupos listados"
+      >
+        <MessageCircle className="h-3 w-3" />
+        Lead 1:1
+      </span>
+    )
+  }
+  return (
+    <span
+      className="mt-0.5 inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-300"
+      title="Participante de grupo — sem conversa 1:1 no CRM"
+    >
+      <Users className="h-3 w-3" />
+      Só grupo
+    </span>
+  )
+}
+
+
 function applyStoreToMembers(apiMembers, store) {
   return apiMembers.map((m) => ({
     ...m,
@@ -53,12 +114,17 @@ export function Members() {
   const [meta, setMeta] = useState(null)
   const [groupId, setGroupId] = useState('')
   const [tagFilter, setTagFilter] = useState('')
-  const [status, setStatus] = useState('')
+  const [originFilter, setOriginFilter] = useState('') // '' | x1 | group | both
   const [activeGroupsOnly, setActiveGroupsOnly] = useState(true)
-  const [inactiveDays, setInactiveDays] = useState('')
+  const [period, setPeriod] = useState('') // '' = todo período | 7d | 14d | 30d | custom
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const calendarRef = useRef(null)
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
-  const [debouncedInactive, setDebouncedInactive] = useState('')
+
+  const maxDate = todayYmd()
 
   const [selected, setSelected] = useState(() => new Set())
   const [tagsModal, setTagsModal] = useState(false)
@@ -78,9 +144,37 @@ export function Members() {
   }, [q])
 
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedInactive(inactiveDays), 400)
-    return () => clearTimeout(t)
-  }, [inactiveDays])
+    if (period === 'custom') return
+    if (!period) {
+      setDateFrom('')
+      setDateTo('')
+      setCalendarOpen(false)
+      return
+    }
+    const preset = PERIOD_PRESETS.find((p) => p.id === period)
+    if (!preset?.days) return
+    setDateFrom(ymdDaysAgo(preset.days - 1))
+    setDateTo(todayYmd())
+    setCalendarOpen(false)
+  }, [period])
+
+  useEffect(() => {
+    if (!calendarOpen) return undefined
+    const onDoc = (e) => {
+      if (calendarRef.current && !calendarRef.current.contains(e.target)) {
+        setCalendarOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [calendarOpen])
+
+  function selectPeriod(id) {
+    setPeriod(id)
+    if (id === 'custom') {
+      setCalendarOpen(true)
+    }
+  }
 
   const persistStore = useCallback(
     (nextOverrides, nextCatalog) => {
@@ -102,8 +196,10 @@ export function Members() {
     try {
       const params = { activeGroupsOnly: activeGroupsOnly ? '1' : '0' }
       if (groupId) params.groupId = groupId
-      if (status) params.status = status
-      if (debouncedInactive) params.inactiveDays = debouncedInactive
+      if (tagFilter) params.tag = tagFilter
+      if (originFilter) params.origin = originFilter
+      if (dateFrom) params.dateFrom = dateFrom
+      if (dateTo) params.dateTo = dateTo
       if (debouncedQ.trim()) params.q = debouncedQ.trim()
       const { data } = await getMembers(params)
       const list = data.members || []
@@ -115,13 +211,13 @@ export function Members() {
       setTagOverrides(store.overrides)
       setMembers(applyStoreToMembers(list, store))
     } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha ao carregar membros.')
+      toast.error(err?.response?.data?.message || 'Falha ao carregar leads.')
       setApiMembers([])
       setMembers([])
     } finally {
       setLoading(false)
     }
-  }, [activeGroupsOnly, groupId, status, debouncedInactive, debouncedQ, toast, userId])
+  }, [activeGroupsOnly, groupId, tagFilter, originFilter, dateFrom, dateTo, debouncedQ, toast, userId])
 
   useEffect(() => {
     loadMembers()
@@ -154,15 +250,7 @@ export function Members() {
     [apiMembers, persistStore],
   )
 
-  const displayedMembers = useMemo(() => {
-    if (!tagFilter) return members
-    const norm = normalizeTag(tagFilter)
-    return members.filter((m) => {
-      const local = (m.tags || []).map(normalizeTag)
-      const crm = (m.crmTags || []).map(normalizeTag)
-      return local.includes(norm) || crm.includes(norm)
-    })
-  }, [members, tagFilter])
+  const displayedMembers = members
 
   const allVisibleSelected =
     displayedMembers.length > 0 && displayedMembers.every((m) => selected.has(m.id))
@@ -338,17 +426,17 @@ export function Members() {
       return toast.info(
         selected.size > 0
           ? 'Nenhum dos selecionados está visível com os filtros atuais.'
-          : 'Nenhum membro para exportar.',
+          : 'Nenhum lead para exportar.',
       )
     }
-    const header = ['nome', 'telefone', 'grupos', 'tags', 'status', 'ultima_atividade']
+    const header = ['nome', 'telefone', 'origem', 'grupos', 'tags', 'ultima_atividade']
     const rows = toExport.map((m) =>
       [
         m.name,
         m.phone,
-        (m.groups || []).join('; '),
-        (m.tags || []).join('; '),
-        m.status,
+        m.origin === 'both' ? 'nos_dois' : m.origin === 'x1' ? 'lead_1x1' : 'so_grupo',
+        (m.groupNames || (m.groups || []).filter((g) => g !== 'WhatsApp direto')).join('; '),
+        [...(m.crmTags || []), ...(m.tags || [])].join('; '),
         m.lastActivity || '',
       ]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)
@@ -359,22 +447,33 @@ export function Members() {
     const a = document.createElement('a')
     a.href = url
     const suffix = selected.size > 0 ? `-${toExport.length}-selecionados` : ''
-    a.download = `membros${suffix}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `lista-leads${suffix}-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
     toast.success(
       selected.size > 0
-        ? `CSV exportado com ${toExport.length} membro(s) selecionado(s).`
-        : `CSV exportado com ${toExport.length} membro(s).`,
+        ? `CSV exportado com ${toExport.length} lead(s) selecionado(s).`
+        : `CSV exportado com ${toExport.length} lead(s).`,
     )
   }
 
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-brand-800/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
-        <strong className="text-stone-300">Membros de grupos</strong> — participantes dos seus grupos WhatsApp e leads do
-        chat 1:1 (não confundir com vendedores da empresa, gerenciados em Administração). Lista unificada com duplicatas
-        mescladas por telefone quando possível.
+        <strong className="text-stone-200">Lista de Leads</strong> — todos os contatos do WhatsApp 1:1 e participantes
+        dos grupos, mesclados por telefone.
+        <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-accent-500/40 bg-accent-500/10 px-2 py-0.5 text-accent-300">
+            <MessageCircle className="h-3 w-3" /> Lead 1:1 — falou no chat direto
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-sky-300">
+            <Users className="h-3 w-3" /> Só grupo — está no grupo, sem 1:1
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-violet-300">
+            <MessageCircle className="h-3 w-3" />
+            <Users className="h-3 w-3" /> Nos dois — 1:1 e grupo
+          </span>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" className="gap-1.5" onClick={() => setTagsModal(true)}>
@@ -388,8 +487,8 @@ export function Members() {
           disabled={!displayedMembers.length}
           title={
             selected.size > 0
-              ? `Exportar ${selected.size} membro(s) selecionado(s)`
-              : 'Exportar todos os membros visíveis'
+              ? `Exportar ${selected.size} lead(s) selecionado(s)`
+              : 'Exportar todos os leads visíveis'
           }
         >
           <Download className="h-4 w-4" />
@@ -477,70 +576,187 @@ export function Members() {
         </div>
       </div>
 
-      {meta && (meta.crmLeadsX1Only > 0 || meta.crmLeadsTotal > 0) && (
-        <p className="rounded-xl border border-accent-500/20 bg-accent-500/5 px-4 py-3 text-sm text-stone-300">
-          <strong className="text-accent-200">{meta.crmLeadsTotal ?? 0}</strong> lead(s) no CRM —{' '}
-          <strong className="text-accent-200">{meta.crmLeadsX1Only ?? 0}</strong> só WhatsApp direto
-          {meta.crmLeadsMerged > 0 ? ` · ${meta.crmLeadsMerged} mesclado(s) com grupo` : ''}.
-        </p>
+      {(meta?.filteredTotal != null || meta?.crmLeadsTotal > 0) && (
+        <div className="rounded-xl border border-accent-500/20 bg-accent-500/5 px-4 py-3 text-sm text-stone-300">
+          <p>
+            <strong className="text-accent-200">{meta.filteredTotal ?? displayedMembers.length}</strong> lead(s) com os
+            filtros atuais
+            {tagFilter ? (
+              <>
+                {' '}
+                · tag <strong className="text-accent-200">{displayTag(tagFilter)}</strong>
+              </>
+            ) : null}
+            {dateFrom || dateTo ? (
+              <>
+                {' '}
+                · período {dateFrom || '…'} → {dateTo || '…'}
+              </>
+            ) : null}
+          </p>
+          <p className="mt-1 text-xs text-stone-500">
+            <span className="text-accent-300/90">{meta.filteredX1Only ?? 0} só 1:1</span>
+            {' · '}
+            <span className="text-sky-300/90">{meta.filteredGroupOnly ?? 0} só grupo</span>
+            {' · '}
+            <span className="text-violet-300/90">{meta.filteredBoth ?? 0} nos dois</span>
+            {meta.crmLeadsTotal != null ? (
+              <span className="text-stone-600"> · base CRM: {meta.crmLeadsTotal}</span>
+            ) : null}
+          </p>
+        </div>
       )}
 
       {meta && meta.groupsTotal > 0 && meta.groupsWithParticipants === 0 && meta.crmLeadsTotal === 0 && (
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
-          Ainda não há participantes importados. Clique em <strong>Sincronizar participantes</strong> ou abra cada grupo em{' '}
+          Ainda não há participantes importados. Clique em <strong>Sincronizar</strong> ou abra cada grupo em{' '}
           <strong>Grupos</strong> para carregar a lista do WhatsApp.
         </p>
       )}
 
-      <Card>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-4">
-          <Select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-            <option value="">Todos os grupos</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name} {g.status !== 'ativo' ? '(inativo)' : ''}
-              </option>
-            ))}
-          </Select>
-          <Select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)}>
-            <option value="">Todas as tags</option>
-            {allTags.map((t) => (
-              <option key={t} value={t}>
-                {displayTag(t)}
-              </option>
-            ))}
-          </Select>
-          <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">Status</option>
-            <option value="ativo">Ativo</option>
-            <option value="inativo">Inativo</option>
-          </Select>
-          <label className="flex items-center gap-2 rounded-xl border border-brand-800 px-3 py-2 text-xs text-stone-300">
-            <input
-              type="checkbox"
-              checked={activeGroupsOnly}
-              onChange={(e) => setActiveGroupsOnly(e.target.checked)}
-              className="vg-checkbox"
-            />
-            Só grupos ativos ({groups.filter((g) => g.status === 'ativo').length})
-          </label>
-          <Input placeholder="Inatividade mín. (dias)" type="number" value={inactiveDays} onChange={(e) => setInactiveDays(e.target.value)} />
-          <div className="sm:col-span-2">
-            <Input placeholder="Buscar nome ou telefone" value={q} onChange={(e) => setQ(e.target.value)} />
+      <Card className="overflow-visible">
+        <div className="relative z-30 mb-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Período</span>
+            <div className="inline-flex flex-wrap items-center gap-0.5 rounded-xl border border-brand-800 bg-brand-950/60 p-1">
+              <button
+                type="button"
+                onClick={() => selectPeriod('')}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  !period
+                    ? 'bg-accent-500/20 text-accent-200 shadow-sm shadow-accent-500/10'
+                    : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
+                }`}
+              >
+                Tudo
+              </button>
+              {PERIOD_PRESETS.filter((p) => p.id !== 'custom').map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => selectPeriod(p.id)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    period === p.id
+                      ? 'bg-accent-500/20 text-accent-200 shadow-sm shadow-accent-500/10'
+                      : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <div className="relative" ref={calendarRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (period === 'custom') {
+                      setCalendarOpen((v) => !v)
+                    } else {
+                      selectPeriod('custom')
+                    }
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    period === 'custom'
+                      ? 'bg-accent-500/20 text-accent-200 shadow-sm shadow-accent-500/10'
+                      : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
+                  }`}
+                  aria-expanded={calendarOpen}
+                  aria-haspopup="dialog"
+                >
+                  <Calendar className="h-3 w-3 shrink-0" />
+                  {period === 'custom' && dateFrom && dateTo
+                    ? `${formatYmdShort(dateFrom)} – ${formatYmdShort(dateTo)}`
+                    : 'Personalizado'}
+                </button>
+                {calendarOpen && period === 'custom' ? (
+                  <div className="absolute left-0 top-[calc(100%+8px)] z-[60]">
+                    <div
+                      className="absolute -top-1.5 left-6 h-3 w-3 rotate-45 border-l border-t border-brand-600/80 bg-[#0b1511]"
+                      aria-hidden
+                    />
+                    <DateRangeCalendar
+                      start={dateFrom}
+                      end={dateTo}
+                      maxDate={maxDate}
+                      onChange={({ start, end }) => {
+                        setDateFrom(start || '')
+                        setDateTo(end || '')
+                        if (start && end) setCalendarOpen(false)
+                      }}
+                      onApply={
+                        dateFrom
+                          ? () => {
+                              if (!dateTo) setDateTo(dateFrom)
+                              setCalendarOpen(false)
+                            }
+                          : undefined
+                      }
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <Select value={originFilter} onChange={(e) => setOriginFilter(e.target.value)} aria-label="Origem do lead">
+              <option value="">Todas as origens</option>
+              <option value="x1">Só Lead 1:1</option>
+              <option value="group">Só grupo</option>
+              <option value="both">Nos dois (1:1 + grupo)</option>
+            </Select>
+            <Select value={groupId} onChange={(e) => setGroupId(e.target.value)} aria-label="Filtrar por grupo">
+              <option value="">Todos os grupos</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} {g.status !== 'ativo' ? '(inativo)' : ''}
+                </option>
+              ))}
+            </Select>
+            <Select value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} aria-label="Filtrar por tag">
+              <option value="">Todas as tags</option>
+              {allTags.map((t) => (
+                <option key={t} value={t}>
+                  {displayTag(t)}
+                </option>
+              ))}
+            </Select>
+            <label className="flex items-center gap-2 rounded-xl border border-brand-800 px-3 py-2 text-xs text-stone-300">
+              <input
+                type="checkbox"
+                checked={activeGroupsOnly}
+                onChange={(e) => setActiveGroupsOnly(e.target.checked)}
+                className="vg-checkbox"
+              />
+              Só grupos ativos ({groups.filter((g) => g.status === 'ativo').length})
+            </label>
+            <div className="sm:col-span-2 xl:col-span-2">
+              <Input placeholder="Buscar nome ou telefone" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
           </div>
         </div>
+        {(period || tagFilter || originFilter) && (
+          <p className="mb-3 text-xs text-stone-500">
+            Dica: combine <strong className="text-stone-400">tag QUALIFICADO</strong> + período para ver quantos
+            qualificados tiveram atividade nessas datas.
+            {period ? (
+              <button type="button" className="ml-2 text-accent-400 hover:underline" onClick={() => selectPeriod('')}>
+                Limpar período
+              </button>
+            ) : null}
+          </p>
+        )}
 
         {loading ? (
-          <p className="px-5 py-8 text-sm text-stone-500">Carregando membros…</p>
+          <p className="px-5 py-8 text-sm text-stone-500">Carregando leads…</p>
         ) : displayedMembers.length === 0 ? (
           <p className="px-5 py-8 text-sm text-stone-500">
-            Nenhuma pessoa encontrada com os filtros atuais.
+            Nenhum lead encontrado com os filtros atuais.
             {groups.length === 0 && meta?.crmLeadsTotal === 0 && ' Sincronize seus grupos em Conectar WhatsApp → Grupos.'}
             {meta?.crmLeadsTotal > 0 && ' Leads do WhatsApp direto aparecem aqui assim que chegam no CRM.'}
           </p>
         ) : (
           <div className="overflow-x-auto -mx-5">
-            <table className="w-full text-sm min-w-[760px]">
+            <table className="w-full text-sm min-w-[720px]">
               <thead>
                 <tr className="border-y border-brand-800 text-left text-stone-400">
                   <th className="w-10 px-3 py-3">
@@ -555,9 +771,9 @@ export function Members() {
                   </th>
                   <th className="px-5 py-3">Pessoa</th>
                   <th className="px-5 py-3">Telefone</th>
+                  <th className="px-5 py-3">Origem</th>
                   <th className="px-5 py-3">Grupos</th>
                   <th className="px-5 py-3">Tags</th>
-                  <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Última atividade</th>
                 </tr>
               </thead>
@@ -587,18 +803,17 @@ export function Members() {
                           ) : (
                             <span className="font-medium text-stone-100">{m.name}</span>
                           )}
-                          {m.hasX1 && (
-                            <span className="mt-0.5 flex items-center gap-1 text-[10px] text-accent-400/90">
-                              <MessageCircle className="h-3 w-3" />
-                              Lead 1:1
-                            </span>
-                          )}
                         </div>
                       </div>
                     </td>
                     <td className="px-5 py-3 text-stone-400">{m.phone}</td>
+                    <td className="px-5 py-3">
+                      <OriginBadge origin={m.origin || (m.hasX1 ? 'x1' : 'group')} />
+                    </td>
                     <td className="px-5 py-3 text-stone-300 max-w-[200px]">
-                      <span className="line-clamp-2">{(m.groups || []).join(', ')}</span>
+                      <span className="line-clamp-2">
+                        {(m.groupNames || (m.groups || []).filter((g) => g !== 'WhatsApp direto')).join(', ') || '—'}
+                      </span>
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex flex-wrap gap-1">
@@ -639,9 +854,6 @@ export function Members() {
                         ) : null}
                       </div>
                     </td>
-                    <td className="px-5 py-3">
-                      <Badge variant={m.status === 'ativo' ? 'success' : 'muted'}>{m.status}</Badge>
-                    </td>
                     <td className="px-5 py-3 text-stone-500 text-xs">{fmtActivity(m.lastActivity)}</td>
                   </tr>
                 ))}
@@ -650,7 +862,12 @@ export function Members() {
           </div>
         )}
         {!loading && displayedMembers.length > 0 && (
-          <p className="mt-3 px-5 text-xs text-stone-500">{displayedMembers.length} membro(s) listado(s)</p>
+          <p className="mt-3 px-5 text-xs text-stone-500">
+            {displayedMembers.length} lead(s) listado(s)
+            {meta?.filteredX1Only != null
+              ? ` · ${meta.filteredX1Only} 1:1 · ${meta.filteredGroupOnly} grupo · ${meta.filteredBoth} nos dois`
+              : ''}
+          </p>
         )}
       </Card>
 

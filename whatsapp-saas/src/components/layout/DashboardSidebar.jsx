@@ -33,7 +33,7 @@ const navSections = [
       { to: '/dashboard/groups', label: 'Grupos', icon: Users },
       {
         to: '/dashboard/members',
-        label: 'Membros de grupos',
+        label: 'Lista de Leads',
         icon: UserCircle2,
         title: 'Participantes dos grupos WhatsApp (leads), não a equipe de vendas',
       },

@@ -98,58 +98,62 @@ export function DateRangeCalendar({ start = '', end = '', onChange, onApply, max
   }
 
   return (
-    <div className="inline-flex w-full max-w-[300px] flex-col rounded-xl border border-brand-700/90 bg-brand-950/80 p-3 shadow-lg shadow-black/20">
-      <div className="mb-2.5 flex items-center justify-between gap-2 border-b border-brand-800/80 pb-2.5">
-        <div className="flex min-w-0 items-center gap-1.5 text-xs text-stone-300">
-          <Calendar className="h-3.5 w-3.5 shrink-0 text-accent-400/90" aria-hidden />
-          <span className="truncate font-medium">{rangeLabel}</span>
+    <div
+      role="dialog"
+      aria-label="Selecionar período"
+      className="relative w-[280px] overflow-hidden rounded-2xl border border-brand-600/80 bg-[#0b1511] p-3 shadow-[0_16px_48px_rgba(0,0,0,0.75)] ring-1 ring-white/10"
+    >
+      <div className="mb-3 flex items-center justify-between gap-2 rounded-xl border border-brand-700/80 bg-brand-900 px-2.5 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-stone-100">
+          <Calendar className="h-3.5 w-3.5 shrink-0 text-accent-400" aria-hidden />
+          <span className="truncate font-medium tracking-tight">{rangeLabel}</span>
         </div>
-        {onApply && (
+        {onApply ? (
           <button
             type="button"
             onClick={onApply}
             disabled={!start}
-            className="shrink-0 rounded-lg bg-accent-500/90 px-2.5 py-1 text-[11px] font-semibold text-brand-950 transition hover:bg-accent-400 disabled:cursor-not-allowed disabled:opacity-40"
+            className="shrink-0 rounded-lg bg-accent-500 px-2.5 py-1 text-[11px] font-semibold text-brand-950 transition hover:bg-accent-400 disabled:cursor-not-allowed disabled:opacity-35"
           >
             Aplicar
           </button>
-        )}
+        ) : null}
       </div>
 
-      <div className="mb-1.5 flex items-center justify-between gap-1">
+      <div className="mb-2 flex items-center justify-between gap-1">
         <button
           type="button"
           onClick={() => shiftMonth(-1)}
-          className="rounded-md p-1 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
+          className="rounded-lg p-1.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
           aria-label="Mês anterior"
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <p className="text-xs font-medium text-stone-200">
+        <p className="text-sm font-semibold tabular-nums text-stone-50">
           {MONTHS_SHORT[viewMonth]} {viewYear}
         </p>
         <button
           type="button"
           onClick={() => shiftMonth(1)}
-          className="rounded-md p-1 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
+          className="rounded-lg p-1.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
           aria-label="Próximo mês"
         >
           <ChevronRight className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-px text-center text-[10px] font-medium uppercase tracking-wide text-stone-600">
+      <div className="mb-0.5 grid grid-cols-7 text-center text-[10px] font-semibold uppercase tracking-wider text-stone-500">
         {WEEKDAYS.map((w, i) => (
-          <span key={`${w}-${i}`} className="py-0.5">
+          <span key={`${w}-${i}`} className="py-1">
             {w}
           </span>
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-px">
+      <div className="grid grid-cols-7 gap-0.5">
         {cells.map((day, idx) => {
           if (!day) {
-            return <span key={`e-${idx}`} className="h-7" aria-hidden />
+            return <span key={`e-${idx}`} className="h-8" aria-hidden />
           }
           const ymd = toYmd(day)
           const disabled = ymd > todayYmd || (minYmd && ymd < minYmd)
@@ -158,6 +162,7 @@ export function DateRangeCalendar({ start = '', end = '', onChange, onApply, max
           const inRange = isInRange(day, startDate, endDate)
           const isToday = ymd === todayYmd
           const isEdge = isStart || isEnd
+          const rangeOnly = inRange && !isEdge
 
           return (
             <button
@@ -165,16 +170,16 @@ export function DateRangeCalendar({ start = '', end = '', onChange, onApply, max
               type="button"
               disabled={disabled}
               onClick={() => pickDay(day)}
-              className={`flex h-7 w-full items-center justify-center text-xs transition ${
+              className={`flex h-8 w-full items-center justify-center text-[13px] tabular-nums transition ${
                 disabled
                   ? 'cursor-not-allowed text-stone-700'
                   : isEdge
-                    ? 'rounded-md bg-accent-500 font-semibold text-brand-950 shadow-sm'
-                    : inRange
-                      ? 'bg-accent-500/15 text-accent-200/90'
+                    ? 'rounded-lg bg-accent-500 font-semibold text-brand-950 shadow-sm shadow-accent-500/30'
+                    : rangeOnly
+                      ? 'rounded-md bg-accent-500/25 text-accent-100'
                       : isToday
-                        ? 'rounded-md text-accent-400 ring-1 ring-inset ring-accent-500/35 hover:bg-white/5'
-                        : 'rounded-md text-stone-300 hover:bg-white/8 hover:text-stone-100'
+                        ? 'rounded-lg font-medium text-accent-300 ring-1 ring-inset ring-accent-500/50 hover:bg-white/5'
+                        : 'rounded-lg text-stone-200 hover:bg-white/8 hover:text-white'
               }`}
             >
               {day.getDate()}
@@ -183,7 +188,9 @@ export function DateRangeCalendar({ start = '', end = '', onChange, onApply, max
         })}
       </div>
 
-      <p className="mt-2 text-[10px] leading-snug text-stone-600">Dois cliques: início, depois fim.</p>
+      <p className="mt-2.5 border-t border-brand-800 pt-2 text-center text-[10px] text-stone-500">
+        Clique no início e depois no fim
+      </p>
     </div>
   )
 }
