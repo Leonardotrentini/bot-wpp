@@ -11,6 +11,7 @@ WORKDIR /app
 RUN npm install -g serve@14.2.4
 COPY --from=builder /app/dist ./dist
 COPY scripts/railway-serve.mjs ./scripts/railway-serve.mjs
+COPY serve.json ./serve.json
 ENV NODE_ENV=production
 EXPOSE 8080
 CMD ["node", "scripts/railway-serve.mjs"]

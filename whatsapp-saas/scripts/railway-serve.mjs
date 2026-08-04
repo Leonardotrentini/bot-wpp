@@ -45,10 +45,14 @@ if (!html.includes('__VESTO_ENV__')) {
   }
 }
 
-const child = spawn('serve', ['-s', 'dist', '-l', `tcp://0.0.0.0:${port}`], {
-  cwd: root,
-  stdio: 'inherit',
-  env: process.env,
-})
+const child = spawn(
+  'serve',
+  ['-s', 'dist', '-l', `tcp://0.0.0.0:${port}`, '-c', join(root, 'serve.json')],
+  {
+    cwd: root,
+    stdio: 'inherit',
+    env: process.env,
+  },
+)
 
 child.on('exit', (code) => process.exit(code ?? 0))
