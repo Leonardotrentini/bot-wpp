@@ -79,6 +79,12 @@ const {
   cancelPendingX1DeliveriesForGroups,
   isGroupX1Eligible,
 } = require("./lib/groupX1Automation")
+const {
+  normalizeStatusRules,
+  reactivateParticipantOnActivity,
+  applyInactiveStatusForGroup,
+  tickGroupStatusRules,
+} = require("./lib/groupStatusRules")
 const adminRoutes = require("./routes/admin")
 const {
   isPublicRegistrationAllowed,
@@ -1870,7 +1876,7 @@ app.get("/api/groups/:id", authMiddleware, async (req, res) => {
       settings: groupRow.groupSettings || null,
       config: {
         governance: groupRow.groupGovernance || null,
-        statusRules: groupRow.groupStatusRules || null,
+        statusRules: normalizeStatusRules(groupRow.groupStatusRules),
         routines: groupRow.groupRoutines || null,
         x1Automation: groupRow.groupX1Automation ? normalizeX1Config(groupRow.groupX1Automation) : null,
         auditLog: groupRow.groupAuditLog || null,
@@ -2122,7 +2128,7 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
     const data = {}
     if (parsed.data.settings !== undefined) data.groupSettings = parsed.data.settings
     if (parsed.data.governance !== undefined) data.groupGovernance = parsed.data.governance
-    if (parsed.data.statusRules !== undefined) data.groupStatusRules = parsed.data.statusRules
+    if (parsed.data.statusRules !== undefined) data.groupStatusRules = normalizeStatusRules(parsed.data.statusRules)
     if (parsed.data.routines !== undefined) data.groupRoutines = parsed.data.routines
     if (parsed.data.x1Automation !== undefined) data.groupX1Automation = normalizeX1Config(parsed.data.x1Automation)
     if (parsed.data.auditLog !== undefined) data.groupAuditLog = parsed.data.auditLog
@@ -2133,6 +2139,7 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
       where: { userId_groupJid: { userId: req.user.sub, groupJid } },
       data,
       select: {
+        id: true,
         groupSettings: true,
         groupGovernance: true,
         groupStatusRules: true,
@@ -2144,18 +2151,30 @@ app.put("/api/groups/:id/config", authMiddleware, async (req, res) => {
       },
     })
 
+    let statusRulesApplied = null
+    if (parsed.data.statusRules !== undefined) {
+      const normalizedRules = normalizeStatusRules(row.groupStatusRules)
+      if (normalizedRules.enabled) {
+        statusRulesApplied = await applyInactiveStatusForGroup(prisma, {
+          id: row.id,
+          groupStatusRules: row.groupStatusRules,
+        })
+      }
+    }
+
     return res.json({
       ok: true,
       settings: row.groupSettings || null,
       config: {
         governance: row.groupGovernance || null,
-        statusRules: row.groupStatusRules || null,
+        statusRules: normalizeStatusRules(row.groupStatusRules),
         routines: row.groupRoutines || null,
         x1Automation: row.groupX1Automation ? normalizeX1Config(row.groupX1Automation) : null,
         auditLog: row.groupAuditLog || null,
         snapshots: row.groupSnapshots || null,
         catalogExtras: row.groupCatalogExtras || null,
       },
+      statusRulesApplied,
     })
   } catch (err) {
     if (err?.code?.startsWith?.("P")) {
@@ -3777,6 +3796,12 @@ async function storeIncomingMessages(instanceName, body) {
     })
     saved += 1
 
+    if (!mapped.fromMe && mapped.senderJid) {
+      reactivateParticipantOnActivity(prisma, { group, senderJid: mapped.senderJid }).catch((err) =>
+        console.error("[status-rules] reactivate:", err?.message || err),
+      )
+    }
+
     await prisma.whatsAppGroup.update({
       where: { id: group.id },
       data: {
@@ -4073,6 +4098,8 @@ httpServer.listen(port, () => {
         .catch((err) => console.error("[crm] no-reply flows:", err?.message || err))
         .then(() => processDueContactReminders(prisma, io))
         .catch((err) => console.error("[crm] reminders:", err?.message || err))
+        .then(() => tickGroupStatusRules(prisma))
+        .catch((err) => console.error("[status-rules] tick:", err?.message || err))
         .finally(() => {
           schedulerTickBusy = false
         })

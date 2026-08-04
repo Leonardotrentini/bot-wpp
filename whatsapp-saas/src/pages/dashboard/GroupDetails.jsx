@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   Send,
   RefreshCw,
+  ListChecks,
 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Tabs } from '../../components/common/Tabs.jsx'
@@ -97,6 +98,50 @@ const defaultRoutines = () => [
 const defaultAudit = () => []
 
 const defaultSnapshots = () => []
+
+const defaultStatusRules = () => ({
+  enabled: false,
+  inactiveAfterHours: 72,
+})
+
+function normalizeStatusRules(raw) {
+  const base = defaultStatusRules()
+  if (!raw || typeof raw !== 'object') return { ...base }
+
+  if (Array.isArray(raw.rules)) {
+    const first = raw.rules.find((r) => r && r.enabled !== false) || raw.rules[0]
+    if (!first || typeof first !== 'object') return { ...base }
+    const fromDays =
+      first.days != null && Number.isFinite(Number(first.days)) ? Math.round(Number(first.days) * 24) : null
+    return {
+      enabled: Boolean(raw.rules.some((r) => r && r.enabled !== false)),
+      inactiveAfterHours: Math.max(
+        1,
+        Math.min(8760, Number(first.inactiveAfterHours) || fromDays || base.inactiveAfterHours),
+      ),
+    }
+  }
+
+  return {
+    enabled: raw.enabled === true,
+    inactiveAfterHours: Math.max(1, Math.min(8760, Number(raw.inactiveAfterHours) || base.inactiveAfterHours)),
+  }
+}
+
+function hoursWithoutActivity(member, nowMs = Date.now()) {
+  const raw = member?.lastActivity || member?.joinedAt
+  if (!raw) return Infinity
+  const t = new Date(raw).getTime()
+  if (Number.isNaN(t)) return Infinity
+  return (nowMs - t) / (60 * 60 * 1000)
+}
+
+function memberMatchesInactivityRule(member, rules, nowMs = Date.now()) {
+  if (!rules?.enabled) return false
+  if (member?.role === 'admin' || member?.role === 'superadmin') return false
+  if (member?.status === 'saiu' || member?.status === 'inativo') return false
+  return hoursWithoutActivity(member, nowMs) >= rules.inactiveAfterHours
+}
 
 const defaultX1KindSettings = (template) => ({
   template,
@@ -224,6 +269,8 @@ export function GroupDetails() {
   const [inlineNewTag, setInlineNewTag] = useState('')
   const [newAdmin, setNewAdmin] = useState('')
   const [x1Automation, setX1Automation] = useState(() => defaultX1Automation())
+  const [statusRules, setStatusRules] = useState(() => defaultStatusRules())
+  const [statusRulesSaving, setStatusRulesSaving] = useState(false)
   const [x1Deliveries, setX1Deliveries] = useState([])
   const [x1DeliveriesLoading, setX1DeliveriesLoading] = useState(false)
   const [testParticipantJid, setTestParticipantJid] = useState('')
@@ -234,6 +281,7 @@ export function GroupDetails() {
   const auditLogRef = useRef(defaultAudit())
   const snapshotsRef = useRef(defaultSnapshots())
   const x1AutomationRef = useRef(defaultX1Automation())
+  const statusRulesRef = useRef(defaultStatusRules())
   const toast = useToast()
 
   useEffect(() => {
@@ -255,6 +303,10 @@ export function GroupDetails() {
   useEffect(() => {
     snapshotsRef.current = snapshots
   }, [snapshots])
+
+  useEffect(() => {
+    statusRulesRef.current = statusRules
+  }, [statusRules])
 
   useEffect(() => {
     if (tab !== 'config' || !id || !resolveUseRealApi()) return
@@ -288,7 +340,7 @@ export function GroupDetails() {
   }, [x1Automation])
 
   const persistAll = useCallback(
-    (nextMembers, nextExtras, nextGovernance, nextRoutines, nextAudit, nextSnapshots, nextX1Automation) => {
+    (nextMembers, nextExtras, nextGovernance, nextRoutines, nextAudit, nextSnapshots, nextX1Automation, nextStatusRules) => {
       try {
         const ext = nextExtras !== undefined ? nextExtras : catalogExtrasRef.current
         const gov = nextGovernance !== undefined ? nextGovernance : governanceRef.current
@@ -296,10 +348,11 @@ export function GroupDetails() {
         const aud = nextAudit !== undefined ? nextAudit : auditLogRef.current
         const snp = nextSnapshots !== undefined ? nextSnapshots : snapshotsRef.current
         const x1 = nextX1Automation !== undefined ? nextX1Automation : x1AutomationRef.current
+        const rules = nextStatusRules !== undefined ? nextStatusRules : statusRulesRef.current
         localStorage.setItem(
           membersStorageKey(id),
           JSON.stringify({
-            v: 5,
+            v: 6,
             members: nextMembers,
             catalogExtras: ext,
             governance: gov,
@@ -307,6 +360,7 @@ export function GroupDetails() {
             auditLog: aud,
             snapshots: snp,
             x1Automation: x1,
+            statusRules: rules,
           }),
         )
       } catch {
@@ -378,12 +432,15 @@ export function GroupDetails() {
         x1 = migrateX1Automation(payload.config.x1Automation)
       }
     }
+    let statusRulesLocal = payload?.config?.statusRules
+      ? normalizeStatusRules(payload.config.statusRules)
+      : defaultStatusRules()
     if (!resolveUseRealApi()) {
       try {
         const raw = localStorage.getItem(membersStorageKey(id))
         if (raw) {
           const saved = JSON.parse(raw)
-          if ((saved?.v === 5 || saved?.v === 4 || saved?.v === 3 || saved?.v === 2) && Array.isArray(saved.members)) {
+          if ((saved?.v === 6 || saved?.v === 5 || saved?.v === 4 || saved?.v === 3 || saved?.v === 2) && Array.isArray(saved.members)) {
             const byId = new Map(saved.members.map((x) => [x.id, x]))
             initial = base.map((m) => {
               if (!byId.has(m.id)) return m
@@ -397,14 +454,17 @@ export function GroupDetails() {
               }
             })
             if (Array.isArray(saved.catalogExtras)) extras = saved.catalogExtras.map(normalizeTag).filter(Boolean)
-            if ((saved.v === 4 || saved.v === 5) && saved.governance && typeof saved.governance === 'object') {
+            if ((saved.v === 4 || saved.v === 5 || saved.v === 6) && saved.governance && typeof saved.governance === 'object') {
               gov = { ...defaultGovernance(), ...saved.governance }
             }
-            if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.routines)) rts = saved.routines
-            if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.auditLog)) aud = saved.auditLog
-            if ((saved.v === 4 || saved.v === 5) && Array.isArray(saved.snapshots)) snp = saved.snapshots
-            if (saved.v === 5 && saved.x1Automation && typeof saved.x1Automation === 'object') {
+            if ((saved.v === 4 || saved.v === 5 || saved.v === 6) && Array.isArray(saved.routines)) rts = saved.routines
+            if ((saved.v === 4 || saved.v === 5 || saved.v === 6) && Array.isArray(saved.auditLog)) aud = saved.auditLog
+            if ((saved.v === 4 || saved.v === 5 || saved.v === 6) && Array.isArray(saved.snapshots)) snp = saved.snapshots
+            if ((saved.v === 5 || saved.v === 6) && saved.x1Automation && typeof saved.x1Automation === 'object') {
               x1 = migrateX1Automation(saved.x1Automation)
+            }
+            if (saved.v === 6 && saved.statusRules) {
+              statusRulesLocal = normalizeStatusRules(saved.statusRules)
             }
           } else if (Array.isArray(saved) && saved.length) {
             const byId = new Map(saved.map((x) => [x.id, x]))
@@ -433,6 +493,7 @@ export function GroupDetails() {
     setAuditLog(aud)
     setSnapshots(snp)
     setX1Automation(x1)
+    setStatusRules(statusRulesLocal)
 
     if (!resolveUseRealApi() || !id) return
 
@@ -465,14 +526,21 @@ export function GroupDetails() {
   }, [members, catalogExtras])
 
   const membersFiltered = useMemo(() => {
+    if (memberFilter === 'regras') return []
     return members.filter((m) => {
       if (memberFilter === 'ativos' && m.status !== 'ativo') return false
       if (memberFilter === 'inativos' && m.status !== 'inativo') return false
-      if (memberFilter === 'admins' && m.role !== 'admin') return false
+      if (memberFilter === 'admins' && m.role !== 'admin' && m.role !== 'superadmin') return false
       if (memberQ && !m.name.toLowerCase().includes(memberQ.toLowerCase()) && !m.phone.includes(memberQ)) return false
       return true
     })
   }, [members, memberFilter, memberQ])
+
+  const statusRulesPreviewCount = useMemo(() => {
+    if (!statusRules.enabled) return 0
+    const now = Date.now()
+    return members.filter((m) => memberMatchesInactivityRule(m, statusRules, now)).length
+  }, [statusRules, members])
 
   const tabs = useMemo(
     () => [
@@ -847,6 +915,62 @@ export function GroupDetails() {
     toast.success('Governança salva.')
   }
 
+  async function saveStatusRules() {
+    const normalized = normalizeStatusRules(statusRules)
+    setStatusRules(normalized)
+    setStatusRulesSaving(true)
+    const nextAudit = [
+      {
+        id: crypto.randomUUID(),
+        at: nowIso(),
+        action: 'statusRules.save',
+        details: normalized.enabled
+          ? `Inativo após ${normalized.inactiveAfterHours}h sem atividade`
+          : 'Regra de inatividade desligada',
+      },
+      ...auditLogRef.current,
+    ].slice(0, 50)
+    setAuditLog(nextAudit)
+    persistAll(members, catalogExtras, governance, routines, nextAudit, snapshots, undefined, normalized)
+    try {
+      let applied = 0
+      if (resolveUseRealApi() && id) {
+        const res = await updateGroupConfig(id, { statusRules: normalized, auditLog: nextAudit })
+        applied = Number(res?.data?.statusRulesApplied?.updated) || 0
+        if (applied > 0) {
+          const appliedIds = new Set(res?.data?.statusRulesApplied?.participantJids || [])
+          if (appliedIds.size) {
+            setMembers((prev) =>
+              prev.map((m) => (appliedIds.has(m.id) || appliedIds.has(m.participantJid) ? { ...m, status: 'inativo' } : m)),
+            )
+          } else {
+            // fallback: recalcula localmente
+            const now = Date.now()
+            setMembers((prev) =>
+              prev.map((m) => (memberMatchesInactivityRule(m, normalized, now) ? { ...m, status: 'inativo' } : m)),
+            )
+          }
+        }
+      } else if (normalized.enabled) {
+        const now = Date.now()
+        const toInativo = members.filter((m) => memberMatchesInactivityRule(m, normalized, now))
+        if (toInativo.length) {
+          applied = toInativo.length
+          const ids = new Set(toInativo.map((m) => m.id))
+          const nextMembers = members.map((m) => (ids.has(m.id) ? { ...m, status: 'inativo' } : m))
+          setMembers(nextMembers)
+          persistAll(nextMembers, catalogExtras, governance, routines, nextAudit, snapshots, undefined, normalized)
+        }
+      }
+      toast.success(
+        applied > 0 ? `Regra salva. ${applied} membro(s) marcado(s) inativo.` : 'Regra salva.',
+      )
+    } catch (e) {
+      toast.error(e?.response?.data?.message || 'Falha ao salvar regra.')
+    } finally {
+      setStatusRulesSaving(false)
+    }
+  }
 
   const addAdmin = () => {
     const value = newAdmin.trim()
@@ -1112,27 +1236,109 @@ export function GroupDetails() {
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap gap-2">
-              {['todos', 'ativos', 'inativos', 'admins'].map((f) => (
+              {[
+                { id: 'todos', label: 'Todos' },
+                { id: 'ativos', label: 'Ativos' },
+                { id: 'inativos', label: 'Inativos' },
+                { id: 'admins', label: 'Admins' },
+                { id: 'regras', label: 'Regras' },
+              ].map((f) => (
                 <button
-                  key={f}
+                  key={f.id}
                   type="button"
                   onClick={() => {
-                    setMemberFilter(f)
+                    setMemberFilter(f.id)
                     setSelected(new Set())
                   }}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize ${
-                    memberFilter === f ? 'bg-accent-500/15 text-accent-400 border border-accent-500/30' : 'text-stone-400 border border-transparent hover:bg-white/5'
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                    memberFilter === f.id
+                      ? 'bg-accent-500/15 text-accent-400 border border-accent-500/30'
+                      : 'text-stone-400 border border-transparent hover:bg-white/5'
                   }`}
                 >
-                  {f}
+                  {f.label}
                 </button>
               ))}
             </div>
-            <div className="max-w-xs w-full">
-              <Input placeholder="Buscar nome ou telefone" value={memberQ} onChange={(e) => setMemberQ(e.target.value)} />
-            </div>
+            {memberFilter !== 'regras' && (
+              <div className="max-w-xs w-full">
+                <Input placeholder="Buscar nome ou telefone" value={memberQ} onChange={(e) => setMemberQ(e.target.value)} />
+              </div>
+            )}
           </div>
 
+          {memberFilter === 'regras' ? (
+            <Card className="space-y-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-stone-200 font-heading">
+                    <ListChecks className="h-4 w-4 text-accent-400" />
+                    Inatividade automática
+                  </h3>
+                  <p className="mt-1 text-xs text-stone-500 max-w-xl">
+                    Sem atividade por X horas → inativo. Qualquer mensagem no grupo → volta para ativo. Admins são ignorados.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={statusRulesSaving}
+                  onClick={() => void saveStatusRules()}
+                >
+                  {statusRulesSaving ? 'Salvando…' : 'Salvar'}
+                </Button>
+              </div>
+
+              <div className="rounded-xl border border-brand-700 bg-brand-900/50 p-4 space-y-4">
+                <Toggle
+                  checked={statusRules.enabled}
+                  onChange={(v) => setStatusRules((prev) => ({ ...prev, enabled: v }))}
+                  label={statusRules.enabled ? 'Regra ativa' : 'Regra desligada'}
+                />
+
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="w-28">
+                    <Input
+                      label="Horas sem atividade"
+                      type="number"
+                      min={1}
+                      max={8760}
+                      disabled={!statusRules.enabled}
+                      value={statusRules.inactiveAfterHours}
+                      onChange={(e) =>
+                        setStatusRules((prev) => ({
+                          ...prev,
+                          inactiveAfterHours: Math.max(1, Math.min(8760, Number(e.target.value) || 1)),
+                        }))
+                      }
+                    />
+                  </div>
+                  <p className="pb-2.5 text-xs text-stone-500">
+                    {statusRules.inactiveAfterHours >= 24
+                      ? `≈ ${(statusRules.inactiveAfterHours / 24).toFixed(1).replace(/\.0$/, '')} dia(s)`
+                      : 'menos de 1 dia'}
+                  </p>
+                </div>
+
+                <ul className="space-y-1 text-xs text-stone-400 list-disc pl-4">
+                  <li>
+                    Após <span className="text-stone-200">{statusRules.inactiveAfterHours}h</span> sem mensagem → status{' '}
+                    <span className="text-stone-200">inativo</span>
+                  </li>
+                  <li>
+                    Qualquer mensagem do membro no grupo → status <span className="text-stone-200">ativo</span>
+                  </li>
+                </ul>
+
+                {statusRules.enabled && (
+                  <p className="text-xs text-stone-500">
+                    Prévia agora: {statusRulesPreviewCount} membro(s) ativo(s) elegível(is) para inativo.
+                  </p>
+                )}
+              </div>
+            </Card>
+          ) : (
+            <>
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs text-stone-500 mr-2">
               {selected.size === 0 ? 'Nenhum membro selecionado.' : `${selected.size} selecionado(s)`}
@@ -1251,6 +1457,8 @@ export function GroupDetails() {
               </table>
             </div>
           </Card>
+            </>
+          )}
 
           <Modal
             isOpen={addTagModal}
