@@ -170,25 +170,29 @@ export function MetaIntegrationGuide({ pixelId, wabaId, wabaDatasetId, wabaDatas
             </div>
           </Section>
 
-          <Section title="Landing Page — prompt Vesto + mensagem limpa" defaultOpen>
+          <Section title="Landing Page — prompt Vesto (1:1 ou Grupo)" defaultOpen>
             <ol className="list-inside list-decimal space-y-2">
               <li>
-                Cadastre <strong className="text-stone-400">domínios</strong>,{' '}
-                <strong className="text-stone-400">vendedores</strong> e mensagem → salve.
+                No bloco <strong className="text-stone-400">Landing Page → WhatsApp</strong>, escolha a variante:{' '}
+                <strong className="text-stone-400">LP → 1:1</strong> (vendedores / wa.me) ou{' '}
+                <strong className="text-stone-400">LP → Grupo</strong> (chat.whatsapp.com).
               </li>
               <li>
-                Copie o <strong className="text-stone-400">prompt para IA</strong> e cole no projeto da LP.
+                Cadastre <strong className="text-stone-400">domínios</strong> + (1:1) vendedores/mensagem ou (Grupo)
+                link de convite → salve.
               </li>
               <li>
-                A mensagem do WhatsApp fica <strong className="text-stone-400">limpa</strong> — sem códigos
-                técnicos. A atribuição Meta é silenciosa (POST no clique + CRM na 1ª mensagem).
+                Copie o <strong className="text-stone-400">prompt para IA</strong> da variante escolhida e cole no
+                projeto da LP.
               </li>
               <li>
-                Botões com <code className="text-stone-400">data-vesto-whatsapp</code> — só o script Vesto, sem JS
-                custom.
+                1:1: botões <code className="text-stone-400">data-vesto-whatsapp</code> + mensagem limpa.
+                Grupo: botões <code className="text-stone-400">data-vesto-group</code> + atribuição no clique antes do
+                convite.
               </li>
               <li>
-                Pixel <code className="text-stone-400">{pixelHint}</code>: PageView + Contact no clique.
+                Pixel <code className="text-stone-400">{pixelHint}</code>: PageView + Contact no clique. QUALIFICADO /
+                Orçamento / Compra só no CRM (CAPI), inclusive no funil que passa pelo grupo.
               </li>
             </ol>
           </Section>

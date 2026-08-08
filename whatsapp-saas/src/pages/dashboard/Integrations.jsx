@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Megaphone, Loader2, CheckCircle2, AlertCircle, ExternalLink } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -8,11 +8,21 @@ import { Toggle } from '../../components/common/Toggle.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { getMetaIntegration, saveMetaIntegration, saveMetaLpSettings, testMetaIntegration } from '../../services/api.js'
 import { initMetaPixel } from '../../lib/metaPixel.js'
-import { MetaIntegrationGuide } from '../../components/integrations/MetaIntegrationGuide.jsx'
-import { MetaAdsPanel } from '../../components/integrations/MetaAdsPanel.jsx'
 import { MetaLpAttributionPanel } from '../../components/integrations/MetaLpAttributionPanel.jsx'
-import { UtmUrlGenerator } from '../../components/integrations/UtmUrlGenerator.jsx'
 import { parseSellersFromIntegration, sellersToPayload, validateSellers } from '../../lib/lpSellers.js'
+import { normalizeGroupInviteUrl } from '../../lib/buildMetaLpPrompt.js'
+
+const UtmUrlGenerator = lazy(() =>
+  import('../../components/integrations/UtmUrlGenerator.jsx').then((m) => ({ default: m.UtmUrlGenerator })),
+)
+const MetaAdsPanel = lazy(() =>
+  import('../../components/integrations/MetaAdsPanel.jsx').then((m) => ({ default: m.MetaAdsPanel })),
+)
+const MetaIntegrationGuide = lazy(() =>
+  import('../../components/integrations/MetaIntegrationGuide.jsx').then((m) => ({
+    default: m.MetaIntegrationGuide,
+  })),
+)
 
 function originsToText(origins) {
   if (!Array.isArray(origins) || !origins.length) return ''
@@ -36,6 +46,34 @@ function formatWhen(iso) {
   })
 }
 
+function applyIntegrationToForm(integration) {
+  return {
+    pixelId: integration.pixelId || '',
+    facebookPageId: integration.facebookPageId || '',
+    accessToken: '',
+    enabled: integration.enabled !== false,
+    sendQuotes: integration.sendQuotes !== false,
+    sendPurchases: integration.sendPurchases !== false,
+    testEventCode: integration.testEventCode || '',
+    adAccountId: integration.adAccountId || '',
+    adsAccessToken: '',
+    adsEnabled: integration.adsEnabled === true,
+    allowedOriginsText: originsToText(integration.allowedOrigins),
+    lpSellers: parseSellersFromIntegration(integration),
+    lpRotatorMode: integration.lpRotatorMode || 'sequential',
+    lpWhatsappMsg: integration.lpWhatsappMsg || 'Olá! Vim pelo site e quero mais informações.',
+    lpGroupInviteUrl: integration.lpGroupInviteUrl || '',
+  }
+}
+
+function PanelFallback() {
+  return (
+    <div className="flex items-center justify-center rounded-xl border border-brand-800 bg-brand-950/20 py-8">
+      <Loader2 className="h-5 w-5 animate-spin text-stone-500" />
+    </div>
+  )
+}
+
 export function Integrations() {
   const { success: toastSuccess, error: toastError } = useToast()
   const [loading, setLoading] = useState(true)
@@ -57,48 +95,74 @@ export function Integrations() {
     lpSellers: [{ id: '1', label: '', phone: '' }],
     lpRotatorMode: 'sequential',
     lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
+    lpGroupInviteUrl: '',
   })
   const [meta, setMeta] = useState(null)
   const [showSellerErrors, setShowSellerErrors] = useState(false)
   const [savingLp, setSavingLp] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const { data } = await getMetaIntegration()
-      const integration = data.integration
-      setMeta(integration)
-      if (integration) {
-        setForm({
-          pixelId: integration.pixelId || '',
-          facebookPageId: integration.facebookPageId || '',
-          accessToken: '',
-          enabled: integration.enabled !== false,
-          sendQuotes: integration.sendQuotes !== false,
-          sendPurchases: integration.sendPurchases !== false,
-          testEventCode: integration.testEventCode || '',
-          adAccountId: integration.adAccountId || '',
-          adsAccessToken: '',
-          adsEnabled: integration.adsEnabled === true,
-          allowedOriginsText: originsToText(integration.allowedOrigins),
-          lpSellers: parseSellersFromIntegration(integration),
-          lpRotatorMode: integration.lpRotatorMode || 'sequential',
-          lpWhatsappMsg: integration.lpWhatsappMsg || 'Olá! Vim pelo site e quero mais informações.',
-        })
-        if (integration.enabled && integration.pixelId) {
-          initMetaPixel(integration.pixelId)
-        }
+  const applyIntegration = useCallback((integration, { resetSecrets = true } = {}) => {
+    setMeta(integration)
+    if (!integration) return
+    setForm((prev) => {
+      const next = applyIntegrationToForm(integration)
+      if (!resetSecrets) {
+        next.accessToken = prev.accessToken
+        next.adsAccessToken = prev.adsAccessToken
       }
-    } catch (err) {
-      toastError(err?.response?.data?.message || 'Falha ao carregar integração.')
-    } finally {
-      setLoading(false)
+      return next
+    })
+    if (integration.enabled && integration.pixelId) {
+      initMetaPixel(integration.pixelId)
     }
-  }, [toastError])
+  }, [])
+
+  const load = useCallback(
+    async ({ silent = false, enrich = false } = {}) => {
+      if (!silent) setLoading(true)
+      try {
+        const { data } = await getMetaIntegration({ enrich })
+        const integration = data.integration
+        if (enrich && integration) {
+          setMeta((prev) => ({ ...(prev || {}), ...integration }))
+        } else {
+          applyIntegration(integration)
+        }
+      } catch (err) {
+        if (!silent) toastError(err?.response?.data?.message || 'Falha ao carregar integração.')
+      } finally {
+        if (!silent) setLoading(false)
+      }
+    },
+    [applyIntegration, toastError],
+  )
 
   useEffect(() => {
-    load()
-  }, [load])
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      try {
+        const { data } = await getMetaIntegration()
+        if (cancelled) return
+        applyIntegration(data.integration)
+      } catch (err) {
+        if (!cancelled) toastError(err?.response?.data?.message || 'Falha ao carregar integração.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+      if (cancelled) return
+      try {
+        const { data } = await getMetaIntegration({ enrich: true })
+        if (cancelled || !data.integration) return
+        setMeta((prev) => ({ ...(prev || {}), ...data.integration }))
+      } catch {
+        // enrich opcional — falha silenciosa
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [applyIntegration, toastError])
 
   const handleSave = async () => {
     setSaving(true)
@@ -129,6 +193,7 @@ export function Integrations() {
       }))
       if (integration?.pixelId) initMetaPixel(integration.pixelId)
       toastSuccess('Integração Meta salva.')
+      load({ silent: true, enrich: true })
     } catch (err) {
       toastError(err?.response?.data?.message || 'Falha ao salvar integração.')
     } finally {
@@ -136,30 +201,39 @@ export function Integrations() {
     }
   }
 
-  const handleSaveLp = async () => {
+  const handleSaveLp = async ({ mode = 'x1' } = {}) => {
     const domains = parseOriginsText(form.allowedOriginsText)
     if (!domains.length) {
       toastError('Informe ao menos um domínio da landing page.')
       return
     }
 
-    setShowSellerErrors(true)
-    const sellerErrors = validateSellers(form.lpSellers || [])
-    if (sellerErrors.length) {
-      toastError(sellerErrors[0])
-      return
+    const payload = { allowedOrigins: domains }
+
+    if (mode === 'group') {
+      const invite = normalizeGroupInviteUrl(form.lpGroupInviteUrl)
+      if (!invite) {
+        toastError('Cole o link de convite do grupo (chat.whatsapp.com/…).')
+        return
+      }
+      payload.lpGroupInviteUrl = invite
     }
 
-    const sellersPayload = sellersToPayload(form.lpSellers || [])
+    if (mode === 'x1') {
+      setShowSellerErrors(true)
+      const sellerErrors = validateSellers(form.lpSellers || [])
+      if (sellerErrors.length) {
+        toastError(sellerErrors[0])
+        return
+      }
+      payload.lpSellers = sellersToPayload(form.lpSellers || [])
+      payload.lpRotatorMode = form.lpRotatorMode || 'sequential'
+      payload.lpWhatsappMsg = form.lpWhatsappMsg.trim() || null
+    }
 
     setSavingLp(true)
     try {
-      const { data } = await saveMetaLpSettings({
-        allowedOrigins: parseOriginsText(form.allowedOriginsText),
-        lpSellers: sellersPayload,
-        lpRotatorMode: form.lpRotatorMode || 'sequential',
-        lpWhatsappMsg: form.lpWhatsappMsg.trim() || null,
-      })
+      const { data } = await saveMetaLpSettings(payload)
       const integration = data.integration
       setMeta((prev) => ({ ...prev, ...integration }))
       setForm((f) => ({
@@ -168,9 +242,14 @@ export function Integrations() {
         lpSellers: parseSellersFromIntegration(integration),
         lpRotatorMode: integration?.lpRotatorMode || 'sequential',
         lpWhatsappMsg: integration?.lpWhatsappMsg || f.lpWhatsappMsg,
+        lpGroupInviteUrl: integration?.lpGroupInviteUrl ?? f.lpGroupInviteUrl ?? '',
       }))
       setShowSellerErrors(false)
-      toastSuccess(`${sellersPayload.length} vendedor(es) e domínios salvos.`)
+      toastSuccess(
+        mode === 'group'
+          ? 'Domínios e link do grupo salvos.'
+          : `${payload.lpSellers.length} vendedor(es) e domínios salvos.`,
+      )
     } catch (err) {
       const status = err?.response?.status
       const code = err?.response?.data?.error
@@ -192,7 +271,7 @@ export function Integrations() {
       const { data } = await testMetaIntegration()
       setTestResults(data.results || [])
       toastSuccess(data.message || 'Eventos de teste enviados.')
-      await load()
+      await load({ silent: true })
     } catch (err) {
       toastError(err?.response?.data?.message || 'Falha ao testar integração.')
     } finally {
@@ -281,9 +360,7 @@ export function Integrations() {
                     <code className="text-stone-300">{meta.wabaDatasetId}</code>
                   </p>
                 ) : meta?.wabaDatasetError ? (
-                  <p className="text-stone-500">
-                    Dataset WABA (opcional): {meta.wabaDatasetError}
-                  </p>
+                  <p className="text-stone-500">Dataset WABA (opcional): {meta.wabaDatasetError}</p>
                 ) : (
                   <p className="text-stone-500">
                     Eventos CTWA vão ao pixel com ctwa_clid — dataset WABA só com META_USE_WABA_DATASET=true.
@@ -299,7 +376,11 @@ export function Integrations() {
           <Input
             label="Token da API de Conversões"
             type="password"
-            placeholder={meta?.hasAccessToken ? `Salvo (${meta.accessTokenHint}) — deixe vazio para manter` : 'Cole o token gerado no Events Manager'}
+            placeholder={
+              meta?.hasAccessToken
+                ? `Salvo (${meta.accessTokenHint}) — deixe vazio para manter`
+                : 'Cole o token gerado no Events Manager'
+            }
             value={form.accessToken}
             onChange={(e) => setForm((f) => ({ ...f, accessToken: e.target.value }))}
           />
@@ -383,11 +464,7 @@ export function Integrations() {
                     ) : (
                       <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-400" />
                     )}
-                    <span
-                      className={
-                        r.ok ? 'text-stone-300' : r.optional ? 'text-stone-500' : 'text-red-300'
-                      }
-                    >
+                    <span className={r.ok ? 'text-stone-300' : r.optional ? 'text-stone-500' : 'text-red-300'}>
                       {r.name}
                       {r.optional && !r.ok ? ' (opcional — pixel ok)' : ''}
                       {r.ok && r.eventsReceived != null ? ` (${r.eventsReceived} recebido)` : ''}
@@ -408,8 +485,6 @@ export function Integrations() {
             </Button>
           </div>
 
-          <UtmUrlGenerator />
-
           <MetaLpAttributionPanel
             form={form}
             setForm={setForm}
@@ -419,14 +494,22 @@ export function Integrations() {
             savingLp={savingLp}
           />
 
-          <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={load} />
+          <Suspense fallback={<PanelFallback />}>
+            <UtmUrlGenerator />
+          </Suspense>
 
-          <MetaIntegrationGuide
-            pixelId={form.pixelId || meta?.pixelId}
-            wabaId={form.facebookPageId || meta?.facebookPageId}
-            wabaDatasetId={meta?.wabaDatasetId}
-            wabaDatasetError={meta?.wabaDatasetError}
-          />
+          <Suspense fallback={<PanelFallback />}>
+            <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={() => load({ silent: true })} />
+          </Suspense>
+
+          <Suspense fallback={<PanelFallback />}>
+            <MetaIntegrationGuide
+              pixelId={form.pixelId || meta?.pixelId}
+              wabaId={form.facebookPageId || meta?.facebookPageId}
+              wabaDatasetId={meta?.wabaDatasetId}
+              wabaDatasetError={meta?.wabaDatasetError}
+            />
+          </Suspense>
         </div>
       </Card>
     </div>

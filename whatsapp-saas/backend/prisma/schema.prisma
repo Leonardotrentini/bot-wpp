@@ -653,6 +653,8 @@ model MetaIntegration {
   lpWhatsappMsg   String?
   lpRotatorMode   String    @default("sequential")
   lpSellers       Json      @default("[]")
+  /** Convite chat.whatsapp.com para prompt LP → Grupo (opcional). */
+  lpGroupInviteUrl String?
   lastEventAt     DateTime?
   lastEventName   String?
   lastError       String?

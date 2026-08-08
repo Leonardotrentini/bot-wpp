@@ -47,7 +47,11 @@ function createIntegrationsRouter() {
   })
 
   router.get("/meta", async (req, res) => {
-    const integration = await getMetaIntegrationEnriched(prisma, req.user.sub)
+    // enrich=1 dispara Graph (WABA dataset) — lento; default = só DB.
+    const enrich = req.query.enrich === "1" || req.query.enrich === "waba"
+    const integration = enrich
+      ? await getMetaIntegrationEnriched(prisma, req.user.sub)
+      : await getMetaIntegration(prisma, req.user.sub)
     return res.json({ integration: integration || null })
   })
 
@@ -94,6 +98,7 @@ function createIntegrationsRouter() {
       allowedOrigins: z.array(z.string().max(253)).optional(),
       lpWhatsappMsg: z.string().max(500).optional().nullable(),
       lpRotatorMode: z.enum(["sequential"]).optional(),
+      lpGroupInviteUrl: z.string().max(500).optional().nullable(),
       lpSellers: z
         .array(
           z.object({
@@ -101,7 +106,8 @@ function createIntegrationsRouter() {
             phone: z.string().max(32),
           }),
         )
-        .min(1),
+        .min(1)
+        .optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {

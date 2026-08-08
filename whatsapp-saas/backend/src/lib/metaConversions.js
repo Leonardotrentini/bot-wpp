@@ -531,6 +531,7 @@ function formatIntegrationRow(row) {
     lpWhatsappMsg: row.lpWhatsappMsg || "",
     lpRotatorMode: row.lpRotatorMode || "sequential",
     lpSellers: parseSellersInput(row.lpSellers),
+    lpGroupInviteUrl: row.lpGroupInviteUrl || "",
   }
 }
 
@@ -718,6 +719,25 @@ async function upsertMetaIntegration(prisma, userId, data) {
   return { integration: formatIntegrationRow(row) }
 }
 
+function normalizeLpGroupInviteUrl(raw) {
+  const value = String(raw || "").trim()
+  if (!value) return null
+  let url = value
+  if (!/^https?:\/\//i.test(url)) {
+    if (/^chat\.whatsapp\.com\//i.test(url)) url = `https://${url}`
+    else if (/^[A-Za-z0-9_-]{8,}$/.test(url)) url = `https://chat.whatsapp.com/${url}`
+  }
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname.toLowerCase() !== "chat.whatsapp.com") {
+      return { error: "VALIDATION", message: "Link do grupo inválido. Use um convite chat.whatsapp.com/…" }
+    }
+    return parsed.toString().replace(/\/$/, "")
+  } catch {
+    return { error: "VALIDATION", message: "Link do grupo inválido. Use um convite chat.whatsapp.com/…" }
+  }
+}
+
 async function updateMetaLpIntegration(prisma, userId, data) {
   const existing = await prisma.metaIntegration.findUnique({ where: { userId } })
   if (!existing) {
@@ -746,10 +766,24 @@ async function updateMetaLpIntegration(prisma, userId, data) {
       ? String(data.lpRotatorMode).trim() || "sequential"
       : existing.lpRotatorMode || "sequential"
 
-  const lpSellers =
-    data.lpSellers != null ? parseSellersInput(data.lpSellers) : parseSellersInput(existing.lpSellers)
+  let lpGroupInviteUrl = existing.lpGroupInviteUrl || null
+  if (data.lpGroupInviteUrl !== undefined) {
+    if (data.lpGroupInviteUrl === null || String(data.lpGroupInviteUrl).trim() === "") {
+      lpGroupInviteUrl = null
+    } else {
+      const normalized = normalizeLpGroupInviteUrl(data.lpGroupInviteUrl)
+      if (normalized && typeof normalized === "object" && normalized.error) return normalized
+      lpGroupInviteUrl = normalized
+    }
+  }
 
-  if (!lpSellers.length) {
+  const sellersProvided = data.lpSellers != null
+  const lpSellers = sellersProvided
+    ? parseSellersInput(data.lpSellers)
+    : parseSellersInput(existing.lpSellers)
+
+  // LP → 1:1 precisa de vendedores. LP → Grupo pode salvar só domínios + convite.
+  if (sellersProvided && !lpSellers.length) {
     return { error: "VALIDATION", message: "Informe ao menos um vendedor com WhatsApp válido." }
   }
 
@@ -762,17 +796,18 @@ async function updateMetaLpIntegration(prisma, userId, data) {
     }
   }
 
-  const lpWhatsapp = lpSellers[0].phone
+  const lpWhatsapp = lpSellers.length > 0 ? lpSellers[0].phone : existing.lpWhatsapp || null
   const vestoPublicKey = existing.vestoPublicKey || generateVestoPublicKey()
 
   const row = await prisma.metaIntegration.update({
     where: { userId },
     data: {
       allowedOrigins,
-      lpWhatsapp,
-      lpWhatsappMsg,
-      lpRotatorMode,
-      lpSellers,
+      lpWhatsapp: sellersProvided ? lpWhatsapp : undefined,
+      lpWhatsappMsg: data.lpWhatsappMsg != null ? lpWhatsappMsg : undefined,
+      lpRotatorMode: data.lpRotatorMode != null ? lpRotatorMode : undefined,
+      lpSellers: sellersProvided ? lpSellers : undefined,
+      lpGroupInviteUrl: data.lpGroupInviteUrl !== undefined ? lpGroupInviteUrl : undefined,
       vestoPublicKey: existing.vestoPublicKey ? undefined : vestoPublicKey,
     },
   })

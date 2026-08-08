@@ -2,6 +2,10 @@
  * Prompt completo para o cliente colar no Codex/Cursor/ChatGPT e implementar a LP.
  * Contrato genérico: rodízio no SERVIDOR da LP + atribuição Meta no Vesto
  * + Pixel Contact deduplicável (não localStorage e sem código na mensagem).
+ *
+ * Variantes:
+ * - buildMetaLpPrompt → LP → WhatsApp 1:1 (wa.me + rodízio de vendedores)
+ * - buildMetaLpGroupPrompt → LP → link de grupo WhatsApp (chat.whatsapp.com)
  */
 
 import { formatPhoneExample } from './lpSellers.js'
@@ -34,6 +38,16 @@ function formatSellerRotationExample(sellers) {
     .join('\n')
 }
 
+function normalizeGroupInviteUrl(raw) {
+  const value = String(raw || '').trim()
+  if (!value) return ''
+  if (/^https?:\/\//i.test(value)) return value
+  if (/^chat\.whatsapp\.com\//i.test(value)) return `https://${value}`
+  if (/^[A-Za-z0-9_-]{8,}$/.test(value)) return `https://chat.whatsapp.com/${value}`
+  return value
+}
+
+/** Prompt LP → WhatsApp 1:1 (vendedores / wa.me). Não alterar o contrato existente. */
 export function buildMetaLpPrompt({
   publicKey,
   backendOrigin,
@@ -294,3 +308,224 @@ CHECKLIST
 [ ] wa.me abre só: "${msg}"
 [ ] WhatsApps de destino conectados (ou ingestão) no Vesto para CAPI Purchase`
 }
+
+/**
+ * Prompt LP → link de grupo WhatsApp (chat.whatsapp.com).
+ * Mantém atribuição Meta no clique; destino é o convite do grupo (não wa.me / rodízio).
+ */
+export function buildMetaLpGroupPrompt({
+  publicKey,
+  backendOrigin,
+  pixelId,
+  domains = [],
+  groupInviteUrl = '',
+}) {
+  const key = publicKey || 'vpk_SALVE_NO_VESTO'
+  const origin = (backendOrigin || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, '')
+  const apiBase = `${origin}/api`
+  const pixel = pixelId || 'SEU_PIXEL_ID'
+  const invite = normalizeGroupInviteUrl(groupInviteUrl) || 'https://chat.whatsapp.com/SEU_CONVITE_AQUI'
+  const scriptLine = `<script src="${origin}/vesto-attribution.js?key=${key}" defer data-selector="[data-vesto-skip]"></script>`
+
+  const domainLines = domains.length
+    ? domains.map((d) => `- ${d}`).join('\n')
+    : '- (salve os domínios no Vesto)'
+
+  return `OBJETIVO
+Integrar esta landing page no funil: Meta Ads → LP → GRUPO WhatsApp → (depois) CRM 1:1 no Vesto.
+1) No clique do CTA, gravar atribuição Meta no Vesto (fbc/fbp/fbclid/UTMs) — lead pendente.
+2) Abrir o LINK DE CONVITE DO GRUPO (chat.whatsapp.com) — NÃO wa.me de vendedor.
+3) Mensagem/código técnico NÃO aparece no WhatsApp.
+4) Pixel Contact no navegador + CAPI do CRM sem eventos duplicados.
+5) Qualificado / Orçamento / Compra só quando a pessoa falar 1:1 no CRM e o vendedor marcar no Vesto.
+
+FUNIL ESPERADO (importante)
+LP (clique + atribuição) → pessoa entra no grupo → depois chama o vendedor no WhatsApp 1:1 (CRM)
+→ tag QUALIFICADO / orçamento / venda no MESMO contato CRM → CAPI Meta (“campanha computou”).
+Entrar no grupo sozinho NÃO dispara LeadQualified. A atribuição da LP cola na 1ª mensagem 1:1.
+
+REGRA DE OURO
+- Destino do CTA: URL fixa do convite do grupo (abaixo).
+- Quem grava a ATRIBUIÇÃO Meta: Vesto (POST /api/public/meta/attribution) NO CLIQUE, antes de abrir o grupo.
+- NÃO usar rodízio /api/next-seller nesta variante (não há wa.me de vendedor).
+- NÃO abrir o grupo sem o POST de atribuição (senão a coluna Meta na Lista de Leads fica “—”).
+
+DOMÍNIOS AUTORIZADOS (CORS ativo no Vesto — só hostname, sem path)
+${domainLines}
+
+CHAVE VESTO
+${key}
+
+LINK DO GRUPO (destino do CTA)
+${invite}
+Use exatamente esse URL (ou o convite oficial gerado no WhatsApp). Formato: https://chat.whatsapp.com/...
+
+PIXEL META — ID ${pixel}
+1. Pixel base oficial no <head>, exatamente uma vez.
+   Se a página já instala esse Pixel via GTM/plugin, NÃO instalar/inicializar de novo.
+2. PageView exatamente uma vez: fbq('init', '${pixel}'); fbq('track', 'PageView');
+3. No clique do CTA do grupo: fbq('track', 'Contact', {}, { eventID: contactEventId }).
+4. O MESMO contactEventId deve ir no POST Vesto para deduplicação browser/CAPI.
+5. NÃO disparar Lead, LeadQualified, Quote ou Purchase pelo navegador:
+   Qualificado/Orçamento/Compra são enviados exclusivamente pelo CRM Vesto via CAPI (no chat 1:1).
+
+SCRIPTS — layout raiz (antes de </body>), nesta ordem
+1) Script Vesto (só captura fbclid/_fbc/_fbp/UTMs em sessionStorage "vesto_meta" — NÃO trata o clique):
+${scriptLine}
+
+data-selector="[data-vesto-skip]" é OBRIGATÓRIO: evita o handler local do Vesto competir com o handler do grupo.
+
+2) Seu JS do CTA do grupo (ex.: /src/js/vesto-group-cta.js) — veja implementação abaixo.
+
+URL do script Vesto: ${origin}/vesto-attribution.js (raiz do backend, NÃO ${apiBase}/vesto-attribution.js).
+
+BOTÃO CTA — TODOS os CTAs que levam ao grupo
+<a href="#" data-vesto-group class="SEU_ESTILO">Entrar no grupo</a>
+Sem outros onclick competindo no mesmo botão.
+NÃO use data-vesto-whatsapp nesta variante (esse atributo é da LP → 1:1).
+
+FLUXO DO CLIQUE (obrigatório, nesta ordem)
+1. Clique em [data-vesto-group] → preventDefault + stopPropagation (+ stopImmediatePropagation).
+2. Ler sessionStorage "vesto_meta" (preenchido pelo script Vesto no load).
+3. No momento do clique, atualizar clickAt=Date.now(), pageUrl=location.href e userAgent.
+4. Gerar ref interno "vst_" + 8 chars e contactEventId="vst_contact_"+ref
+   (NÃO colocar nenhum deles em lugar visível).
+5. Disparar fbq('track', 'Contact', {}, { eventID: contactEventId }).
+6. POST ${apiBase}/public/meta/attribution?key=${key}
+   headers: Content-Type: application/json, X-Vesto-Key: ${key}
+   body: { vestoPublicKey, ref, contactEventId, fbclid, fbc, fbp, clickAt,
+           pageUrl, userAgent, utm_source, utm_medium, utm_campaign,
+           utm_content, utm_term }
+7. Esperar o POST concluir OU no máximo 2,5 segundos; só então abrir:
+   ${invite}
+   (window.open com noopener). O POST usa keepalive para não perder dados.
+
+HANDLER DE REFERÊNCIA (cole como /src/js/vesto-group-cta.js)
+(function () {
+  var VESTO_KEY = '${key}';
+  var ATTRIBUTION_URL = '${apiBase}/public/meta/attribution?key=' + encodeURIComponent(VESTO_KEY);
+  var GROUP_INVITE_URL = ${JSON.stringify(invite)};
+  var busy = false;
+
+  function buildRef() {
+    var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    var suffix = '';
+    for (var i = 0; i < 8; i++) suffix += chars.charAt(Math.floor(Math.random() * chars.length));
+    return 'vst_' + suffix;
+  }
+
+  function readMeta() {
+    try { return JSON.parse(sessionStorage.getItem('vesto_meta') || '{}'); } catch (_) { return {}; }
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function sendAttribution(meta, ref, contactEventId) {
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 4000) : null;
+    return fetch(ATTRIBUTION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vesto-Key': VESTO_KEY },
+      body: JSON.stringify({
+        vestoPublicKey: VESTO_KEY,
+        ref: ref,
+        contactEventId: contactEventId,
+        fbclid: meta.fbclid || null,
+        fbc: meta.fbc || null,
+        fbp: meta.fbp || null,
+        clickAt: meta.clickAt,
+        pageUrl: meta.pageUrl,
+        userAgent: meta.userAgent,
+        utm_source: meta.utm_source || '',
+        utm_medium: meta.utm_medium || '',
+        utm_campaign: meta.utm_campaign || '',
+        utm_content: meta.utm_content || '',
+        utm_term: meta.utm_term || '',
+      }),
+      credentials: 'omit',
+      keepalive: true,
+      signal: ctrl ? ctrl.signal : undefined,
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error('vesto_attribution_' + res.status);
+        return res.json();
+      })
+      .catch(function () { return null; })
+      .finally(function () { if (timer) clearTimeout(timer); });
+  }
+
+  function openGroup() {
+    window.open(GROUP_INVITE_URL, '_blank', 'noopener,noreferrer');
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest && e.target.closest('[data-vesto-group]');
+    if (!btn || busy) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    busy = true;
+    var meta = readMeta();
+    meta.clickAt = Date.now();
+    meta.pageUrl = location.href;
+    meta.userAgent = navigator.userAgent || '';
+    var ref = buildRef();
+    var contactEventId = 'vst_contact_' + ref.toLowerCase();
+    try { sessionStorage.setItem('vesto_ref', ref); } catch (_) {}
+    try { sessionStorage.setItem('vesto_contact_event_id', contactEventId); } catch (_) {}
+    if (typeof fbq === 'function') {
+      fbq('track', 'Contact', {}, { eventID: contactEventId });
+    }
+    Promise.race([sendAttribution(meta, ref, contactEventId), wait(2500)])
+      .then(function () { openGroup(); })
+      .catch(function (err) {
+        console.error('[Vesto] Falha no CTA do grupo — abrindo convite mesmo assim.', err);
+        openGroup();
+      })
+      .finally(function () { busy = false; });
+  }, true);
+})();
+
+COMO O VESTO FAZ A ATRIBUIÇÃO (NÃO REIMPLEMENTAR NA LP)
+- O POST salva o clique com fbclid/fbc/fbp/UTMs (lead pendente) na conta dona do Pixel.
+- Quando a pessoa chamar o vendedor no WhatsApp 1:1 (número conectado ao Vesto), o CRM
+  tenta vincular esse clique ao contato (match temporal na 1ª mensagem).
+- Ideal: a 1ª mensagem 1:1 acontecer em poucos minutos após o clique da LP (janela curta).
+  Se a pessoa só falar dias depois, a atribuição pode não colar → coluna Meta “—” / “Ainda não computou”.
+- Com fbc/fbp no contato, QUALIFICADO / Orçamento / Compra no CRM usam CAPI com action_source=website.
+
+PARA A VENDA VIRAR COMPRA NO ADS MANAGER
+- Clique na LP grava fbc/fbp no Vesto.
+- Pessoa entra no grupo (destino do anúncio/LP).
+- Depois fala 1:1 num WhatsApp CONECTADO à conta Vesto (mesmo org/pixel).
+- No CRM desse contato: QUALIFICADO → Orçamento → Compra → CAPI.
+- Só estar no grupo, sem 1:1 no CRM, não envia LeadQualified/Purchase.
+
+NÃO FAZER
+- Abrir chat.whatsapp.com sem o POST de atribuição Vesto.
+- Usar data-vesto-whatsapp + wa.me nesta variante (isso é LP → 1:1).
+- Remover data-selector="[data-vesto-skip]" do script Vesto.
+- Hardcodar o href do botão direto no HTML sem o handler (pula atribuição).
+- fbq('track','Lead') no CTA.
+- Disparar LeadQualified, Quote ou Purchase no Pixel/GTM da LP.
+- Usar eventID diferente no Pixel Contact e no POST Vesto.
+- Reutilizar ref/contactEventId em cliques diferentes.
+- Bloquear ${origin} nem ${apiBase} no CSP.
+- Esperar que “entrar no grupo” sozinho marque QUALIFICADO na Meta.
+
+CHECKLIST
+[ ] Script Vesto com data-selector="[data-vesto-skip]" + chave ${key}
+[ ] Domínio da LP autorizado no Vesto
+[ ] Pixel ${pixel} + PageView (sem duplicar GTM)
+[ ] Botões com data-vesto-group
+[ ] GROUP_INVITE_URL = ${invite}
+[ ] Network no clique: POST ${apiBase}/public/meta/attribution → 200
+    (mesmo contactEventId do Pixel + clickAt + fbc/fbclid + UTMs)
+[ ] Clique abre o convite do grupo (não wa.me)
+[ ] WhatsApp 1:1 dos vendedores conectado no Vesto (para QUALIFICADO/CAPI depois)
+[ ] Time: orientar o time a atender 1:1 cedo após o lead clicar na LP`
+}
+
+export { normalizeGroupInviteUrl }

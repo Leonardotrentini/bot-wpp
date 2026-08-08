@@ -745,8 +745,12 @@ export async function getIntegrations() {
   })
 }
 
-export async function getMetaIntegration() {
-  if (resolveUseRealApi()) return apiClient.get('/integrations/meta')
+export async function getMetaIntegration(params = {}) {
+  if (resolveUseRealApi()) {
+    const query = {}
+    if (params.enrich) query.enrich = '1'
+    return apiClient.get('/integrations/meta', { params: query })
+  }
   return mockResponse({ integration: null })
 }
 
@@ -759,6 +763,7 @@ export async function saveMetaLpSettings(payload) {
       lpWhatsappMsg: payload.lpWhatsappMsg || '',
       lpRotatorMode: payload.lpRotatorMode || 'sequential',
       lpSellers: payload.lpSellers || [],
+      lpGroupInviteUrl: payload.lpGroupInviteUrl || '',
       vestoPublicKey: 'vpk_demo123',
     },
   })
