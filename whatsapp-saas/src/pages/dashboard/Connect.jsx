@@ -33,6 +33,7 @@ export function Connect() {
   }, [])
 
   const connected = status?.connected
+  const numberConflict = Boolean(status?.numberConflict)
 
   useEffect(() => {
     if (connected || !status?.qr) return undefined
@@ -79,6 +80,13 @@ export function Connect() {
     if (loading) {
       return { progress: 15, label: 'Verificando conexão', description: 'Consultando o backend e a Evolution.' }
     }
+    if (numberConflict) {
+      return {
+        progress: 0,
+        label: 'Conexão bloqueada',
+        description: 'O número escaneado pertence a outra conta da empresa. Use um número exclusivo.',
+      }
+    }
     if (connected) {
       const sync = status?.sync
       if (sync?.status === 'SYNCING_GROUPS') {
@@ -96,7 +104,7 @@ export function Connect() {
       return { progress: 30, label: 'Gerando QR', description: 'Criando ou recuperando a instância na Evolution.' }
     }
     return { progress: 0, label: 'Aguardando início', description: 'Clique em Reconectar para gerar o QR no Vesto.' }
-  }, [actionLoading, connected, loading, status])
+  }, [actionLoading, connected, loading, numberConflict, status])
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -109,10 +117,22 @@ export function Connect() {
             </button>
           </div>
         )}
+        {numberConflict && (
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <p className="font-semibold">Número já usado por outro membro da empresa</p>
+            <p className="mt-1">
+              {status?.phoneFormatted || 'Este WhatsApp'} já está conectado em outra conta. A sessão foi encerrada aqui
+              para as conversas dos dois não se misturarem. Escaneie o QR com um número exclusivo desta conta.
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-stone-50">Status da conexão</h2>
             <p className="text-sm text-stone-400 mt-1">Última sincronização: {status?.lastSync?.replace('T', ' ') || '—'}</p>
+            {connected && status?.phoneFormatted && (
+              <p className="text-sm text-stone-400">Número conectado: {status.phoneFormatted}</p>
+            )}
           </div>
           {loading ? (
             <Spinner className="h-8 w-8" />

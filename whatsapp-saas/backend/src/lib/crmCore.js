@@ -506,8 +506,8 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   }
   if (created && source !== "import") {
     if (!mapped.fromMe && updateUnread) convData.unreadCount = { increment: 1 }
-    // resposta do contato reabre conversa resolvida
-    if (!mapped.fromMe && conversation.status === "resolved") convData.status = "open"
+    // resposta do contato reabre conversa resolvida ou arquivada
+    if (!mapped.fromMe && ["resolved", "archived"].includes(conversation.status)) convData.status = "open"
     // Lead respondeu → zera âncora do no_reply (só volta a contar após envio humano).
     if (!mapped.fromMe) convData.noReplySinceAt = null
     // Outbound humano (WhatsApp/app): reinicia timer. flow/ai/import não passam aqui.

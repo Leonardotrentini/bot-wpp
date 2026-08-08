@@ -166,13 +166,30 @@ function pickStatus(data) {
 
 function pickPhone(data) {
   return (
+    data?.instance?.ownerJid ||
     data?.instance?.owner ||
     data?.instance?.number ||
+    data?.ownerJid ||
     data?.owner ||
     data?.number ||
     data?.phone ||
     null
   )
+}
+
+/** Dados completos da instância (traz ownerJid, que o connectionState não devolve). */
+async function fetchInstanceInfo(instanceName) {
+  const payload = await requestEvolution(
+    `/instance/fetchInstances?instanceName=${encodeURIComponent(instanceName)}`,
+    { method: "GET" },
+  )
+  const list = Array.isArray(payload) ? payload : payload?.instances || [payload]
+  for (const item of list) {
+    const node = item?.instance || item
+    const name = node?.name || node?.instanceName
+    if (name === instanceName) return node
+  }
+  return null
 }
 
 async function createInstance(instanceName, webhookInput) {
@@ -500,5 +517,6 @@ module.exports = {
   pickConnected,
   pickStatus,
   pickPhone,
+  fetchInstanceInfo,
   isInstanceAlreadyExistsError,
 }

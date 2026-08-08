@@ -48,6 +48,7 @@ const {
   pickConnected,
   pickStatus,
   pickPhone,
+  fetchInstanceInfo,
   isInstanceAlreadyExistsError,
 } = require("./lib/evolution")
 const { buildAnalytics, buildDashboard, buildOverview } = require("./lib/analytics.js")
@@ -843,6 +844,8 @@ const {
   lookupContact,
   displayNameFromParticipant,
   phoneDigitsFromJid,
+  phoneDigitsFromValue,
+  formatPhoneBr,
   digitsOnly,
   jidDomain,
 } = require("./lib/participantIdentity.js")
@@ -3617,17 +3620,96 @@ function toInstanceName(userId) {
   return `${prefix}-${userId}`.replace(/[^a-zA-Z0-9-_]/g, "")
 }
 
+const NUMBER_CONFLICT_STATUS = "NUMBER_CONFLICT"
+
 function formatConnectionPayload(conn, groupsCount = 0) {
+  const phoneDigits = phoneDigitsFromValue(conn?.phone)
   return {
     connected: conn?.connected || false,
     qr: conn?.qrCode || null,
     lastSync: conn?.lastSync?.toISOString() || null,
     status: conn?.status || "DISCONNECTED",
     phone: conn?.phone || null,
+    phoneFormatted: phoneDigits ? formatPhoneBr(phoneDigits) : null,
+    numberConflict: conn?.status === NUMBER_CONFLICT_STATUS,
     instanceName: conn?.instanceName || null,
     sync: getSyncPayload(conn, groupsCount),
     import: getImportPayload(conn),
   }
+}
+
+/**
+ * Duas contas da mesma empresa logadas no mesmo WhatsApp fazem a Evolution entregar os
+ * mesmos eventos para as duas instâncias, e a inbox de um vendedor acaba espelhada na do
+ * outro (mesmo messageId gravado nos dois userIds). Sem número salvo não há como perceber.
+ */
+async function findOrgNumberConflict(userId, phoneDigits) {
+  if (!phoneDigits) return null
+
+  const member = await prisma.organizationMember.findUnique({
+    where: { userId },
+    select: { organizationId: true },
+  })
+  if (!member) return null
+
+  const siblings = await prisma.organizationMember.findMany({
+    where: { organizationId: member.organizationId, userId: { not: userId } },
+    select: { userId: true },
+  })
+  if (!siblings.length) return null
+
+  const connections = await prisma.whatsAppConnection.findMany({
+    where: { userId: { in: siblings.map((s) => s.userId) }, phone: { not: null } },
+    select: { userId: true, phone: true, instanceName: true, connected: true },
+  })
+
+  const conflict = connections.find((c) => phoneDigitsFromValue(c.phone) === phoneDigits)
+  if (!conflict) return null
+
+  const owner = await prisma.user.findUnique({
+    where: { id: conflict.userId },
+    select: { name: true, email: true },
+  })
+  return { ...conflict, ownerName: owner?.name || conflict.userId, ownerEmail: owner?.email || null }
+}
+
+/** Derruba a instância que acabou de entrar num número já usado por outro membro. */
+async function enforceOrgNumberConflict({ userId, instanceName, phone }) {
+  const phoneDigits = phoneDigitsFromValue(phone)
+  if (!phoneDigits) return null
+
+  const conflict = await findOrgNumberConflict(userId, phoneDigits)
+  if (!conflict) return null
+
+  console.error(
+    `[whatsapp] número ${phoneDigits} já conectado em ${conflict.ownerName} (${conflict.instanceName}); ` +
+      `derrubando ${instanceName} para não espelhar a inbox.`,
+  )
+
+  await logoutInstance(instanceName).catch((err) => {
+    console.warn("[whatsapp] logout da instância em conflito:", err?.message || err)
+  })
+
+  const conn = await prisma.whatsAppConnection.update({
+    where: { userId },
+    data: {
+      connected: false,
+      status: NUMBER_CONFLICT_STATUS,
+      qrCode: null,
+      phone: String(phone),
+      lastSync: new Date(),
+    },
+  })
+
+  emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn))
+  emitWhatsAppToUser(userId, "whatsapp:error", {
+    code: NUMBER_CONFLICT_STATUS,
+    message:
+      `Este WhatsApp (${formatPhoneBr(phoneDigits)}) já está conectado na conta de ${conflict.ownerName}. ` +
+      `Conecte um número exclusivo para esta conta — caso contrário as conversas dos dois se misturam.`,
+  })
+
+  return { conn, conflict }
 }
 
 function buildEvolutionWebhookUrl() {
@@ -3680,7 +3762,7 @@ async function updateConnectionFromWebhook(instanceName, body) {
   const status = nextStatus && nextStatus !== "unknown" ? nextStatus.toUpperCase() : existing.status
   const phone = pickPhone(payload) || pickPhone(body)
 
-  const conn = await prisma.whatsAppConnection.update({
+  let conn = await prisma.whatsAppConnection.update({
     where: { instanceName },
     data: {
       connected,
@@ -3690,6 +3772,15 @@ async function updateConnectionFromWebhook(instanceName, body) {
       lastSync: new Date(),
     },
   })
+
+  if (connected) {
+    const enforced = await enforceOrgNumberConflict({
+      userId: conn.userId,
+      instanceName,
+      phone: conn.phone,
+    })
+    if (enforced) conn = enforced.conn
+  }
 
   emitWhatsAppToUser(conn.userId, "whatsapp:status", formatConnectionPayload(conn))
   if (conn.qrCode) emitWhatsAppToUser(conn.userId, "whatsapp:qr", { qr: conn.qrCode })
@@ -3791,6 +3882,12 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
 async function storeIncomingMessages(instanceName, body) {
   const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
   if (!conn) return 0
+
+  // Instância logada num número que pertence a outro membro: ingerir aqui espelharia a inbox alheia.
+  if (conn.status === NUMBER_CONFLICT_STATUS) {
+    console.warn(`[webhook] ${instanceName} em conflito de número — mensagens ignoradas.`)
+    return 0
+  }
 
   const records = collectWebhookMessageRecords(body)
   if (!records.length) {
@@ -3902,7 +3999,16 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
   let qr =
     (await resolveQrForStorage(qrData)) || (await resolveQrForStorage(stateData))
   const status = pickStatus(stateData).toUpperCase()
-  const phone = pickPhone(stateData)
+  let phone = pickPhone(stateData)
+
+  // connectionState só devolve o estado; o número (ownerJid) vem do fetchInstances.
+  if (connected && !phone) {
+    const info = await fetchInstanceInfo(instanceName).catch((err) => {
+      console.warn("[whatsapp] fetchInstanceInfo:", err?.message || err)
+      return null
+    })
+    phone = pickPhone(info)
+  }
 
   if (!connected && !qr) {
     const existing = await prisma.whatsAppConnection.findUnique({
@@ -3912,7 +4018,7 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
     qr = existing?.qrCode || null
   }
 
-  const conn = await prisma.whatsAppConnection.upsert({
+  let conn = await prisma.whatsAppConnection.upsert({
     where: { userId },
     create: {
       userId,
@@ -3928,10 +4034,15 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
       connected,
       status,
       qrCode: connected ? null : qr,
-      phone: phone ? String(phone) : null,
+      phone: phone ? String(phone) : undefined,
       lastSync: new Date(),
     },
   })
+
+  if (connected) {
+    const enforced = await enforceOrgNumberConflict({ userId, instanceName, phone: conn.phone })
+    if (enforced) conn = enforced.conn
+  }
 
   return conn
 }

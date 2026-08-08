@@ -215,7 +215,9 @@ function createCrmRouter({ io }) {
     const { status, stageId, tagId, q, sellerUserId } = req.query
 
     const where = scopeWhere(req)
+    // Arquivada some da inbox por padrão; para revê-las é preciso pedir status=archived.
     if (status && ["open", "pending", "resolved", "archived"].includes(status)) where.status = status
+    else where.status = { not: "archived" }
     if (stageId === "none") where.kanbanStageId = null
     else if (stageId) where.kanbanStageId = String(stageId)
     if (tagId) where.contact = { tags: { some: { tagId: String(tagId) } } }
