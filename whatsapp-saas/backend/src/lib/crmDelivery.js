@@ -72,6 +72,11 @@ async function processOneDelivery(deps, delivery) {
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
     const mediaB64 = hasMedia ? String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "") : null
+    const storedMime = hasMedia
+      ? mediaType === "audio"
+        ? resp?._vestoAudio?.mimetype || delivery.mediaMime || "audio/ogg; codecs=opus"
+        : delivery.mediaMime || null
+      : null
 
     await prisma.crmDelivery.update({
       where: { id: delivery.id },
@@ -86,7 +91,7 @@ async function processOneDelivery(deps, delivery) {
         fromMe: true,
         type: msgType,
         body: delivery.body || "",
-        mediaMime: hasMedia ? delivery.mediaMime || null : null,
+        mediaMime: storedMime,
         status: "sent",
         source: delivery.kind, // flow | ai
         timestamp: now,
@@ -96,7 +101,7 @@ async function processOneDelivery(deps, delivery) {
               remoteJid: delivery.remoteJid,
               evolutionResp: resp,
               mediaBase64: mediaB64,
-              mediaMime: delivery.mediaMime,
+              mediaMime: storedMime,
               mediaName: delivery.mediaName,
             })
           : null,

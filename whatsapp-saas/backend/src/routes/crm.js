@@ -416,13 +416,17 @@ function createCrmRouter({ io }) {
       const now = new Date()
       const hasMedia = content.mediaType !== "none"
       const mediaB64 = hasMedia ? String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "") : null
+      const storedMime =
+        content.mediaType === "audio"
+          ? resp?._vestoAudio?.mimetype || content.mediaMime || "audio/ogg; codecs=opus"
+          : content.mediaMime || null
       const messageRaw = hasMedia
         ? buildOutboundMessageRaw({
             providerMessageId,
             remoteJid: convo.remoteJid,
             evolutionResp: resp,
             mediaBase64: mediaB64,
-            mediaMime: content.mediaMime,
+            mediaMime: storedMime,
             mediaName: content.mediaName,
           })
         : null
@@ -435,7 +439,7 @@ function createCrmRouter({ io }) {
           fromMe: true,
           type: content.mediaType === "none" ? "text" : content.mediaType,
           body: content.body || "",
-          mediaMime: content.mediaMime || null,
+          mediaMime: storedMime,
           status: "sent",
           source: "manual",
           timestamp: now,

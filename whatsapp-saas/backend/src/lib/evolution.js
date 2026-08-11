@@ -432,14 +432,26 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
   ])
 }
 
-/** Mensagem de voz (PTT) — endpoint dedicado da Evolution; aceita webm/mp3/ogg com encoding. */
+/**
+ * Nota de voz (PTT). Converte webm/mp3/mp4 → ogg/opus no backend antes de enviar —
+ * a Evolution costuma devolver 200 com webm cru, e o WhatsApp do destinatário não toca.
+ */
 async function sendWhatsAppAudio(instanceName, number, { audio, encoding = true, mimetype } = {}) {
-  const body = { number, audio, encoding: Boolean(encoding) }
-  if (mimetype) body.mimetype = mimetype
+  const { prepareWhatsAppPttAudio, assertWhatsAppAudioAccepted, WHATSAPP_PTT_MIME } = require("./whatsappAudio")
+  const prepared = await prepareWhatsAppPttAudio({ audio, mimetype })
+  // Já convertidos aqui: encoding=false evita segunda passagem quebrada na Evolution.
+  const body = {
+    number,
+    audio: prepared.dataUrl,
+    encoding: false,
+    mimetype: prepared.mimetype || WHATSAPP_PTT_MIME,
+  }
   const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
   const opts = { method: "POST", body, timeoutMs }
   const instance = encodeURIComponent(instanceName)
-  return firstSuccess([
+  const rawMedia = prepared.base64
+
+  const resp = await firstSuccess([
     () => requestEvolution(`/message/sendWhatsAppAudio/${instance}`, opts),
     () => requestEvolution(`/message/sendWhatsAppAudio/${instance}`, { ...opts, body: { ...body, options: {} } }),
     () =>
@@ -448,12 +460,22 @@ async function sendWhatsAppAudio(instanceName, number, { audio, encoding = true,
         body: {
           number,
           mediatype: "audio",
-          media: typeof audio === "string" ? audio.replace(/^data:[^;]+;base64,/, "") : audio,
-          mimetype: mimetype || "audio/ogg; codecs=opus",
+          media: rawMedia,
+          mimetype: WHATSAPP_PTT_MIME,
           ptt: true,
         },
       }),
   ])
+
+  assertWhatsAppAudioAccepted(resp)
+  if (resp && typeof resp === "object") {
+    resp._vestoAudio = {
+      mimetype: prepared.mimetype,
+      converted: prepared.converted,
+      originalMimetype: prepared.originalMimetype,
+    }
+  }
+  return resp
 }
 
 async function getBase64FromMediaMessage(instanceName, rawRecord, { convertToMp4 = false } = {}) {
