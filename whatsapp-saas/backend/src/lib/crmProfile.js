@@ -649,5 +649,6 @@ module.exports = {
   scheduleProfileFetch,
   contactNeedsProfile,
   contactNeedsAvatar,
+  contactNeedsIdentification,
   enqueueAvatarFetches,
 }

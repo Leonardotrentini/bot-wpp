@@ -3829,17 +3829,8 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
   if (!result) return
 
   const { conversation, message, created } = result
-  const profileDeps = { prisma, io, fetchProfile, fetchProfilePictureUrl }
 
-  if (instanceName && contactNeedsProfile(conversation.contact)) {
-    scheduleProfileFetch(profileDeps, {
-      userId,
-      instanceName,
-      remoteJid: conversation.remoteJid,
-      avatarRefresh: contactNeedsIdentification(conversation.contact) ? false : Boolean(conversation.contact?.avatarUrl),
-    })
-  }
-
+  // Emitir ANTES do enriquecimento de perfil — falha de perfil não pode atrasar a inbox.
   if (created) {
     emitCrmEvent(io, userId, "crm:message", {
       conversationId: conversation.id,
@@ -3848,6 +3839,22 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
     })
   } else {
     emitCrmEvent(io, userId, "crm:conversation", { conversation: formatCrmConversationRow(conversation) })
+  }
+
+  try {
+    if (instanceName && contactNeedsProfile(conversation.contact)) {
+      const profileDeps = { prisma, io, fetchProfile, fetchProfilePictureUrl }
+      scheduleProfileFetch(profileDeps, {
+        userId,
+        instanceName,
+        remoteJid: conversation.remoteJid,
+        avatarRefresh: contactNeedsIdentification(conversation.contact)
+          ? false
+          : Boolean(conversation.contact?.avatarUrl),
+      })
+    }
+  } catch (err) {
+    console.warn("[crm] scheduleProfileFetch:", err?.message || err)
   }
 
   if (!message.fromMe) {
