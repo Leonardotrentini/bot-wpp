@@ -874,6 +874,13 @@ export async function getCrmMessageMedia(messageId) {
   return mockResponse({ kind: 'audio', mimetype: 'audio/ogg', base64: '' })
 }
 
+export async function getGroupMessageMedia(messageId) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(`/groups/messages/${encodeURIComponent(messageId)}/media`, { timeout: 120000 })
+  }
+  return mockResponse({ kind: 'image', mimetype: 'image/jpeg', base64: '' })
+}
+
 export async function sendCrmMessage(id, payload) {
   if (resolveUseRealApi()) {
     const hasMedia = Boolean(payload?.mediaBase64)

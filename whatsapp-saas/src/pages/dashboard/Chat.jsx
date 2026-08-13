@@ -862,8 +862,8 @@ export function Chat() {
 
     if (isGroupChatId(activeId)) {
       const groupJid = parseGroupChatId(activeId)
-      if (attachment && !['image', 'video'].includes(attachment.type)) {
-        toastRef.current.error('Em grupos envie texto, imagem ou vídeo MP4.')
+      if (attachment && !['image', 'video', 'audio', 'document'].includes(attachment.type)) {
+        toastRef.current.error('Tipo de arquivo não suportado no grupo.')
         return
       }
 
@@ -872,9 +872,15 @@ export function Chat() {
         id: tempId,
         fromMe: true,
         type: attachment?.type || 'text',
+        mediaKind: attachment?.type || null,
+        mediaMime: attachment?.mime || null,
         body: body || attachment?.name || '',
         timestamp: new Date().toISOString(),
         source: 'group',
+      }
+
+      if (attachment?.base64) {
+        primeCrmMessageMediaCache(tempId, attachment.mime, attachment.base64)
       }
 
       scrollToEndRef.current = true
@@ -1570,7 +1576,7 @@ export function Chat() {
                     <input
                       ref={fileRef}
                       type="file"
-                      accept={activeIsGroup ? 'image/*,video/mp4,.mp4' : 'image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf'}
+                      accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
                       className="hidden"
                       onChange={(e) => {
                         handleFile(e.target.files?.[0])
@@ -1582,20 +1588,18 @@ export function Chat() {
                       onClick={() => fileRef.current?.click()}
                       disabled={Boolean(attachment)}
                       className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
-                      title={activeIsGroup ? 'Anexar imagem ou vídeo MP4' : 'Anexar imagem, vídeo, áudio ou PDF'}
+                      title="Anexar imagem, vídeo, áudio ou PDF"
                     >
                       <Paperclip className="h-5 w-5" />
                     </button>
                   </>
                 )}
-                {!activeIsGroup && (
-                  <AudioRecorderButton
-                    disabled={sending || (!isRecording && Boolean(attachment))}
-                    onRecorded={setAttachment}
-                    onError={(msg) => toastRef.current.error(msg)}
-                    onRecordingChange={setIsRecording}
-                  />
-                )}
+                <AudioRecorderButton
+                  disabled={sending || (!isRecording && Boolean(attachment))}
+                  onRecorded={setAttachment}
+                  onError={(msg) => toastRef.current.error(msg)}
+                  onRecordingChange={setIsRecording}
+                />
                 {!isRecording && (
                   <>
                     <textarea

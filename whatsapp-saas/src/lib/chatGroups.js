@@ -41,13 +41,23 @@ export function groupToListItem(group) {
   }
 }
 
+export function groupMediaKind(type) {
+  const t = String(type || '').toLowerCase()
+  if (t.includes('image') || t.includes('sticker')) return 'image'
+  if (t.includes('video')) return 'video'
+  if (t.includes('audio') || t.includes('ptt')) return 'audio'
+  if (t.includes('document')) return 'document'
+  return null
+}
+
 export function mapGroupMessageToChat(message) {
   return {
     id: message.id,
     fromMe: message.fromMe,
     body: message.body || '',
     type: message.type || 'text',
-    mediaKind: null,
+    mediaKind: groupMediaKind(message.type),
+    mediaMime: message.mediaMime || null,
     senderName: message.sender,
     timestamp: message.timestamp,
     source: 'group',

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import { Loader2, Mic, Film, ImageIcon, FileText } from 'lucide-react'
-import { getCrmMessageMedia } from '../../services/api.js'
+import { getCrmMessageMedia, getGroupMessageMedia } from '../../services/api.js'
 import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
 
 const mediaCache = new Map()
@@ -104,8 +104,13 @@ function useInView(rootMargin = '240px') {
   return { ref, inView }
 }
 
+function fetchMessageMedia(messageId, source) {
+  return source === 'group' ? getGroupMessageMedia(messageId) : getCrmMessageMedia(messageId)
+}
+
 function useCrmMessageMedia(message, loadEnabled) {
   const kind = inferMediaKind(message)
+  const source = message?.source || null
   const hasCached = Boolean(mediaCache.get(message.id))
   const shouldLoad = loadEnabled || hasCached
   const [retryKey, setRetryKey] = useState(0)
@@ -132,7 +137,7 @@ function useCrmMessageMedia(message, loadEnabled) {
     let cancelled = false
     setState((s) => ({ ...s, loading: true, error: null }))
 
-    getCrmMessageMedia(message.id)
+    fetchMessageMedia(message.id, source)
       .then(({ data }) => {
         if (cancelled) return
         if (!data?.base64) {
@@ -150,7 +155,7 @@ function useCrmMessageMedia(message, loadEnabled) {
         const code = err?.response?.data?.error
         let msg = err?.response?.data?.message || err?.message || 'Falha ao carregar mídia'
         if (status === 404) {
-          msg = 'Servidor sem suporte a mídia — é necessário atualizar o backend.'
+          msg = 'Mídia não encontrada — sincronize a conversa e tente de novo.'
         } else if (code === 'WHATSAPP_DISCONNECTED') {
           msg = 'WhatsApp desconectado — reconecte em Conectar WhatsApp para baixar mídia.'
         }
@@ -160,7 +165,7 @@ function useCrmMessageMedia(message, loadEnabled) {
     return () => {
       cancelled = true
     }
-  }, [message.id, kind, retryKey, shouldLoad])
+  }, [message.id, source, kind, retryKey, shouldLoad])
 
   return { kind, retry, shouldLoad, ...state }
 }

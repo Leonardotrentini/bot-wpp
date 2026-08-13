@@ -43,6 +43,8 @@ const {
   sendText,
   sendMedia,
   sendWhatsAppAudio,
+  getBase64FromMediaMessage,
+  extractMediaBase64Payload,
   logoutInstance,
   resolveQrForStorage,
   pickConnected,
@@ -113,9 +115,16 @@ const {
   isIndividualJid,
   ingestCrmMessage,
   emitCrmEvent,
+  normalizeMessageMediaKind,
   formatMessageRow: formatCrmMessageRow,
   formatConversationRow: formatCrmConversationRow,
 } = require("./lib/crmCore")
+const {
+  readStoredMessageMedia,
+  ensureGroupMessageRaw,
+  buildOutboundMessageRaw,
+} = require("./lib/crmMedia")
+const { ensureWhatsAppConnected } = require("./lib/whatsappConnection")
 const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } = require("./lib/crmProfile")
 const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
 const { maybeReplyWithAi } = require("./lib/crmAiAgent")
@@ -1684,6 +1693,59 @@ app.get("/api/groups/:id/messages", authMiddleware, async (req, res) => {
   }
 })
 
+/** Mídia de mensagem de grupo — o chat usa o mesmo visual do 1:1. */
+app.get("/api/groups/messages/:messageId/media", authMiddleware, async (req, res) => {
+  try {
+    const row = await prisma.whatsAppMessage.findFirst({
+      where: { id: req.params.messageId, userId: req.user.sub },
+      include: { group: { select: { groupJid: true } } },
+    })
+    if (!row) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+
+    const mediaKind = normalizeMessageMediaKind(row.type)
+    if (!mediaKind) {
+      return res.status(400).json({ error: "NOT_MEDIA", message: "Esta mensagem não contém mídia." })
+    }
+
+    const stored = readStoredMessageMedia(row)
+    if (stored?.base64) {
+      return res.json({ kind: mediaKind, mimetype: stored.mimetype, base64: stored.base64 })
+    }
+
+    const conn = await ensureWhatsAppConnected(prisma, row.userId)
+    if (!conn) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    const rawRecord = await ensureGroupMessageRaw({ prisma }, row, {
+      instanceName: conn.instanceName,
+      groupJid: row.group?.groupJid,
+    })
+    if (!rawRecord || typeof rawRecord !== "object") {
+      return res.status(409).json({ error: "MEDIA_UNAVAILABLE", message: "Mídia indisponível para esta mensagem." })
+    }
+
+    const resp = await getBase64FromMediaMessage(conn.instanceName, rawRecord, {
+      convertToMp4: mediaKind === "video",
+    })
+    const media = extractMediaBase64Payload(resp)
+    if (!media) {
+      return res.status(502).json({ error: "MEDIA_FETCH_FAILED", message: "Não foi possível baixar a mídia." })
+    }
+    return res.json({
+      kind: mediaKind,
+      mimetype: media.mimetype || null,
+      base64: media.base64,
+    })
+  } catch (err) {
+    console.error("[groups/message-media]", err?.message || err)
+    return res.status(502).json({
+      error: "MEDIA_FETCH_FAILED",
+      message: "Não foi possível baixar a mídia desta mensagem.",
+    })
+  }
+})
+
 app.post("/api/groups/discover", authMiddleware, async (req, res) => {
   try {
     const conn = await getUserWhatsAppConnection(req.user.sub)
@@ -2767,6 +2829,12 @@ async function deliverToGroup(instanceName, groupJid, content, userId) {
       }),
     )
   }
+  if (content.mediaType === "audio") {
+    return sendWhatsAppAudio(instanceName, groupJid, {
+      audio: stripDataUrlPrefix(content.mediaBase64),
+      mimetype: content.mediaMime || undefined,
+    })
+  }
   if (content.mediaType === "image" || content.mediaType === "video" || content.mediaType === "document") {
     return sendMedia(instanceName, groupJid, {
       mediatype: content.mediaType,
@@ -2799,7 +2867,7 @@ function isRetryableSendError(err) {
   return true
 }
 
-async function recordOutboundAsGroupMessage(userId, groupJid, content, providerMessageId) {
+async function recordOutboundAsGroupMessage(userId, groupJid, content, providerMessageId, evolutionResp = null) {
   const group = await prisma.whatsAppGroup.findUnique({
     where: { userId_groupJid: { userId, groupJid } },
     select: { id: true },
@@ -2809,6 +2877,17 @@ async function recordOutboundAsGroupMessage(userId, groupJid, content, providerM
   const messageId =
     providerMessageId || `outbound-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   const mediaType = content.mediaType && content.mediaType !== "none" ? content.mediaType : "text"
+  const hasMedia = mediaType !== "text"
+  const raw = hasMedia
+    ? buildOutboundMessageRaw({
+        providerMessageId: messageId,
+        remoteJid: groupJid,
+        evolutionResp,
+        mediaBase64: stripDataUrlPrefix(content.mediaBase64),
+        mediaMime: content.mediaMime,
+        mediaName: content.mediaName,
+      })
+    : null
 
   await prisma.whatsAppMessage.upsert({
     where: { groupId_messageId: { groupId: group.id, messageId } },
@@ -2821,11 +2900,13 @@ async function recordOutboundAsGroupMessage(userId, groupJid, content, providerM
       type: mediaType,
       body: content.body || null,
       timestamp: new Date(),
+      raw,
     },
     update: {
       body: content.body || null,
       type: mediaType,
       timestamp: new Date(),
+      ...(raw ? { raw } : {}),
     },
   })
 }
@@ -2851,7 +2932,7 @@ async function dispatchMessage({ userId, instanceName, groupJids, content, autom
           providerMessageId,
         },
       })
-      await recordOutboundAsGroupMessage(userId, groupJid, content, providerMessageId)
+      await recordOutboundAsGroupMessage(userId, groupJid, content, providerMessageId, resp)
       sent += 1
       results.push({ groupJid, groupName, status: "enviado" })
     } catch (err) {
@@ -3072,7 +3153,7 @@ app.post("/api/messages/send", authMiddleware, async (req, res) => {
       groupIds: z.array(z.string()).min(1),
       templateId: z.string().optional(),
       body: z.string().optional(),
-      mediaType: z.enum(["none", "image", "video", "document"]).optional(),
+      mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional(),
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().optional().nullable(),
       mediaName: z.string().optional().nullable(),

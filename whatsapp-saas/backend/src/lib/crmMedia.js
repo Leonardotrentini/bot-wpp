@@ -86,12 +86,19 @@ function readStoredMessageMedia(msg) {
   }
 }
 
+/**
+ * Acima disto guardamos só o ponteiro do CDN: base64 de vídeo grande no JSON
+ * do Postgres estoura a linha e deixa a inbox lenta.
+ */
+const LOCAL_MEDIA_MAX_BYTES = Number(process.env.LOCAL_MEDIA_MAX_BYTES || 8 * 1024 * 1024)
+
 /** Monta raw para mensagens enviadas manualmente / fila CRM. */
 function buildOutboundMessageRaw({ providerMessageId, remoteJid, evolutionResp, mediaBase64, mediaMime, mediaName } = {}) {
   const b64 = stripMediaBase64(mediaBase64)
+  const hasCdn = Boolean(evolutionResp && mediaRecordIsComplete(evolutionResp))
   let raw
 
-  if (evolutionResp && mediaRecordIsComplete(evolutionResp)) {
+  if (hasCdn) {
     raw = JSON.parse(JSON.stringify(evolutionResp))
   } else {
     const id = providerMessageId || `manual-${Date.now()}`
@@ -100,7 +107,8 @@ function buildOutboundMessageRaw({ providerMessageId, remoteJid, evolutionResp, 
     }
   }
 
-  if (b64) {
+  const inlineBytes = b64 ? Math.floor((b64.length * 3) / 4) : 0
+  if (b64 && (!hasCdn || inlineBytes <= LOCAL_MEDIA_MAX_BYTES)) {
     raw._localMedia = {
       base64: b64,
       mimetype: mediaMime || null,
@@ -142,6 +150,22 @@ function extractMediaBase64Payload(resp) {
   return null
 }
 
+/** Procura o registro completo (com ponteiro de CDN) no histórico do chat/grupo. */
+async function findCompleteRawInChat({ instanceName, remoteJid, messageId, maxPages = 5 }) {
+  if (!instanceName || !remoteJid || !messageId) return null
+  const targetId = String(messageId)
+  for (let page = 1; page <= maxPages; page += 1) {
+    try {
+      const { records } = await fetchChatMessages(instanceName, remoteJid, { page, pageSize: 50 })
+      const hit = (records || []).find((r) => String(r?.key?.id) === targetId)
+      if (hit && mediaRecordIsComplete(hit)) return JSON.parse(JSON.stringify(hit))
+    } catch {
+      /* próxima página */
+    }
+  }
+  return null
+}
+
 async function ensureMessageRaw(deps, msg) {
   const stored = readStoredMessageMedia(msg)
   if (stored) return null
@@ -154,24 +178,37 @@ async function ensureMessageRaw(deps, msg) {
   const conn = await deps.prisma.whatsAppConnection.findUnique({ where: { userId: msg.userId } })
   if (!conn?.instanceName) return prepareMediaMessageRecord(msg.raw)
 
-  const targetId = String(msg.messageId || "")
-  for (let page = 1; page <= 5; page += 1) {
-    try {
-      const { records } = await fetchChatMessages(conn.instanceName, conv.remoteJid, { page, pageSize: 50 })
-      const hit = (records || []).find((r) => String(r?.key?.id) === targetId)
-      if (hit && mediaRecordIsComplete(hit)) {
-        const raw = JSON.parse(JSON.stringify(hit))
-        await deps.prisma.crmMessage
-          .update({ where: { id: msg.id }, data: { raw } })
-          .catch(() => {})
-        return prepareMediaMessageRecord(raw)
-      }
-    } catch {
-      /* próxima página */
-    }
+  const raw = await findCompleteRawInChat({
+    instanceName: conn.instanceName,
+    remoteJid: conv.remoteJid,
+    messageId: msg.messageId,
+  })
+  if (raw) {
+    await deps.prisma.crmMessage.update({ where: { id: msg.id }, data: { raw } }).catch(() => {})
+    return prepareMediaMessageRecord(raw)
   }
 
   return prepareMediaMessageRecord(msg.raw)
+}
+
+/**
+ * Mesmo fluxo para mensagens de grupo (`WhatsAppMessage`): usa o raw salvo e,
+ * se estiver incompleto, rebusca no histórico do grupo e regrava.
+ */
+async function ensureGroupMessageRaw(deps, row, { instanceName, groupJid } = {}) {
+  if (row?.raw && mediaRecordIsComplete(row.raw)) return prepareMediaMessageRecord(row.raw)
+
+  const raw = await findCompleteRawInChat({
+    instanceName,
+    remoteJid: groupJid,
+    messageId: row?.messageId,
+  })
+  if (raw) {
+    await deps.prisma.whatsAppMessage.update({ where: { id: row.id }, data: { raw } }).catch(() => {})
+    return prepareMediaMessageRecord(raw)
+  }
+
+  return prepareMediaMessageRecord(row?.raw)
 }
 
 module.exports = {
@@ -183,5 +220,7 @@ module.exports = {
   buildOutboundMessageRaw,
   mergeInboundMessageRaw,
   ensureMessageRaw,
+  ensureGroupMessageRaw,
+  findCompleteRawInChat,
   stripMediaBase64,
 }
