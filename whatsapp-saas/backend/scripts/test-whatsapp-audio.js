@@ -15,6 +15,7 @@ const path = require("path")
 const { spawn } = require("child_process")
 const {
   prepareWhatsAppPttAudio,
+  prepareWhatsAppVideo,
   assertWhatsAppAudioAccepted,
   looksLikeOggOpus,
   WHATSAPP_PTT_MIME,
@@ -96,6 +97,40 @@ async function convertChecks() {
   if (again.converted) throw new Error("Não deveria reconverter ogg/opus")
   console.log("   ok — skipped")
 
+  console.log("\n3b) Conversão de vídeo sintético → H.264 MP4…")
+  const tmpVid = path.join(os.tmpdir(), `vesto-sample-${Date.now()}.mp4`)
+  let ffmpegBin
+  try {
+    ffmpegBin = require("ffmpeg-static")
+  } catch {
+    ffmpegBin = "ffmpeg"
+  }
+  await run(ffmpegBin, [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:s=320x240:d=1",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-t",
+    "1",
+    tmpVid,
+  ])
+  const vidBuf = await fs.promises.readFile(tmpVid)
+  await fs.promises.unlink(tmpVid).catch(() => {})
+  const video = await prepareWhatsAppVideo({
+    media: vidBuf.toString("base64"),
+    mimetype: "video/mp4",
+    fileName: "teste.mov",
+  })
+  if (video.mimetype !== "video/mp4") throw new Error(`mime vídeo inesperado: ${video.mimetype}`)
+  if (!video.fileName.endsWith(".mp4")) throw new Error(`fileName inválido: ${video.fileName}`)
+  if (!video.converted) throw new Error("Esperava converted=true para vídeo")
+  console.log(`   ok → mp4 ${Buffer.from(video.base64, "base64").length} bytes | ${video.fileName}`)
+
   return prepared
 }
 
@@ -135,6 +170,9 @@ async function liveSend(prepared) {
     console.log(`   messageId: ${id || "?"}`)
     console.log(`   evoMime: ${am.mimetype || "-"}`)
     console.log(`   ptt: ${am.ptt}`)
+    if (am.ptt !== true) {
+      console.warn("   aviso: Evolution não marcou ptt=true (pode não aparecer como nota de voz)")
+    }
     console.log(`   seconds: ${am.seconds}`)
     console.log(`   converted: ${resp?._vestoAudio?.converted}`)
 
@@ -143,6 +181,47 @@ async function liveSend(prepared) {
       throw new Error("Evolution ainda devolveu webm após conversão")
     }
     console.log("   OK — áudio aceito em formato compatível")
+
+    console.log("\n5) Envio live de vídeo H.264…")
+    const { sendMedia } = require("../src/lib/evolution")
+    const tmpVid = path.join(os.tmpdir(), `vesto-live-${Date.now()}.mp4`)
+    let ffmpegBin
+    try {
+      ffmpegBin = require("ffmpeg-static")
+    } catch {
+      ffmpegBin = "ffmpeg"
+    }
+    await run(ffmpegBin, [
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=green:s=320x240:d=1",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-t",
+      "1",
+      tmpVid,
+    ])
+    const vidBuf = await fs.promises.readFile(tmpVid)
+    await fs.promises.unlink(tmpVid).catch(() => {})
+    const vresp = await sendMedia(conn.instanceName, number, {
+      mediatype: "video",
+      media: vidBuf.toString("base64"),
+      mimetype: "video/mp4",
+      fileName: "teste.mp4",
+      caption: "teste vesto",
+    })
+    const vm = vresp?.message?.videoMessage || {}
+    console.log(`   messageId: ${vresp?.key?.id || "?"}`)
+    console.log(`   evoMime: ${vm.mimetype || "-"}`)
+    console.log(`   seconds: ${vm.seconds}`)
+    console.log(`   w: ${vm.width} h: ${vm.height}`)
+    if (!vresp?.key?.id) throw new Error("Vídeo: Evolution não devolveu messageId")
+    console.log("   OK — vídeo aceito")
+
     return { ok: true, id, mimetype: am.mimetype, ptt: am.ptt }
   } finally {
     await prisma.$disconnect()

@@ -3,8 +3,8 @@
  * Processada pelo tick do scheduler — envia 1 por vez com pequenas pausas.
  */
 
-const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, CONVERSATION_INCLUDE } = require("./crmCore")
-const { buildOutboundMessageRaw } = require("./crmMedia")
+const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, CONVERSATION_INCLUDE, resolveEvolutionRecipient } = require("./crmCore")
+const { buildOutboundMessageRaw, stripMediaBase64 } = require("./crmMedia")
 
 const CRM_DELIVERY_BATCH = Number(process.env.CRM_DELIVERY_BATCH || 5)
 const CRM_DELIVERY_GAP_MS = Number(process.env.CRM_DELIVERY_GAP_MS || 2000)
@@ -47,17 +47,17 @@ async function processOneDelivery(deps, delivery) {
     const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
     let resp
     if (hasMedia) {
-      const media = String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
+      const to = resolveEvolutionRecipient(conversation)
+      const media = stripMediaBase64(delivery.mediaBase64)
       if (mediaType === "audio" && typeof sendWhatsAppAudio === "function") {
         const mimetype = delivery.mediaMime || "audio/ogg; codecs=opus"
-        const audioPayload = media.startsWith("data:") ? media : `data:${mimetype};base64,${media}`
-        resp = await sendWhatsAppAudio(conn.instanceName, delivery.remoteJid, {
-          audio: audioPayload,
+        resp = await sendWhatsAppAudio(conn.instanceName, to, {
+          audio: media,
           mimetype,
           encoding: true,
         })
       } else {
-        resp = await sendMedia(conn.instanceName, delivery.remoteJid, {
+        resp = await sendMedia(conn.instanceName, to, {
           mediatype: mediaType,
           media,
           mimetype: delivery.mediaMime || undefined,
@@ -66,12 +66,12 @@ async function processOneDelivery(deps, delivery) {
         })
       }
     } else {
-      resp = await sendText(conn.instanceName, delivery.remoteJid, delivery.body || "")
+      resp = await sendText(conn.instanceName, resolveEvolutionRecipient(conversation), delivery.body || "")
     }
     const providerMessageId = extractProviderMessageId(resp)
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
-    const mediaB64 = hasMedia ? String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "") : null
+    const mediaB64 = hasMedia ? stripMediaBase64(delivery.mediaBase64) : null
     const storedMime = hasMedia
       ? mediaType === "audio"
         ? resp?._vestoAudio?.mimetype || delivery.mediaMime || "audio/ogg; codecs=opus"

@@ -6,7 +6,12 @@ import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../c
 const mediaCache = new Map()
 
 function mediaDataUrlFromParts(mimetype, base64) {
-  const clean = String(base64 || '').replace(/^data:[^;]+;base64,/, '')
+  const idx = String(base64 || '').toLowerCase().indexOf('base64,')
+  const raw = String(base64 || '')
+  const clean =
+    raw.trimStart().toLowerCase().startsWith('data:') && idx !== -1
+      ? raw.slice(idx + 'base64,'.length).replace(/\s/g, '')
+      : raw.replace(/\s/g, '')
   const mime = (mimetype || 'application/octet-stream').split(';')[0].trim()
   return `data:${mime};base64,${clean}`
 }

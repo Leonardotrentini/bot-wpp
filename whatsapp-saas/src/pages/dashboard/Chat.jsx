@@ -86,6 +86,7 @@ import {
   sortChatListItems,
 } from '../../lib/chatGroups.js'
 import { revokeAudioPreview, warmUpAudioRecording } from '../../lib/audioRecorder.js'
+import { AUDIO_MAX_BYTES, VIDEO_MAX_BYTES, audioMaxLabel, videoMaxLabel, stripBase64Payload } from '../../lib/mediaLimits.js'
 import {
   appendCachedMessage,
   fetchConversationMessagesCached,
@@ -994,9 +995,17 @@ export function Chat() {
         toastRef.current.error('Envie imagem, vídeo MP4, áudio ou PDF.')
         return
       }
+      if (type === 'video' && file.size > VIDEO_MAX_BYTES) {
+        toastRef.current.error(`Vídeo grande demais. Limite: ${videoMaxLabel}.`)
+        return
+      }
+      if (type === 'audio' && file.size > AUDIO_MAX_BYTES) {
+        toastRef.current.error(`Áudio grande demais. Limite: ${audioMaxLabel}.`)
+        return
+      }
       const reader = new FileReader()
       reader.onload = () => {
-        const base64 = String(reader.result || '').replace(/^data:[^;]+;base64,/, '')
+        const base64 = stripBase64Payload(reader.result)
         setAttachment({ base64, mime: file.type, name: file.name, type })
       }
       reader.readAsDataURL(file)
@@ -1205,7 +1214,7 @@ export function Chat() {
           const full = data.quickReply
           if (full?.mediaBase64) {
             setAttachment({
-              base64: full.mediaBase64.replace(/^data:[^;]+;base64,/, ''),
+              base64: stripBase64Payload(full.mediaBase64),
               mime: full.mediaMime || 'image/jpeg',
               name: full.mediaName || 'midia',
               type: full.mediaType,

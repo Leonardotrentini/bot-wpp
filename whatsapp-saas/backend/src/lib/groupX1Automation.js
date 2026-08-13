@@ -1,4 +1,5 @@
 const { jidDomain, phoneDigitsFromJid, resolvePhoneDigits, digitsOnly } = require("./participantIdentity")
+const { stripMediaBase64 } = require("./crmMedia")
 
 const DEFAULT_KIND_SETTINGS = {
   minDelaySec: 20,
@@ -640,12 +641,11 @@ async function processOneDelivery(deps, deliveryId) {
 
     let resp
     if (hasMedia) {
-      const media = String(delivery.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
+      const media = stripMediaBase64(delivery.mediaBase64)
       if (mediaType === "audio" && typeof sendWhatsAppAudio === "function") {
         const mimetype = delivery.mediaMime || "audio/ogg; codecs=opus"
-        const audioPayload = media.startsWith("data:") ? media : `data:${mimetype};base64,${media}`
         resp = await sendWhatsAppAudio(conn.instanceName, sendNumber, {
-          audio: audioPayload,
+          audio: media,
           mimetype,
           encoding: true,
         })

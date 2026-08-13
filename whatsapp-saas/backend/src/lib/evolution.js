@@ -416,10 +416,22 @@ async function sendText(instanceName, number, text, options = {}) {
 
 /** mediatype: "image" | "video" | "audio" | "document". media: base64 (sem prefixo data:) ou URL. */
 async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest }) {
-  const body = { number, mediatype, media, ...rest }
-  if (mimetype) body.mimetype = mimetype
+  const { stripDataUrl } = require("./whatsappAudio")
+  let mediaPayload = stripDataUrl(media)
+  let mime = mimetype
+  let name = fileName
+  if (mediatype === "video") {
+    const { prepareWhatsAppVideo, WHATSAPP_VIDEO_MIME } = require("./whatsappAudio")
+    const prepared = await prepareWhatsAppVideo({ media, mimetype, fileName })
+    mediaPayload = prepared.base64
+    mime = prepared.mimetype || WHATSAPP_VIDEO_MIME
+    name = prepared.fileName
+  }
+  const body = { number, mediatype, media: mediaPayload, ...rest }
+  if (mime) body.mimetype = mime
   if (caption) body.caption = caption
-  if (fileName) body.fileName = fileName
+  if (name) body.fileName = name
+  else if (mediatype === "video") body.fileName = "video.mp4"
   if (mentionsEveryOne === true) body.mentionsEveryOne = true
   if (Array.isArray(mentioned) && mentioned.length) body.mentioned = mentioned
   if (linkPreview === true) body.linkPreview = true
@@ -439,21 +451,35 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
 async function sendWhatsAppAudio(instanceName, number, { audio, encoding = true, mimetype } = {}) {
   const { prepareWhatsAppPttAudio, assertWhatsAppAudioAccepted, WHATSAPP_PTT_MIME } = require("./whatsappAudio")
   const prepared = await prepareWhatsAppPttAudio({ audio, mimetype })
-  // Já convertidos aqui: encoding=false evita segunda passagem quebrada na Evolution.
-  const body = {
-    number,
-    audio: prepared.dataUrl,
-    encoding: false,
-    mimetype: prepared.mimetype || WHATSAPP_PTT_MIME,
-  }
   const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
-  const opts = { method: "POST", body, timeoutMs }
   const instance = encodeURIComponent(instanceName)
   const rawMedia = prepared.base64
+  const opts = { method: "POST", timeoutMs }
 
+  // encoding:true no ogg já convertido faz a Evolution marcar PTT.
+  // encoding:false deixava ptt vazio e o WhatsApp não mostrava a nota de voz.
+  // Evolution faz Buffer.from(audio, 'base64') — data URL no campo corrompe o ogg
+  // e o WhatsApp não toca. Sempre base64 cru. encoding:true marca PTT no Baileys.
   const resp = await firstSuccess([
-    () => requestEvolution(`/message/sendWhatsAppAudio/${instance}`, opts),
-    () => requestEvolution(`/message/sendWhatsAppAudio/${instance}`, { ...opts, body: { ...body, options: {} } }),
+    () =>
+      requestEvolution(`/message/sendWhatsAppAudio/${instance}`, {
+        ...opts,
+        body: {
+          number,
+          audio: rawMedia,
+          encoding: true,
+          delay: 1200,
+        },
+      }),
+    () =>
+      requestEvolution(`/message/sendWhatsAppAudio/${instance}`, {
+        ...opts,
+        body: {
+          number,
+          audio: rawMedia,
+          encoding: false,
+        },
+      }),
     () =>
       requestEvolution(`/message/sendMedia/${instance}`, {
         ...opts,
@@ -461,8 +487,8 @@ async function sendWhatsAppAudio(instanceName, number, { audio, encoding = true,
           number,
           mediatype: "audio",
           media: rawMedia,
-          mimetype: WHATSAPP_PTT_MIME,
-          ptt: true,
+          mimetype: "audio/ogg",
+          fileName: "audio.ogg",
         },
       }),
   ])

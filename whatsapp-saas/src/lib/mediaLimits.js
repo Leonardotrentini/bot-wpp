@@ -13,6 +13,16 @@ export const videoMaxLabel = `${VIDEO_MAX_BYTES / MB}MB`
 export const audioMaxLabel = `${AUDIO_MAX_BYTES / MB}MB`
 export const documentMaxLabel = `${DOCUMENT_MAX_BYTES / MB}MB`
 
+/** FileReader gera `data:audio/webm;codecs=opus;base64,...` — o regex antigo parava no primeiro `;`. */
+export function stripBase64Payload(value) {
+  const s = String(value || '')
+  const idx = s.toLowerCase().indexOf('base64,')
+  if (s.trimStart().toLowerCase().startsWith('data:') && idx !== -1) {
+    return s.slice(idx + 'base64,'.length).replace(/\s/g, '')
+  }
+  return s.replace(/\s/g, '')
+}
+
 export function mediaLimitLabel(kind) {
   if (kind === 'video') return videoMaxLabel
   if (kind === 'audio') return audioMaxLabel

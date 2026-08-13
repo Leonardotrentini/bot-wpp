@@ -26,6 +26,16 @@ function isLidJid(jid) {
   return /@lid$/i.test(String(jid || "").trim())
 }
 
+/** Destino para a Evolution: @lid sem telefone falha em mídia; preferir o número do contato. */
+function resolveEvolutionRecipient(conversation) {
+  const jid = String(conversation?.remoteJid || "").trim()
+  if (isLidJid(jid)) {
+    const phone = resolvePhoneDigits(conversation?.contact) || phoneDigitsFromValue(conversation?.contact?.phone)
+    if (phone) return phone
+  }
+  return jid
+}
+
 function phoneFromJid(jid) {
   const raw = String(jid || "").split("@")[0]
   const digits = raw.replace(/\D/g, "")
@@ -575,6 +585,7 @@ function emitCrmEvent(io, userId, event, payload) {
 module.exports = {
   isIndividualJid,
   isLidJid,
+  resolveEvolutionRecipient,
   phoneFromJid,
   previewFromBody,
   isGenericSavedName,

@@ -9,6 +9,8 @@ const path = require("path")
 const { spawn } = require("child_process")
 
 const WHATSAPP_PTT_MIME = "audio/ogg; codecs=opus"
+const WHATSAPP_VIDEO_MIME = "video/mp4"
+const VIDEO_TRANSCODE_MAX_BYTES = Number(process.env.WHATSAPP_VIDEO_TRANSCODE_MAX_BYTES || 40 * 1024 * 1024)
 
 function resolveFfmpegPath() {
   try {
@@ -63,7 +65,7 @@ function runFfmpeg(args) {
     })
     child.on("close", (code) => {
       if (code === 0) return resolve()
-      const e = new Error(`Falha ao converter áudio para WhatsApp (ffmpeg exit ${code}).`)
+      const e = new Error(`Falha ao converter mídia para WhatsApp (ffmpeg exit ${code}).`)
       e.code = "FFMPEG_FAILED"
       e.details = stderr.slice(-800)
       reject(e)
@@ -92,6 +94,10 @@ async function convertBufferToWhatsAppOgg(inputBuffer) {
       "48000",
       "-application",
       "voip",
+      "-map_metadata",
+      "-1",
+      "-fflags",
+      "+bitexact",
       "-f",
       "ogg",
       tmpOut,
@@ -149,6 +155,95 @@ async function prepareWhatsAppPttAudio({ audio, mimetype } = {}) {
   }
 }
 
+async function convertBufferToWhatsAppMp4(inputBuffer) {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const tmpIn = path.join(os.tmpdir(), `vesto-video-in-${id}`)
+  const tmpOut = path.join(os.tmpdir(), `vesto-video-out-${id}.mp4`)
+  await fs.promises.writeFile(tmpIn, inputBuffer)
+  const common = [
+    "-y",
+    "-i",
+    tmpIn,
+    "-vf",
+    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "28",
+    "-profile:v",
+    "baseline",
+    "-level",
+    "3.1",
+    "-movflags",
+    "+faststart",
+    "-f",
+    "mp4",
+  ]
+  try {
+    try {
+      await runFfmpeg([...common, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100", tmpOut])
+    } catch {
+      await runFfmpeg([...common, "-an", tmpOut])
+    }
+    const out = await fs.promises.readFile(tmpOut)
+    if (!out.length) {
+      const err = new Error("Conversão de vídeo gerou arquivo vazio.")
+      err.code = "VIDEO_CONVERT_INVALID"
+      throw err
+    }
+    return out
+  } finally {
+    await Promise.all([
+      fs.promises.unlink(tmpIn).catch(() => {}),
+      fs.promises.unlink(tmpOut).catch(() => {}),
+    ])
+  }
+}
+
+/**
+ * WhatsApp só toca H.264 + AAC em MP4. Celular manda HEVC/H.265 e a Evolution
+ * sobe o arquivo, mas o destinatário não vê o vídeo.
+ */
+async function prepareWhatsAppVideo({ media, mimetype, fileName } = {}) {
+  const originalMimetype = mimetype ? String(mimetype) : null
+  const rawB64 = stripDataUrl(media)
+  if (!rawB64) {
+    const err = new Error("Vídeo vazio.")
+    err.code = "VIDEO_EMPTY"
+    throw err
+  }
+  let buffer = Buffer.from(rawB64, "base64")
+  if (!buffer.length) {
+    const err = new Error("Vídeo inválido (base64 vazio).")
+    err.code = "VIDEO_EMPTY"
+    throw err
+  }
+
+  let converted = false
+  if (buffer.length <= VIDEO_TRANSCODE_MAX_BYTES) {
+    try {
+      buffer = await convertBufferToWhatsAppMp4(buffer)
+      converted = true
+    } catch (err) {
+      console.warn("[whatsapp-video] transcode falhou, enviando original:", err?.message || err)
+    }
+  }
+
+  const base64 = buffer.toString("base64")
+  const name = String(fileName || "video.mp4").replace(/\.[^.]+$/, "") + ".mp4"
+  return {
+    base64,
+    mimetype: WHATSAPP_VIDEO_MIME,
+    fileName: name,
+    converted,
+    originalMimetype,
+  }
+}
+
 /** Garante que a Evolution não devolveu webm “aceito” mas inutilizável no WhatsApp. */
 function assertWhatsAppAudioAccepted(resp) {
   const am = resp?.message?.audioMessage || resp?.message?.pttMessage || null
@@ -168,7 +263,9 @@ function assertWhatsAppAudioAccepted(resp) {
 
 module.exports = {
   WHATSAPP_PTT_MIME,
+  WHATSAPP_VIDEO_MIME,
   prepareWhatsAppPttAudio,
+  prepareWhatsAppVideo,
   assertWhatsAppAudioAccepted,
   looksLikeOggOpus,
   mimeNeedsConversion,

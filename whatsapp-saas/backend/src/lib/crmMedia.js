@@ -53,9 +53,12 @@ function mediaRecordIsComplete(rawRecord) {
 }
 
 function stripMediaBase64(value) {
-  return String(value || "")
-    .replace(/^data:[^;]+;base64,/, "")
-    .replace(/\s/g, "")
+  const s = String(value || "")
+  const idx = s.toLowerCase().indexOf("base64,")
+  if (s.trimStart().toLowerCase().startsWith("data:") && idx !== -1) {
+    return s.slice(idx + "base64,".length).replace(/\s/g, "")
+  }
+  return s.replace(/\s/g, "")
 }
 
 /** Mantém mídia enviada pelo CRM quando o webhook do WhatsApp atualiza a mensagem. */
@@ -127,7 +130,7 @@ function extractMediaBase64Payload(resp) {
         .split(";")[0]
         .trim()
       return {
-        base64: base64.replace(/^data:[^;]+;base64,/, "").replace(/\s/g, ""),
+        base64: stripMediaBase64(base64),
         mimetype,
       }
     }
@@ -180,4 +183,5 @@ module.exports = {
   buildOutboundMessageRaw,
   mergeInboundMessageRaw,
   ensureMessageRaw,
+  stripMediaBase64,
 }

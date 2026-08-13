@@ -31,10 +31,11 @@ const {
   emitCrmEvent,
   CONVERSATION_INCLUDE,
   normalizeMessageMediaKind,
+  resolveEvolutionRecipient,
 } = require("../lib/crmCore")
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
-const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw } = require("../lib/crmMedia")
+const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw, stripMediaBase64 } = require("../lib/crmMedia")
 const { onStageChange, notifyTagAddedForContact, testFlowOnConversation } = require("../lib/crmFlows")
 const { importCrmPack } = require("../lib/crmPackImport")
 const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
@@ -389,19 +390,19 @@ function createCrmRouter({ io }) {
 
     try {
       const resp = await enqueueUserSend(userId, async () => {
+        const to = resolveEvolutionRecipient(convo)
         if (content.mediaType === "audio") {
-          const media = String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
+          const media = stripMediaBase64(content.mediaBase64)
           const mimetype = content.mediaMime || "audio/ogg; codecs=opus"
-          const audioPayload = media.startsWith("data:") ? media : `data:${mimetype};base64,${media}`
-          return sendWhatsAppAudio(conn.instanceName, convo.remoteJid, {
-            audio: audioPayload,
+          return sendWhatsAppAudio(conn.instanceName, to, {
+            audio: media,
             mimetype,
             encoding: true,
           })
         }
         if (content.mediaType !== "none") {
-          const media = String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "")
-          return sendMedia(conn.instanceName, convo.remoteJid, {
+          const media = stripMediaBase64(content.mediaBase64)
+          return sendMedia(conn.instanceName, to, {
             mediatype: content.mediaType,
             media,
             mimetype: content.mediaMime || undefined,
@@ -409,13 +410,13 @@ function createCrmRouter({ io }) {
             fileName: content.mediaName || undefined,
           })
         }
-        return sendText(conn.instanceName, convo.remoteJid, content.body)
+        return sendText(conn.instanceName, to, content.body)
       })
 
       const providerMessageId = resp?.key?.id || resp?.messageId || resp?.id || null
       const now = new Date()
       const hasMedia = content.mediaType !== "none"
-      const mediaB64 = hasMedia ? String(content.mediaBase64 || "").replace(/^data:[^;]+;base64,/, "") : null
+      const mediaB64 = hasMedia ? stripMediaBase64(content.mediaBase64) : null
       const storedMime =
         content.mediaType === "audio"
           ? resp?._vestoAudio?.mimetype || content.mediaMime || "audio/ogg; codecs=opus"

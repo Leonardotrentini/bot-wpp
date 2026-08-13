@@ -1,4 +1,4 @@
-import { AUDIO_MAX_BYTES } from './mediaLimits.js'
+import { AUDIO_MAX_BYTES, stripBase64Payload } from './mediaLimits.js'
 
 const AUDIO_CONSTRAINTS = {
   echoCancellation: true,
@@ -110,7 +110,7 @@ export async function blobToAudioAttachment(blob, { durationSeconds } = {}) {
     const reader = new FileReader()
     reader.onload = () => {
       const raw = String(reader.result || '')
-      resolve(raw.replace(/^data:[^;]+;base64,/, ''))
+      resolve(stripBase64Payload(raw))
     }
     reader.onerror = reject
     reader.readAsDataURL(blob)

@@ -477,17 +477,21 @@ export async function sendMessage({
   linkPreview,
 }) {
   if (resolveUseRealApi()) {
-    return apiClient.post('/messages/send', {
-      groupIds,
-      templateId,
-      body,
-      mediaType,
-      mediaBase64,
-      mediaMime,
-      mediaName,
-      mentionsJson,
-      linkPreview,
-    })
+    return apiClient.post(
+      '/messages/send',
+      {
+        groupIds,
+        templateId,
+        body,
+        mediaType,
+        mediaBase64,
+        mediaMime,
+        mediaName,
+        mentionsJson,
+        linkPreview,
+      },
+      { timeout: mediaBase64 ? 600000 : 120000 },
+    )
   }
   await delay()
   return mockResponse({ results: (groupIds || []).map((id) => ({ groupJid: id, status: 'entregue' })), sent: groupIds?.length || 0 })
@@ -872,7 +876,10 @@ export async function getCrmMessageMedia(messageId) {
 
 export async function sendCrmMessage(id, payload) {
   if (resolveUseRealApi()) {
-    return apiClient.post(`/crm/conversations/${encodeURIComponent(id)}/send`, payload, { timeout: 120000 })
+    const hasMedia = Boolean(payload?.mediaBase64)
+    return apiClient.post(`/crm/conversations/${encodeURIComponent(id)}/send`, payload, {
+      timeout: hasMedia ? 600000 : 120000,
+    })
   }
   return mockResponse({ message: null, conversation: null })
 }
