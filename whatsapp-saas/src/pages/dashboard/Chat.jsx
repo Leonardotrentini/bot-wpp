@@ -76,6 +76,7 @@ import {
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
 import { toastMetaTracking } from '../../lib/metaTrackingFeedback.js'
+import { contactHasTag } from '../../lib/crmTags.js'
 import {
   groupChatId,
   groupToListItem,
@@ -1084,7 +1085,7 @@ export function Chat() {
   const toggleContactTag = useCallback(
     async (tag) => {
       if (!active?.contact) return
-      const has = (active.contact.tags || []).some((t) => t.id === tag.id)
+      const has = contactHasTag(active.contact.tags, tag)
       try {
         const { data } = has
           ? await removeCrmContactTag(active.contact.id, tag.id)
@@ -1095,8 +1096,8 @@ export function Chat() {
         if (!has && data.metaTracking) {
           toastMetaTracking(toastRef.current, data.metaTracking)
         }
-      } catch {
-        toastRef.current.error('Falha ao atualizar tags.')
+      } catch (err) {
+        toastRef.current.error(err?.response?.data?.message || 'Falha ao atualizar tags.')
       }
     },
     [active, activeId],
@@ -1770,7 +1771,7 @@ export function Chat() {
               <div className="flex flex-wrap gap-1.5">
                 {tags.length === 0 && <p className="text-xs text-stone-500">Nenhuma tag criada.</p>}
                 {tags.map((t) => {
-                  const selected = (active.contact?.tags || []).some((x) => x.id === t.id)
+                  const selected = contactHasTag(active.contact?.tags, t)
                   return (
                     <span
                       key={t.id}

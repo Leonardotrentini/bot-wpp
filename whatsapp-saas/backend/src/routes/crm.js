@@ -59,7 +59,7 @@ const {
   processDueContactReminders,
 } = require("../lib/crmContactReminders")
 const { listCrmSales } = require("../lib/crmSales")
-const { ensureDefaultTags, isQualifiedTagName } = require("../lib/crmDefaults")
+const { ensureDefaultTags, isQualifiedTagName, resolveTagForContactUser, tagNameKey } = require("../lib/crmDefaults")
 const { trackMetaForContactTag } = require("../lib/metaConversions")
 
 function isQuoteTagName(name) {
@@ -758,17 +758,25 @@ function createCrmRouter({ io }) {
       return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode alterar tags deste contato." })
     }
     const userId = contact.userId
-    const tag = await prisma.crmTag.findFirst({ where: { id: tagId, userId } })
-    if (!tag) return res.status(404).json({ error: "NOT_FOUND", message: "Contato ou tag não encontrados." })
+    const tag = await resolveTagForContactUser(prisma, {
+      tagId,
+      contactUserId: userId,
+      orgUserIds: req.dataScope?.userIds,
+    })
+    if (!tag) return res.status(404).json({ error: "NOT_FOUND", message: "Tag não encontrada." })
 
     const existingLink = await prisma.crmContactTag.findUnique({
       where: { contactId_tagId: { contactId: contact.id, tagId: tag.id } },
     })
     const tagWasCreated = !existingLink
     if (tagWasCreated) {
-      await prisma.crmContactTag.create({
-        data: { contactId: contact.id, tagId: tag.id },
-      })
+      try {
+        await prisma.crmContactTag.create({
+          data: { contactId: contact.id, tagId: tag.id },
+        })
+      } catch (err) {
+        if (err?.code !== "P2002") throw err
+      }
       logContactActivity(prisma, {
         userId,
         contactId: contact.id,
@@ -784,7 +792,16 @@ function createCrmRouter({ io }) {
 
     let metaTracking = null
     if (tagWasCreated && (isQualifiedTagName(tag.name) || isQuoteTagName(tag.name) || tag.name === "Comprou")) {
-      metaTracking = await trackMetaForContactTag(prisma, { userId, contact: updated, tagName: tag.name })
+      try {
+        metaTracking = await trackMetaForContactTag(prisma, { userId, contact: updated, tagName: tag.name })
+      } catch (err) {
+        console.error("[crm-tag] meta:", err?.message || err)
+        metaTracking = {
+          sent: false,
+          error: err?.message || "Falha ao enviar evento à Meta.",
+          eventName: isQualifiedTagName(tag.name) ? "LeadQualified" : tag.name,
+        }
+      }
     }
 
     if (tagWasCreated) {
@@ -811,10 +828,17 @@ function createCrmRouter({ io }) {
       return res.status(403).json({ error: "FORBIDDEN", message: "Somente o vendedor responsável pode alterar tags deste contato." })
     }
     const userId = contact.userId
-    const tag = await prisma.crmTag.findFirst({ where: { id: req.params.tagId, userId } })
-    await prisma.crmContactTag
-      .delete({ where: { contactId_tagId: { contactId: contact.id, tagId: req.params.tagId } } })
-      .catch(() => {})
+    const tag = await resolveTagForContactUser(prisma, {
+      tagId: req.params.tagId,
+      contactUserId: userId,
+      orgUserIds: req.dataScope?.userIds,
+    })
+    const idsToRemove = [...new Set([req.params.tagId, tag?.id].filter(Boolean))]
+    for (const id of idsToRemove) {
+      await prisma.crmContactTag
+        .delete({ where: { contactId_tagId: { contactId: contact.id, tagId: id } } })
+        .catch(() => {})
+    }
     if (tag) {
       logContactActivity(prisma, {
         userId,
@@ -1061,11 +1085,17 @@ function createCrmRouter({ io }) {
       where: { ...readUserFilter(req.dataScope) },
       orderBy: { name: "asc" },
     })
+    const actorId = req.user.sub
+    tags.sort((a, b) => {
+      const own = Number(b.userId === actorId) - Number(a.userId === actorId)
+      if (own) return own
+      return String(a.name || "").localeCompare(String(b.name || ""), "pt")
+    })
     // Deduplica por nome quando o dono vê tags de vários vendedores.
     const seen = new Set()
     const unique = []
     for (const tag of tags) {
-      const key = String(tag.name || "").trim().toLowerCase()
+      const key = tagNameKey(tag.name)
       if (!key || seen.has(key)) continue
       seen.add(key)
       unique.push(tag)

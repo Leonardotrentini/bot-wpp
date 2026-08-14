@@ -54,6 +54,7 @@ import {
 import { onSocketEvent } from '../../services/socket.js'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { isConversationInScope } from '../../lib/crmConversationScope.js'
+import { contactHasTag } from '../../lib/crmTags.js'
 import { getCrmBootstrapCache, setCrmBootstrapCache } from '../../lib/crmBootstrapCache.js'
 import {
   CRM_CONVERSATIONS_LIST_PARAMS,
@@ -469,33 +470,20 @@ function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
   const [busy, setBusy] = useState(null)
 
   const contactTags = conversation?.contact?.tags || []
-  const hasTag = (tagId) => contactTags.some((t) => t.id === tagId)
+  const hasTag = (tag) => contactHasTag(contactTags, tag)
 
   const toggle = async (tag) => {
     if (!conversation?.contact?.id) return
     setBusy(tag.id)
     try {
-      if (hasTag(tag.id)) {
-        await removeCrmContactTag(conversation.contact.id, tag.id)
-        onSaved({
-          ...conversation,
-          contact: {
-            ...conversation.contact,
-            tags: contactTags.filter((t) => t.id !== tag.id),
-          },
-        })
-      } else {
-        await addCrmContactTag(conversation.contact.id, tag.id)
-        onSaved({
-          ...conversation,
-          contact: {
-            ...conversation.contact,
-            tags: [...contactTags, tag].sort((a, b) => a.name.localeCompare(b.name)),
-          },
-        })
+      const { data } = hasTag(tag)
+        ? await removeCrmContactTag(conversation.contact.id, tag.id)
+        : await addCrmContactTag(conversation.contact.id, tag.id)
+      if (data.contact) {
+        onSaved({ ...conversation, contact: data.contact })
       }
-    } catch {
-      toast.error('Falha ao atualizar tag.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar tag.')
     } finally {
       setBusy(null)
     }
@@ -516,14 +504,14 @@ function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
               disabled={busy === tag.id}
               onClick={() => toggle(tag)}
               className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition ${
-                hasTag(tag.id)
+                hasTag(tag)
                   ? 'border-accent-500/40 bg-accent-500/10 text-stone-100'
                   : 'border-brand-700 bg-brand-900/60 text-stone-300 hover:border-brand-600'
               }`}
             >
               <span className="h-3 w-3 rounded-full" style={{ backgroundColor: tag.color }} />
               <span className="flex-1">{tag.name}</span>
-              {busy === tag.id ? <Loader2 className="h-4 w-4 animate-spin" /> : hasTag(tag.id) ? '✓' : null}
+              {busy === tag.id ? <Loader2 className="h-4 w-4 animate-spin" /> : hasTag(tag) ? '✓' : null}
             </button>
           ))
         )}
