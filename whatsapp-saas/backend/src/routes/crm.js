@@ -62,6 +62,7 @@ const {
 const { listCrmSales } = require("../lib/crmSales")
 const { ensureDefaultTags, isQualifiedTagName, resolveTagForContactUser, tagNameKey } = require("../lib/crmDefaults")
 const { trackMetaForContactTag } = require("../lib/metaConversions")
+const { reassignContactToSeller } = require("../lib/crmReassign")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -767,6 +768,118 @@ function createCrmRouter({ io }) {
       whatsappSaved,
       message,
     })
+  })
+
+  /** Dono atribui o lead a outro vendedor da empresa (corrige inbox errada). */
+  router.post("/contacts/:id/reassign", async (req, res) => {
+    if (!req.dataScope?.isOwner) {
+      return res.status(403).json({
+        error: "FORBIDDEN",
+        message: "Apenas o dono da empresa pode atribuir leads a vendedores.",
+      })
+    }
+
+    const schema = z.object({
+      sellerUserId: z.string().min(1),
+    })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe o vendedor." })
+    }
+
+    const toUserId = String(parsed.data.sellerUserId).trim()
+    if (!assertUserInScope(req.dataScope, toUserId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Vendedor fora da empresa." })
+    }
+
+    const contact = await findScopedContact(req, req.params.id)
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+
+    const previousConversation = await prisma.crmConversation.findFirst({
+      where: { contactId: contact.id },
+      select: { id: true },
+    })
+
+    try {
+      const result = await reassignContactToSeller(prisma, {
+        contactId: contact.id,
+        toUserId,
+      })
+      if (result.error === "NOT_FOUND") {
+        return res.status(404).json({ error: result.error, message: result.message })
+      }
+      if (result.error === "SAME_SELLER") {
+        return res.status(400).json({ error: result.error, message: result.message })
+      }
+
+      const [fromUser, toUser] = await Promise.all([
+        prisma.user.findUnique({ where: { id: result.fromUserId }, select: { id: true, name: true } }),
+        prisma.user.findUnique({ where: { id: result.toUserId }, select: { id: true, name: true } }),
+      ])
+
+      const finalContactId = result.contactId
+      await logContactActivity(prisma, {
+        userId: result.toUserId,
+        contactId: finalContactId,
+        type: "lead_reassigned",
+        payload: {
+          fromUserId: result.fromUserId,
+          toUserId: result.toUserId,
+          fromName: fromUser?.name || null,
+          toName: toUser?.name || null,
+          merged: Boolean(result.merged),
+          actorUserId: req.user.sub,
+        },
+      }).catch((err) => console.error("[crm-activity] lead_reassigned:", err?.message || err))
+
+      const conversation = result.conversationId
+        ? await prisma.crmConversation.findUnique({
+            where: { id: result.conversationId },
+            include: CONVERSATION_INCLUDE,
+          })
+        : await prisma.crmConversation.findFirst({
+            where: { contactId: finalContactId, userId: result.toUserId },
+            include: CONVERSATION_INCLUDE,
+          })
+
+      if (conversation) {
+        emitCrmEvent(io, result.toUserId, "crm:conversation", {
+          conversation: formatConversationRow(conversation),
+        })
+      }
+      // Só na inbox do vendedor de origem (não na sala org — o dono precisa manter o card).
+      if (io) {
+        io.to(`user:${result.fromUserId}`).emit("crm:conversation_removed", {
+          conversationId: previousConversation?.id || null,
+          contactId: contact.id,
+          reason: "reassigned",
+          toUserId: result.toUserId,
+        })
+      }
+
+      return res.json({
+        ok: true,
+        merged: Boolean(result.merged),
+        message: result.merged
+          ? `Lead mesclado na inbox de ${toUser?.name || "vendedor"}.`
+          : `Lead atribuído a ${toUser?.name || "vendedor"}.`,
+        conversation: conversation ? formatConversationRow(conversation) : null,
+        contact: conversation?.contact
+          ? formatContactRow(conversation.contact)
+          : formatContactRow(
+              await prisma.crmContact.findUnique({
+                where: { id: finalContactId },
+                include: { tags: { include: { tag: true } }, reminders: true },
+              }),
+            ),
+      })
+    } catch (err) {
+      console.error("[crm] reassign:", err)
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: err?.message || "Falha ao atribuir o lead.",
+      })
+    }
   })
 
   router.post("/contacts/:id/tags", async (req, res) => {

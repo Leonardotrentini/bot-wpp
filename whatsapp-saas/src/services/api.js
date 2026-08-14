@@ -937,6 +937,19 @@ export async function saveCrmContact(id, { name, saveOnWhatsapp = false }) {
   return mockResponse({ contact: { id, name, savedName: name }, whatsappSaved: false })
 }
 
+export async function reassignCrmContact(id, { sellerUserId }) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/contacts/${encodeURIComponent(id)}/reassign`, { sellerUserId })
+  }
+  return mockResponse({
+    ok: true,
+    merged: false,
+    message: 'Lead atribuído (simulado).',
+    conversation: null,
+    contact: { id, userId: sellerUserId },
+  })
+}
+
 export async function addCrmContactTag(contactId, tagId) {
   if (resolveUseRealApi()) return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/tags`, { tagId })
   return mockResponse({ contact: null })

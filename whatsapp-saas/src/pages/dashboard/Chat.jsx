@@ -53,6 +53,7 @@ import {
   patchCrmConversation,
   patchCrmContact,
   saveCrmContact,
+  reassignCrmContact,
   getCrmTags,
   createCrmTag,
   updateCrmTag,
@@ -283,6 +284,7 @@ export function Chat() {
   const [notesDraft, setNotesDraft] = useState('')
   const [nameDraft, setNameDraft] = useState('')
   const [savingContact, setSavingContact] = useState(false)
+  const [reassigningSeller, setReassigningSeller] = useState(false)
   const [newTagModal, setNewTagModal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('#22c55e')
@@ -832,11 +834,24 @@ export function Chat() {
       toastRef.current.info('Uma conversa foi transferida da IA para atendimento humano.', 'Transferência')
       loadConversationsRef.current()
     })
+    const offRemoved = onSocketEvent('crm:conversation_removed', ({ conversationId, contactId }) => {
+      setConversations((prev) =>
+        prev.filter((c) => c.id !== conversationId && c.contact?.id !== contactId),
+      )
+      if (
+        activeIdRef.current === conversationId ||
+        conversationsRef.current.find((c) => c.id === activeIdRef.current)?.contact?.id === contactId
+      ) {
+        setActiveId(null)
+        setMessages([])
+      }
+    })
     return () => {
       offMessage()
       offConvo()
       offSync()
       offHandoff()
+      offRemoved()
     }
   }, [markReadDebounced])
 
@@ -1072,6 +1087,55 @@ export function Chat() {
       setSavingContact(false)
     }
   }, [active, nameDraft, activeId])
+
+  const reassignContactSeller = useCallback(
+    async (sellerUserId) => {
+      if (!active?.contact?.id || !sellerUserId || !isOrgOwner) return
+      if (sellerUserId === active.userId) return
+      const member = orgMembers.find((m) => m.userId === sellerUserId)
+      const label = member?.name || 'esse vendedor'
+      if (!window.confirm(`Atribuir este lead a ${label}? Ele sai da inbox atual e vai para a de ${label}.`)) {
+        return
+      }
+      setReassigningSeller(true)
+      try {
+        const { data } = await reassignCrmContact(active.contact.id, { sellerUserId })
+        toastRef.current.success(data.message || 'Lead atribuído.')
+        if (data.conversation) {
+          const next = data.conversation
+          setConversations((prev) => {
+            const withoutOld = prev.filter(
+              (c) => c.id !== activeId && c.contact?.id !== active.contact.id && c.id !== next.id,
+            )
+            // Se filtro de vendedor ativo e o lead saiu desse filtro, não mantém na lista.
+            if (sellerFilter && next.userId !== sellerFilter) {
+              return withoutOld
+            }
+            return [next, ...withoutOld]
+          })
+          if (next.id !== activeId) {
+            setActiveId(next.id)
+            setSearchParams(
+              (prev) => {
+                const p = new URLSearchParams(prev)
+                p.set('c', next.id)
+                return p
+              },
+              { replace: true },
+            )
+          }
+        } else {
+          setConversations((prev) => prev.filter((c) => c.id !== activeId))
+          setActiveId(null)
+        }
+      } catch (err) {
+        toastRef.current.error(err?.response?.data?.message || 'Falha ao atribuir o lead.')
+      } finally {
+        setReassigningSeller(false)
+      }
+    },
+    [active, activeId, isOrgOwner, orgMembers, sellerFilter, setSearchParams],
+  )
 
   const applyTagToConversations = useCallback((updater) => {
     setConversations((prev) =>
@@ -1759,6 +1823,31 @@ export function Chat() {
                 ))}
               </Select>
             </div>
+
+            {isOrgOwner && orgMembers.length > 0 ? (
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                  Vendedor responsável
+                </p>
+                <Select
+                  value={active.userId || ''}
+                  disabled={reassigningSeller}
+                  onChange={(e) => reassignContactSeller(e.target.value)}
+                >
+                  {orgMembers.map((m) => (
+                    <option key={m.userId} value={m.userId}>
+                      {m.name || m.email || m.userId}
+                      {m.role === 'OWNER' ? ' (dono)' : ''}
+                    </option>
+                  ))}
+                </Select>
+                <p className="mt-1 text-[11px] text-stone-500">
+                  {reassigningSeller
+                    ? 'Movendo lead…'
+                    : 'Corrige leads que entraram na inbox errada (ex.: WhatsApp conectado na conta de outro).'}
+                </p>
+              </div>
+            ) : null}
 
             <div>
               <div className="mb-1.5 flex items-center justify-between">

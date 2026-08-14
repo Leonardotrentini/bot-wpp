@@ -42,6 +42,10 @@ function activityLabel(type, payload = {}) {
       return payload.amount != null ? `Compra confirmada: ${formatBrl(payload.amount)}` : "Compra confirmada"
     case "contact_named":
       return payload.name ? `Contato salvo como ${payload.name}` : "Nome do contato atualizado"
+    case "lead_reassigned":
+      return payload.toName
+        ? `Lead atribuído a ${payload.toName}`
+        : "Lead reatribuído a outro vendedor"
     case "notes_updated":
       return "Notas internas atualizadas"
     case "reminder_set":
