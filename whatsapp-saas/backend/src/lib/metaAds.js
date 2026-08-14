@@ -151,6 +151,21 @@ function extractCreativeDestinationUrl(creative) {
   return null
 }
 
+/** Link público na Biblioteca de Anúncios da Meta (busca pelo nome do criativo). */
+function buildAdsLibraryUrl(adName) {
+  const q = String(adName || "").trim()
+  if (!q || q === "—") return null
+  const params = new URLSearchParams({
+    active_status: "all",
+    ad_type: "all",
+    country: "BR",
+    media_type: "all",
+    search_type: "keyword_unordered",
+    q,
+  })
+  return `https://www.facebook.com/ads/library/?${params.toString()}`
+}
+
 async function enrichTopAdsWithCreatives(token, ads) {
   if (!ads.length) return ads
 
@@ -167,15 +182,10 @@ async function enrichTopAdsWithCreatives(token, ads) {
     return ads.map((ad) => {
       const row = batch?.[ad.id]
       const creative = row?.creative || {}
-      const destinationUrl =
-        extractCreativeDestinationUrl(creative) ||
-        (row?.preview_shareable_link ? String(row.preview_shareable_link) : null) ||
-        ad.destinationUrl ||
-        null
       return {
         ...ad,
         thumbnailUrl: creative.thumbnail_url || creative.image_url || ad.thumbnailUrl || null,
-        destinationUrl,
+        destinationUrl: extractCreativeDestinationUrl(creative) || ad.destinationUrl || null,
         previewUrl: row?.preview_shareable_link ? String(row.preview_shareable_link) : ad.previewUrl || null,
       }
     })
@@ -284,6 +294,7 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
           spend: parseMetricNumber(row.spend) || 0,
           ctr: parseMetricNumber(row.ctr),
           impressions: parseInt(row.impressions || 0, 10) || 0,
+          adsLibraryUrl: buildAdsLibraryUrl(row.ad_name),
           adsManagerUrl: row.ad_id
             ? `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${accountDigits}&selected_ad_ids=${row.ad_id}`
             : null,

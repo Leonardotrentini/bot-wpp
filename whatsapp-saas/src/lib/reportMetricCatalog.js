@@ -574,7 +574,8 @@ export function resolveMetricData(metricId, data) {
           const value = hasConv
             ? `${leads} lead${leads === 1 ? '' : 's'} · ${sales} venda${sales === 1 ? '' : 's'}`
             : `${ad.clicks ?? 0} cliques`
-          const href = ad.destinationUrl || ad.previewUrl || ad.adsManagerUrl || null
+          // Preferir visualização: preview Meta → Biblioteca → Ads Manager (último recurso).
+          const href = ad.previewUrl || ad.adsLibraryUrl || ad.adsManagerUrl || null
           return {
             id: ad.id,
             label: ad.name,
@@ -582,7 +583,8 @@ export function resolveMetricData(metricId, data) {
             value,
             href,
             thumbnail: ad.thumbnailUrl || null,
-            destinationUrl: ad.destinationUrl && ad.destinationUrl !== href ? ad.destinationUrl : null,
+            destinationUrl: ad.destinationUrl || null,
+            adsLibraryUrl: ad.adsLibraryUrl && ad.adsLibraryUrl !== href ? ad.adsLibraryUrl : null,
             adsManagerUrl: ad.adsManagerUrl || null,
           }
         }),
