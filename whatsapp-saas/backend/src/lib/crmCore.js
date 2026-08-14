@@ -131,12 +131,58 @@ function resolveContactDisplayName(contact) {
   if (!isGenericSavedName(manual)) return manual
 
   const phoneDigits = resolvePhoneDigits(contact)
-  if (phoneDigits) return formatPhoneBr(phoneDigits)
-
   const fromWa = sanitizePushName(contact.pushName, phoneDigits)
   if (fromWa) return fromWa
 
+  if (phoneDigits) return formatPhoneBr(phoneDigits)
+
   return "Contato"
+}
+
+function siblingPhoneWhere(userId, contactId, phone) {
+  const digits = String(phone || "").replace(/\D/g, "")
+  if (!digits || digits.length < 8) return null
+  return {
+    userId,
+    id: { not: contactId },
+    OR: [{ phone: digits }, { remoteJid: `${digits}@s.whatsapp.net` }],
+  }
+}
+
+/** Copia o nome CRM para outros JIDs do mesmo telefone (@lid e @s.whatsapp.net). */
+async function propagateSavedNameToPhoneSiblings(prisma, { userId, contactId, phone, savedName }) {
+  const where = siblingPhoneWhere(userId, contactId, phone)
+  if (!where || isGenericSavedName(savedName)) return 0
+  const siblings = await prisma.crmContact.findMany({
+    where,
+    select: { id: true, name: true },
+  })
+  const ids = siblings.filter((row) => isGenericSavedName(row.name)).map((row) => row.id)
+  if (!ids.length) return 0
+  const result = await prisma.crmContact.updateMany({
+    where: { id: { in: ids } },
+    data: { name: savedName },
+  })
+  return result.count
+}
+
+/** Se este JID ainda não tem nome salvo, herda de outro contato do mesmo telefone. */
+async function inheritSavedNameFromPhoneSiblings(prisma, { userId, contact }) {
+  if (!contact?.id || !isGenericSavedName(contact.name)) return contact
+  const phone = resolvePhoneDigits(contact)
+  const where = siblingPhoneWhere(userId, contact.id, phone)
+  if (!where) return contact
+  const siblings = await prisma.crmContact.findMany({
+    where,
+    select: { name: true },
+    take: 8,
+  })
+  const inherited = siblings.find((row) => !isGenericSavedName(row.name))?.name
+  if (!inherited) return contact
+  return prisma.crmContact.update({
+    where: { id: contact.id },
+    data: { name: inherited },
+  })
 }
 
 function extractAltPhoneFromRecord(record, remoteJid) {
@@ -313,6 +359,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
   let contact = await prisma.crmContact.findUnique({
     where: { userId_remoteJid: { userId, remoteJid: jid } },
   })
+  let shouldInheritName = false
   if (!contact) {
     try {
       contact = await prisma.crmContact.create({
@@ -325,6 +372,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
           isLid: isLidJid(jid),
         },
       })
+      shouldInheritName = true
     } catch (err) {
       if (err?.code !== "P2002") throw err
       contact = await prisma.crmContact.findUnique({
@@ -336,13 +384,20 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
     const data = {}
     if (pushName && contact.pushName !== pushName) data.pushName = pushName
     if (avatarUrl && contact.avatarUrl !== avatarUrl) data.avatarUrl = avatarUrl
-    if (!contact.phone && phone) data.phone = phone
+    if (!contact.phone && phone) {
+      data.phone = phone
+      shouldInheritName = isGenericSavedName(contact.name)
+    }
     if (Object.keys(data).length) {
       contact = await prisma.crmContact.update({
         where: { id: contact.id },
         data,
       })
     }
+  }
+
+  if (shouldInheritName) {
+    contact = await inheritSavedNameFromPhoneSiblings(prisma, { userId, contact })
   }
 
   let conversation = await prisma.crmConversation.findUnique({
@@ -608,5 +663,6 @@ module.exports = {
   ensureContactAndConversation,
   ingestCrmMessage,
   emitCrmEvent,
+  propagateSavedNameToPhoneSiblings,
   CONVERSATION_INCLUDE,
 }

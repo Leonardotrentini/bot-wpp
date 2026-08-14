@@ -32,6 +32,7 @@ const {
   CONVERSATION_INCLUDE,
   normalizeMessageMediaKind,
   resolveEvolutionRecipient,
+  propagateSavedNameToPhoneSiblings,
 } = require("../lib/crmCore")
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
@@ -582,6 +583,15 @@ function createCrmRouter({ io }) {
         type: "contact_named",
         payload: { name: updated.name },
       }).catch((err) => console.error("[crm-activity] contact_named:", err?.message || err))
+      const phone = updated.phone || contact.phone
+      if (updated.name) {
+        propagateSavedNameToPhoneSiblings(prisma, {
+          userId,
+          contactId: contact.id,
+          phone,
+          savedName: updated.name,
+        }).catch((err) => console.error("[crm] propagateSavedName:", err?.message || err))
+      }
     }
     if (notesChanged) {
       logContactActivity(prisma, {
@@ -692,17 +702,19 @@ function createCrmRouter({ io }) {
     const userId = contact.userId
 
     const savedName = parsed.data.name.trim()
-    const phone = contact.phone || contact.remoteJid.split("@")[0].replace(/\D/g, "")
-    if (!phone || phone.length < 8) {
-      return res.status(400).json({
-        error: "NO_PHONE",
-        message: "Este contato não tem número de telefone — não é possível salvar na agenda do WhatsApp.",
-      })
-    }
+    const lidJid = /@lid$/i.test(contact.remoteJid || "")
+    const phone = contact.phone || (!lidJid ? contact.remoteJid.split("@")[0].replace(/\D/g, "") : "")
+    const hasPhone = Boolean(phone && phone.length >= 8)
 
     let whatsappSaved = false
     let whatsappWarning = null
     if (parsed.data.saveOnWhatsapp) {
+      if (!hasPhone) {
+        return res.status(400).json({
+          error: "NO_PHONE",
+          message: "Este contato não tem número de telefone — não é possível salvar na agenda do WhatsApp.",
+        })
+      }
       const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
       if (!conn || !conn.connected) {
         whatsappWarning = "WhatsApp desconectado — nome salvo apenas no Vesto."
@@ -729,6 +741,13 @@ function createCrmRouter({ io }) {
       type: "contact_named",
       payload: { name: savedName },
     }).catch((err) => console.error("[crm-activity] contact_named:", err?.message || err))
+
+    propagateSavedNameToPhoneSiblings(prisma, {
+      userId,
+      contactId: contact.id,
+      phone: contact.phone || (hasPhone ? phone : null),
+      savedName,
+    }).catch((err) => console.error("[crm] propagateSavedName:", err?.message || err))
 
     const conversation = await prisma.crmConversation.findFirst({
       where: { contactId: contact.id, userId },

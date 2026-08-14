@@ -38,18 +38,18 @@ export function isGenericContactName(name) {
   return !n || n === 'Contato' || n.startsWith('Contato #') || /^#\d+$/.test(n) || isSelfOrGenericPushName(n)
 }
 
-/** Nome salvo (Vesto) → telefone → nome WhatsApp válido → "Contato". */
+/** Nome salvo (Vesto) → nome WhatsApp válido → telefone → "Contato". */
 export function contactTitle(contact) {
   if (!contact) return 'Contato'
 
   const saved = String(contact.savedName || '').trim()
   if (saved && !isGenericContactName(saved)) return saved
 
-  const phone = resolveContactPhone(contact)
-  if (phone) return formatPhoneBr(phone)
-
   const push = String(contact.pushName || '').trim()
   if (push && !isSelfOrGenericPushName(push)) return push
+
+  const phone = resolveContactPhone(contact)
+  if (phone) return formatPhoneBr(phone)
 
   const resolved = String(contact.name || '').trim()
   if (resolved && !isGenericContactName(resolved)) return resolved
@@ -81,4 +81,28 @@ export function contactNeedsIdentification(contact) {
   const push = String(contact.pushName || '').trim()
   if (push && !isSelfOrGenericPushName(push)) return false
   return true
+}
+
+/** Mantém o nome salvo no CRM quando um evento em tempo real chega sem `savedName`. */
+export function mergeIncomingConversation(prev, incoming) {
+  if (!prev) return incoming
+  const prevContact = prev.contact || {}
+  const nextContact = incoming?.contact || {}
+  const incomingSaved = String(nextContact.savedName || '').trim()
+  const prevSaved = String(prevContact.savedName || '').trim()
+  const savedName =
+    incomingSaved && !isGenericContactName(incomingSaved)
+      ? incomingSaved
+      : prevSaved && !isGenericContactName(prevSaved)
+        ? prevSaved
+        : incomingSaved || prevSaved || null
+  return {
+    ...prev,
+    ...incoming,
+    contact: {
+      ...prevContact,
+      ...nextContact,
+      savedName,
+    },
+  }
 }

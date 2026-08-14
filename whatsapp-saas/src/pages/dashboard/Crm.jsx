@@ -34,7 +34,7 @@ import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
 import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
-import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr } from '../../lib/contactDisplay.js'
+import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr, mergeIncomingConversation } from '../../lib/contactDisplay.js'
 import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
 import {
   buildNoReplyTriggerPatch,
@@ -1925,16 +1925,19 @@ export function Crm() {
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
       if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
       setConversations((prev) => {
-        const exists = prev.some((c) => c.id === conversation.id)
-        if (!exists) return [conversation, ...prev]
-        return prev.map((c) => (c.id === conversation.id ? conversation : c))
+        const current = prev.find((c) => c.id === conversation.id)
+        const merged = mergeIncomingConversation(current, conversation)
+        if (!current) return [merged, ...prev]
+        return prev.map((c) => (c.id === conversation.id ? merged : c))
       })
     })
     const offMessage = onSocketEvent('crm:message', ({ conversation }) => {
       if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
       setConversations((prev) => {
-        const exists = prev.some((c) => c.id === conversation.id)
-        return exists ? prev.map((c) => (c.id === conversation.id ? conversation : c)) : [conversation, ...prev]
+        const current = prev.find((c) => c.id === conversation.id)
+        const merged = mergeIncomingConversation(current, conversation)
+        if (!current) return [merged, ...prev]
+        return prev.map((c) => (c.id === conversation.id ? merged : c))
       })
     })
     return () => {

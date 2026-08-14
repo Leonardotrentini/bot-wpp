@@ -434,7 +434,7 @@ test("formatContactRow formata telefone BR quando não há nome salvo", () => {
   assert.notStrictEqual(row.name, "553299377780")
 })
 
-test("formatContactRow prioriza telefone sobre pushName quando não há nome salvo", () => {
+test("formatContactRow prioriza pushName sobre telefone quando não há nome salvo", () => {
   const row = formatContactRow({
     id: "c2",
     remoteJid: "5511999999999@s.whatsapp.net",
@@ -446,7 +446,7 @@ test("formatContactRow prioriza telefone sobre pushName quando não há nome sal
     notes: "",
     tags: [],
   })
-  assert.strictEqual(row.name, "+55 (11) 99999-9999")
+  assert.strictEqual(row.name, "Leonardo")
   assert.strictEqual(row.pushName, "Leonardo")
   assert.strictEqual(row.savedName, null)
   assert.strictEqual(row.avatarUrl, "https://pps.whatsapp.net/l.jpg")
@@ -468,7 +468,7 @@ test("formatContactRow prioriza nome salvo manualmente", () => {
   assert.strictEqual(row.savedName, "Cliente VIP")
 })
 
-test("resolveContactDisplayName: nome salvo → telefone → pushName; ignora Você", () => {
+test("resolveContactDisplayName: nome salvo → pushName → telefone; ignora Você", () => {
   const { resolveContactDisplayName } = require("../src/lib/crmCore")
   assert.strictEqual(
     resolveContactDisplayName({
@@ -489,6 +489,16 @@ test("resolveContactDisplayName: nome salvo → telefone → pushName; ignora Vo
       phone: null,
     }),
     "Contato",
+  )
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "41758599@lid",
+      isLid: true,
+      pushName: "Maria",
+      name: null,
+      phone: "556186337726",
+    }),
+    "Maria",
   )
   assert.strictEqual(
     resolveContactDisplayName({
@@ -517,6 +527,15 @@ test("resolveContactDisplayName: nome salvo → telefone → pushName; ignora Vo
       name: null,
     }),
     "+55 (85) 9823-1185",
+  )
+  assert.strictEqual(
+    resolveContactDisplayName({
+      remoteJid: "5511999999999@s.whatsapp.net",
+      phone: "5511999999999",
+      pushName: "Leonardo",
+      name: "Cliente VIP",
+    }),
+    "Cliente VIP",
   )
 })
 

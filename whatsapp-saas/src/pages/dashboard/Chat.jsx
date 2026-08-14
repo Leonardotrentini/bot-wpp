@@ -74,7 +74,7 @@ import {
   fetchOrgMembers,
 } from '../../services/api.js'
 
-import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName } from '../../lib/contactDisplay.js'
+import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName, isGenericContactName, mergeIncomingConversation } from '../../lib/contactDisplay.js'
 import { toastMetaTracking } from '../../lib/metaTrackingFeedback.js'
 import { contactHasTag } from '../../lib/crmTags.js'
 import {
@@ -791,8 +791,10 @@ export function Chat() {
       if (conversation && !isConversationInScope(conversation, scopeRef.current)) return
       if (conversation) {
         setConversations((prev) => {
+          const current = prev.find((c) => c.id === conversation.id)
+          const merged = mergeIncomingConversation(current, conversation)
           const rest = prev.filter((c) => c.id !== conversation.id)
-          return [conversation, ...rest]
+          return [merged, ...rest]
         })
       }
       if (conversationId === activeIdRef.current && message) {
@@ -815,7 +817,7 @@ export function Chat() {
       setConversations((prev) => {
         const exists = prev.some((c) => c.id === conversation.id)
         if (!exists) return [conversation, ...prev]
-        return prev.map((c) => (c.id === conversation.id ? conversation : c))
+        return prev.map((c) => (c.id === conversation.id ? mergeIncomingConversation(c, conversation) : c))
       })
     })
     const offSync = onSocketEvent('crm:sync', ({ job }) => {
@@ -1698,7 +1700,9 @@ export function Chat() {
             <div>
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-stone-500">
                 <UserPlus className="mr-1 inline h-3 w-3" />
-                Salvar contato
+                {active.contact?.savedName && !isGenericContactName(active.contact.savedName)
+                  ? 'Nome no CRM'
+                  : 'Salvar contato'}
               </p>
               <input
                 value={nameDraft}
@@ -1714,7 +1718,9 @@ export function Chat() {
                 disabled={savingContact || !nameDraft.trim()}
               >
                 {savingContact ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
-                Salvar contato
+                {active.contact?.savedName && !isGenericContactName(active.contact.savedName)
+                  ? 'Salvar nome'
+                  : 'Salvar contato'}
               </Button>
             </div>
 
