@@ -65,7 +65,7 @@ function createIntegrationsRouter() {
       sendPurchases: z.boolean().optional(),
       testEventCode: z.string().max(64).optional().nullable(),
       adAccountId: z.string().max(32).optional().nullable(),
-      adsAccessToken: z.string().max(512).optional().nullable(),
+      adsAccessToken: z.string().max(2048).optional().nullable(),
       adsEnabled: z.boolean().optional(),
       allowedOrigins: z.array(z.string().max(253)).optional(),
       lpWhatsapp: z.string().max(32).optional().nullable(),
@@ -166,12 +166,27 @@ function createIntegrationsRouter() {
 
   router.post("/meta/ads/test", async (req, res) => {
     try {
-      const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
-      if (!integration) {
-        return res.status(400).json({ error: "NOT_CONFIGURED", message: "Salve a integração Meta antes de testar." })
+      const schema = z.object({
+        adAccountId: z.string().max(32).optional().nullable(),
+        adsAccessToken: z.string().max(2048).optional().nullable(),
+      })
+      const parsed = schema.safeParse(req.body || {})
+      if (!parsed.success) {
+        return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos para o teste." })
       }
 
-      const result = await testMetaAdsConnection(prisma, req.user.sub, integration)
+      const integration = await getMetaIntegrationCredentials(prisma, req.user.sub)
+      if (!integration) {
+        return res.status(400).json({
+          error: "NOT_CONFIGURED",
+          message: "Salve a integração Meta (Pixel + CAPI) antes de testar.",
+        })
+      }
+
+      const result = await testMetaAdsConnection(prisma, req.user.sub, integration, {
+        adAccountId: parsed.data.adAccountId,
+        adsAccessToken: parsed.data.adsAccessToken,
+      })
       if (result.error === "NOT_CONFIGURED") {
         return res.status(400).json({ error: result.error, message: result.message })
       }

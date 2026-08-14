@@ -499,7 +499,13 @@ export function Integrations() {
           </Suspense>
 
           <Suspense fallback={<PanelFallback />}>
-            <MetaAdsPanel form={form} setForm={setForm} meta={meta} onSaved={() => load({ silent: true })} />
+            <MetaAdsPanel
+              form={form}
+              setForm={setForm}
+              meta={meta}
+              onConfirmAccount={handleSave}
+              confirming={saving}
+            />
           </Suspense>
 
           <Suspense fallback={<PanelFallback />}>

@@ -56,14 +56,17 @@ function adsBadge(meta) {
   return { variant: 'muted', label: 'Anúncios não configurado' }
 }
 
-export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
+export function MetaAdsPanel({ form, setForm, meta, onConfirmAccount, confirming }) {
   const toast = useToast()
   const [period, setPeriod] = useState('7d')
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
   const [dashboard, setDashboard] = useState(null)
 
   const canFetch = Boolean(meta?.adsConnected || (form.adAccountId?.trim() && meta?.adsConfigured))
+  const canTest = Boolean(form.adAccountId?.trim())
+  const canConfirmAccount = Boolean(testResult?.ok && testResult?.matchesRequested && onConfirmAccount)
 
   const loadDashboard = useCallback(async (overridePeriod) => {
     if (!meta?.adsEnabled) return
@@ -81,16 +84,39 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
   }, [meta?.adsEnabled, period, toast])
 
   const handleTest = async () => {
+    const adAccountId = form.adAccountId.trim()
+    if (!adAccountId) {
+      toast.error('Informe o ID da conta de anúncios.')
+      return
+    }
     setTesting(true)
+    setTestResult(null)
     try {
-      const { data } = await testMetaAdsConnection()
-      toast.success(data.message || 'Conta de anúncios conectada.')
-      onSaved?.()
+      const payload = { adAccountId }
+      if (form.adsAccessToken.trim()) {
+        payload.adsAccessToken = form.adsAccessToken.trim()
+      }
+      const { data } = await testMetaAdsConnection(payload)
+      setTestResult(data)
+      if (data.account?.id) {
+        setForm((f) => ({ ...f, adAccountId: data.account.id }))
+      }
+      if (data.ok && data.matchesRequested) {
+        toast.success(data.message || 'Conexão confirmada.')
+      } else {
+        toast.error(data.message || 'A Meta devolveu outra conta. Confira o ID.')
+      }
     } catch (err) {
+      setTestResult(null)
       toast.error(err?.response?.data?.message || 'Falha ao testar conta de anúncios.')
     } finally {
       setTesting(false)
     }
+  }
+
+  const handleConfirmAccount = async () => {
+    if (!canConfirmAccount) return
+    await onConfirmAccount()
   }
 
   const currency = dashboard?.account?.currency || 'BRL'
@@ -132,7 +158,10 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
         label="ID da conta de anúncios"
         placeholder="Ex.: act_123456789 ou só os números"
         value={form.adAccountId}
-        onChange={(e) => setForm((f) => ({ ...f, adAccountId: e.target.value }))}
+        onChange={(e) => {
+          setTestResult(null)
+          setForm((f) => ({ ...f, adAccountId: e.target.value }))
+        }}
       />
       <p className="-mt-2 text-xs text-stone-500">
         Encontre em{' '}
@@ -149,7 +178,10 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
             : 'Cole token com ads_read — ou use o mesmo da CAPI se tiver a permissão'
         }
         value={form.adsAccessToken}
-        onChange={(e) => setForm((f) => ({ ...f, adsAccessToken: e.target.value }))}
+        onChange={(e) => {
+          setTestResult(null)
+          setForm((f) => ({ ...f, adsAccessToken: e.target.value }))
+        }}
       />
       <p className="-mt-2 text-xs text-stone-500">
         No Business Manager: System User → Gerar token → permissão <strong className="text-stone-400">ads_read</strong>{' '}
@@ -177,9 +209,35 @@ export function MetaAdsPanel({ form, setForm, meta, onSaved }) {
         </div>
       )}
 
+      {testResult?.account ? (
+        <div
+          className={`rounded-xl border px-3 py-2.5 text-xs ${
+            testResult.ok && testResult.matchesRequested
+              ? 'border-emerald-800/70 bg-emerald-950/30'
+              : 'border-amber-800/70 bg-amber-950/30'
+          }`}
+        >
+          <p className="font-medium text-stone-100">{testResult.account.name}</p>
+          <p className="mt-0.5 font-mono text-stone-300">{testResult.account.id}</p>
+          <p className="mt-0.5 text-stone-500">
+            {testResult.account.currency}
+            {testResult.requestedAdAccountId && testResult.requestedAdAccountId !== testResult.account.id
+              ? ` · você pediu ${testResult.requestedAdAccountId}`
+              : ''}
+          </p>
+          <p className="mt-1 text-stone-400">{testResult.message}</p>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={handleTest} disabled={testing || !form.adAccountId.trim()}>
-          {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Testar conta de anúncios'}
+        <Button variant="secondary" onClick={handleTest} disabled={testing || !canTest}>
+          {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirmar conexão'}
+        </Button>
+        <Button
+          onClick={handleConfirmAccount}
+          disabled={confirming || testing || !canConfirmAccount}
+        >
+          {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirmar conta'}
         </Button>
         <Button
           variant="secondary"

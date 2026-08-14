@@ -332,24 +332,33 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
   }
 }
 
-async function testMetaAdsConnection(prisma, userId, integration) {
-  const adAccountId = normalizeAdAccountId(integration.adAccountId)
-  const token = resolveAdsToken(integration)
+async function testMetaAdsConnection(prisma, userId, integration, overrides = {}) {
+  const requestedId = normalizeAdAccountId(overrides.adAccountId || integration.adAccountId)
+  const overrideToken = String(overrides.adsAccessToken || "").trim()
+  const token = overrideToken || resolveAdsToken(integration)
 
-  if (!adAccountId || !token) {
+  if (!requestedId || !token) {
     return { error: "NOT_CONFIGURED", message: "Configure o ID da conta de anúncios e o token." }
   }
 
   try {
-    const account = await graphGet(adAccountId, token, {
+    const account = await graphGet(requestedId, token, {
       fields: "name,account_status,currency",
     })
-    await recordAdsSyncResult(prisma, userId, {})
+    const returnedId = normalizeAdAccountId(account.id) || requestedId
+    const matchesRequested = returnedId === requestedId
+    if (matchesRequested) {
+      await recordAdsSyncResult(prisma, userId, {})
+    }
     return {
-      ok: true,
-      message: `Conta conectada: ${account.name} (${account.currency || "BRL"}).`,
+      ok: matchesRequested,
+      matchesRequested,
+      requestedAdAccountId: requestedId,
+      message: matchesRequested
+        ? `Conexão ok: ${account.name} (${returnedId}, ${account.currency || "BRL"}).`
+        : `A Meta respondeu outra conta: ${account.name} (${returnedId}). Você pediu ${requestedId}. Confira o ID no Gerenciador de Anúncios.`,
       account: {
-        id: account.id,
+        id: returnedId,
         name: account.name,
         currency: account.currency || "BRL",
         status: account.account_status,

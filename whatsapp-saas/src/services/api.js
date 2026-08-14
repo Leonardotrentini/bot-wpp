@@ -826,9 +826,15 @@ export async function getMetaAdsDashboard(period = '7d') {
   })
 }
 
-export async function testMetaAdsConnection() {
-  if (resolveUseRealApi()) return apiClient.post('/integrations/meta/ads/test')
-  return mockResponse({ ok: true, message: 'Conta de anúncios conectada (simulado).' })
+export async function testMetaAdsConnection(payload = {}) {
+  if (resolveUseRealApi()) return apiClient.post('/integrations/meta/ads/test', payload)
+  return mockResponse({
+    ok: true,
+    matchesRequested: true,
+    requestedAdAccountId: payload.adAccountId || 'act_123',
+    message: 'Conta de anúncios conectada (simulado).',
+    account: { id: 'act_123', name: 'Conta teste', currency: 'BRL', status: 1 },
+  })
 }
 
 export async function connectWhatsApp() {
