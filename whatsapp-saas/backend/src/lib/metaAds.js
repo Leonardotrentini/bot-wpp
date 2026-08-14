@@ -151,19 +151,28 @@ function extractCreativeDestinationUrl(creative) {
   return null
 }
 
-/** Link público na Biblioteca de Anúncios da Meta (busca pelo nome do criativo). */
-function buildAdsLibraryUrl(adName) {
-  const q = String(adName || "").trim()
-  if (!q || q === "—") return null
-  const params = new URLSearchParams({
-    active_status: "all",
-    ad_type: "all",
-    country: "BR",
-    media_type: "all",
-    search_type: "keyword_unordered",
-    q,
-  })
-  return `https://www.facebook.com/ads/library/?${params.toString()}`
+/** Post publicado do criativo (PAGEID_POSTID → facebook.com/PAGEID/posts/POSTID). */
+function buildStoryUrl(storyId) {
+  const s = String(storyId || "").trim()
+  if (!s) return null
+  const idx = s.indexOf("_")
+  if (idx > 0) {
+    return `https://www.facebook.com/${s.slice(0, idx)}/posts/${s.slice(idx + 1)}`
+  }
+  return null
+}
+
+function buildAdsManagerAdUrl(accountDigits, adId) {
+  if (!accountDigits || !adId) return null
+  return `https://www.facebook.com/adsmanager/manage/ads?act=${accountDigits}&selected_ad_ids=${adId}`
+}
+
+function pickCreativePayload(row) {
+  if (!row || typeof row !== "object") return {}
+  if (row.creative && typeof row.creative === "object") return row.creative
+  const list = row.adcreatives?.data
+  if (Array.isArray(list) && list[0]) return list[0]
+  return {}
 }
 
 async function enrichTopAdsWithCreatives(token, ads) {
@@ -176,17 +185,48 @@ async function enrichTopAdsWithCreatives(token, ads) {
     const batch = await graphGet("", token, {
       ids: ids.join(","),
       fields:
-        "preview_shareable_link,creative{thumbnail_url,image_url,object_url,link_url,object_story_spec,asset_feed_spec}",
+        "preview_shareable_link,creative{id,thumbnail_url,image_url,object_url,link_url,effective_object_story_id,object_story_id,object_story_spec,asset_feed_spec},adcreatives.limit(1){thumbnail_url,image_url,object_url,link_url,effective_object_story_id,object_story_id,object_story_spec}",
     })
+
+    const creativeIds = []
+    for (const ad of ads) {
+      const row = batch?.[ad.id]
+      if (row?.error) continue
+      const creative = pickCreativePayload(row)
+      if (creative.id && !creative.thumbnail_url && !creative.image_url && !creative.effective_object_story_id) {
+        creativeIds.push(String(creative.id))
+      }
+    }
+
+    let creativesById = {}
+    if (creativeIds.length) {
+      try {
+        creativesById = await graphGet("", token, {
+          ids: [...new Set(creativeIds)].join(","),
+          fields:
+            "thumbnail_url,image_url,object_url,link_url,effective_object_story_id,object_story_id,object_story_spec,asset_feed_spec",
+        })
+      } catch (err) {
+        console.warn("[metaAds] creative id batch failed:", err.message)
+      }
+    }
 
     return ads.map((ad) => {
       const row = batch?.[ad.id]
-      const creative = row?.creative || {}
+      if (!row || row.error) return ad
+      let creative = pickCreativePayload(row)
+      if (creative.id && creativesById[creative.id] && !creativesById[creative.id].error) {
+        creative = { ...creative, ...creativesById[creative.id] }
+      }
+      const storyId = creative.effective_object_story_id || creative.object_story_id || null
+      const previewUrl = row.preview_shareable_link ? String(row.preview_shareable_link) : ad.previewUrl || null
+      const storyUrl = buildStoryUrl(storyId) || ad.storyUrl || null
       return {
         ...ad,
         thumbnailUrl: creative.thumbnail_url || creative.image_url || ad.thumbnailUrl || null,
         destinationUrl: extractCreativeDestinationUrl(creative) || ad.destinationUrl || null,
-        previewUrl: row?.preview_shareable_link ? String(row.preview_shareable_link) : ad.previewUrl || null,
+        previewUrl,
+        storyUrl,
       }
     })
   } catch (err) {
@@ -294,10 +334,7 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
           spend: parseMetricNumber(row.spend) || 0,
           ctr: parseMetricNumber(row.ctr),
           impressions: parseInt(row.impressions || 0, 10) || 0,
-          adsLibraryUrl: buildAdsLibraryUrl(row.ad_name),
-          adsManagerUrl: row.ad_id
-            ? `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${accountDigits}&selected_ad_ids=${row.ad_id}`
-            : null,
+          adsManagerUrl: buildAdsManagerAdUrl(accountDigits, row.ad_id),
         }))
         .sort((a, b) => b.clicks - a.clicks)
 

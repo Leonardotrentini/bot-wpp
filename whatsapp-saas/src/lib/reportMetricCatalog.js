@@ -574,8 +574,8 @@ export function resolveMetricData(metricId, data) {
           const value = hasConv
             ? `${leads} lead${leads === 1 ? '' : 's'} · ${sales} venda${sales === 1 ? '' : 's'}`
             : `${ad.clicks ?? 0} cliques`
-          // Preferir visualização: preview Meta → Biblioteca → Ads Manager (último recurso).
-          const href = ad.previewUrl || ad.adsLibraryUrl || ad.adsManagerUrl || null
+          // Anúncio real: preview Meta → post do criativo → Ads Manager com o ad_id da campanha.
+          const href = ad.previewUrl || ad.storyUrl || ad.adsManagerUrl || null
           return {
             id: ad.id,
             label: ad.name,
@@ -584,7 +584,7 @@ export function resolveMetricData(metricId, data) {
             href,
             thumbnail: ad.thumbnailUrl || null,
             destinationUrl: ad.destinationUrl || null,
-            adsLibraryUrl: ad.adsLibraryUrl && ad.adsLibraryUrl !== href ? ad.adsLibraryUrl : null,
+            storyUrl: ad.storyUrl && ad.storyUrl !== href ? ad.storyUrl : null,
             adsManagerUrl: ad.adsManagerUrl || null,
           }
         }),

@@ -102,7 +102,7 @@ export function ListWidget({ payload }) {
   return (
     <ul className={`space-y-3 ${hasRichAds ? '' : 'max-h-64 overflow-y-auto'}`}>
       {items.map((item, index) => {
-        const primaryHref = item.href || item.adsLibraryUrl || item.destinationUrl || item.adsManagerUrl || null
+        const primaryHref = item.href || item.storyUrl || item.adsManagerUrl || item.destinationUrl || null
         return (
           <li
             key={item.id ? `${item.id}-${index}` : `${item.label}-${index}`}
@@ -142,14 +142,14 @@ export function ListWidget({ payload }) {
                 </a>
               ) : null}
 
-              {item.adsLibraryUrl && item.adsLibraryUrl !== primaryHref ? (
+              {item.storyUrl && item.storyUrl !== primaryHref ? (
                 <a
-                  href={item.adsLibraryUrl}
+                  href={item.storyUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-1 inline-flex items-center gap-1 text-[11px] text-stone-500 hover:text-stone-300 transition"
                 >
-                  Ver na Biblioteca
+                  Ver criativo
                   <ExternalLink className="h-3 w-3 shrink-0" />
                 </a>
               ) : null}
