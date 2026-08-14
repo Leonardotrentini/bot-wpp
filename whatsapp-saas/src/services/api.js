@@ -826,6 +826,21 @@ export async function getMetaAdsDashboard(period = '7d') {
   })
 }
 
+export async function getMetaAdPreview(adId, { format } = {}) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(`/reports/meta/ads/${encodeURIComponent(adId)}/preview`, {
+      params: format ? { format } : undefined,
+    })
+  }
+  return mockResponse({
+    ok: true,
+    adId,
+    adFormat: format || 'MOBILE_FEED_STANDARD',
+    html: '<div style="padding:24px;font-family:sans-serif">Prévia simulada do anúncio</div>',
+    iframeSrc: null,
+  })
+}
+
 export async function testMetaAdsConnection(payload = {}) {
   if (resolveUseRealApi()) return apiClient.post('/integrations/meta/ads/test', payload)
   return mockResponse({

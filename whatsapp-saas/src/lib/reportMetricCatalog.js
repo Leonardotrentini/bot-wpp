@@ -574,17 +574,17 @@ export function resolveMetricData(metricId, data) {
           const value = hasConv
             ? `${leads} lead${leads === 1 ? '' : 's'} · ${sales} venda${sales === 1 ? '' : 's'}`
             : `${ad.clicks ?? 0} cliques`
-          // Anúncio real: preview Meta → post do criativo → Ads Manager com o ad_id da campanha.
-          const href = ad.previewUrl || ad.storyUrl || ad.adsManagerUrl || null
+          // Clique abre prévia na Vesto; Ads Manager fica como link secundário.
           return {
             id: ad.id,
             label: ad.name,
             sub: ad.campaignName !== '—' ? ad.campaignName : null,
             value,
-            href,
+            previewAdId: ad.id || null,
+            href: null,
             thumbnail: ad.thumbnailUrl || null,
             destinationUrl: ad.destinationUrl || null,
-            storyUrl: ad.storyUrl && ad.storyUrl !== href ? ad.storyUrl : null,
+            storyUrl: ad.storyUrl || null,
             adsManagerUrl: ad.adsManagerUrl || null,
           }
         }),

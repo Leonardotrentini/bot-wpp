@@ -380,6 +380,59 @@ async function fetchMetaAdsDashboard(prisma, userId, integration, { period = "7d
   }
 }
 
+function extractIframeSrc(html) {
+  const m = String(html || "").match(/\bsrc=["']([^"']+)["']/i)
+  if (!m?.[1]) return null
+  return m[1].replace(/&amp;/g, "&")
+}
+
+/**
+ * Prévia visual do anúncio (mesmo recurso do botão Prévia no Ads Manager).
+ * GET /{ad-id}/previews?ad_format=...
+ */
+async function fetchMetaAdPreview(integration, adId, { adFormat } = {}) {
+  const token = resolveAdsToken(integration)
+  if (!token) {
+    return { error: "NOT_CONFIGURED", message: "Configure o token da Marketing API." }
+  }
+
+  const id = String(adId || "").replace(/\D/g, "")
+  if (!id || id.length < 5) {
+    return { error: "VALIDATION", message: "ID do anúncio inválido." }
+  }
+
+  const formats = [
+    adFormat,
+    "MOBILE_FEED_STANDARD",
+    "DESKTOP_FEED_STANDARD",
+    "INSTAGRAM_STANDARD",
+    "INSTAGRAM_STORY",
+  ].filter((f, i, arr) => f && arr.indexOf(f) === i)
+
+  let lastError = null
+  for (const format of formats) {
+    try {
+      const json = await graphGet(`${id}/previews`, token, { ad_format: format })
+      const html = json?.data?.[0]?.body ? String(json.data[0].body) : null
+      if (!html) continue
+      return {
+        ok: true,
+        adId: id,
+        adFormat: format,
+        html,
+        iframeSrc: extractIframeSrc(html),
+      }
+    } catch (err) {
+      lastError = err
+    }
+  }
+
+  return {
+    error: "NO_PREVIEW",
+    message: lastError?.message || "A Meta não retornou prévia para este anúncio.",
+  }
+}
+
 async function testMetaAdsConnection(prisma, userId, integration, overrides = {}) {
   const requestedId = normalizeAdAccountId(overrides.adAccountId || integration.adAccountId)
   const overrideToken = String(overrides.adsAccessToken || "").trim()
@@ -423,6 +476,7 @@ module.exports = {
   resolveAdsToken,
   formatAdsFields,
   fetchMetaAdsDashboard,
+  fetchMetaAdPreview,
   testMetaAdsConnection,
   resolveInsightsDateParams,
   DATE_PRESETS,

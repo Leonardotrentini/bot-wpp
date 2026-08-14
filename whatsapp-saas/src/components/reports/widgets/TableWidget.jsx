@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ExternalLink, ImageIcon } from 'lucide-react'
+import { ExternalLink, ImageIcon, Loader2 } from 'lucide-react'
 import { Badge } from '../../common/Badge.jsx'
+import { Modal } from '../../common/Modal.jsx'
+import { Button } from '../../common/Button.jsx'
+import { getMetaAdPreview } from '../../../services/api.js'
 
-function AdThumbnail({ src, href, alt }) {
+function AdThumbnail({ src, onClick, alt }) {
   const [failed, setFailed] = useState(false)
 
   const inner = failed || !src ? (
@@ -20,11 +23,11 @@ function AdThumbnail({ src, href, alt }) {
     />
   )
 
-  if (href) {
+  if (onClick) {
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className="shrink-0 hover:opacity-90 transition">
+      <button type="button" onClick={onClick} className="shrink-0 hover:opacity-90 transition">
         {inner}
-      </a>
+      </button>
     )
   }
 
@@ -39,6 +42,111 @@ function truncateUrl(url) {
   } catch {
     return url.length > 42 ? `${url.slice(0, 42)}…` : url
   }
+}
+
+function AdPreviewModal({ item, onClose }) {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [preview, setPreview] = useState(null)
+
+  useEffect(() => {
+    if (!item?.previewAdId) return undefined
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setPreview(null)
+    getMetaAdPreview(item.previewAdId)
+      .then(({ data }) => {
+        if (cancelled) return
+        setPreview(data)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err?.response?.data?.message || 'Não foi possível carregar a prévia deste anúncio.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [item?.previewAdId])
+
+  return (
+    <Modal
+      isOpen={Boolean(item)}
+      onClose={onClose}
+      title={item?.label || 'Prévia do anúncio'}
+      size="lg"
+      footer={
+        <>
+          {item?.adsManagerUrl ? (
+            <a href={item.adsManagerUrl} target="_blank" rel="noopener noreferrer">
+              <Button variant="secondary" type="button">
+                Ads Manager
+                <ExternalLink className="h-3.5 w-3.5" />
+              </Button>
+            </a>
+          ) : null}
+          <Button variant="ghost" onClick={onClose}>
+            Fechar
+          </Button>
+        </>
+      }
+    >
+      {item?.sub ? <p className="mb-3 text-xs text-stone-500">{item.sub}</p> : null}
+
+      {loading ? (
+        <div className="flex min-h-[280px] items-center justify-center gap-2 text-sm text-stone-400">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Carregando prévia da Meta…
+        </div>
+      ) : null}
+
+      {!loading && error ? (
+        <div className="space-y-3 rounded-xl border border-amber-800/50 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">
+          <p>{error}</p>
+          {item?.thumbnail ? (
+            <img
+              src={item.thumbnail}
+              alt={item.label || ''}
+              className="mx-auto max-h-64 rounded-xl border border-brand-800 object-contain"
+            />
+          ) : null}
+          {item?.adsManagerUrl ? (
+            <a
+              href={item.adsManagerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-accent-400 hover:text-accent-300"
+            >
+              Abrir no Ads Manager
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!loading && !error && preview ? (
+        <div className="flex justify-center overflow-hidden rounded-xl border border-brand-800 bg-white">
+          {preview.iframeSrc ? (
+            <iframe
+              title={`Prévia ${item?.label || ''}`}
+              src={preview.iframeSrc}
+              className="h-[520px] w-full max-w-[360px] border-0 bg-white"
+              sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            />
+          ) : (
+            <div
+              className="w-full max-w-[420px] bg-white p-2 [&_iframe]:mx-auto [&_iframe]:max-w-full"
+              // HTML vem da Graph API (previews) — mesmo conteúdo do botão Prévia do Ads Manager.
+              dangerouslySetInnerHTML={{ __html: preview.html || '' }}
+            />
+          )}
+        </div>
+      ) : null}
+    </Modal>
+  )
 }
 
 export function TableWidget({ payload }) {
@@ -88,6 +196,7 @@ export function TableWidget({ payload }) {
 
 export function ListWidget({ payload }) {
   const { items = [], unavailable } = payload || {}
+  const [previewItem, setPreviewItem] = useState(null)
 
   if (unavailable) {
     return <p className="text-sm text-stone-500 py-4">Meta Ads não conectado ou indisponível.</p>
@@ -97,84 +206,98 @@ export function ListWidget({ payload }) {
     return <p className="text-sm text-stone-500">Sem dados no período.</p>
   }
 
-  const hasRichAds = items.some((item) => item.thumbnail || item.destinationUrl || item.href)
+  const hasRichAds = items.some((item) => item.thumbnail || item.destinationUrl || item.previewAdId || item.href)
 
   return (
-    <ul className={`space-y-3 ${hasRichAds ? '' : 'max-h-64 overflow-y-auto'}`}>
-      {items.map((item, index) => {
-        const primaryHref = item.href || item.storyUrl || item.adsManagerUrl || item.destinationUrl || null
-        return (
-          <li
-            key={item.id ? `${item.id}-${index}` : `${item.label}-${index}`}
-            className="flex items-center gap-3 rounded-xl border border-brand-800/40 bg-brand-950/30 p-3"
-          >
-            {(item.thumbnail || primaryHref) && (
-              <AdThumbnail src={item.thumbnail} href={primaryHref} alt={item.label} />
-            )}
+    <>
+      <ul className={`space-y-3 ${hasRichAds ? '' : 'max-h-64 overflow-y-auto'}`}>
+        {items.map((item, index) => {
+          const canPreview = Boolean(item.previewAdId)
+          const openPreview = canPreview ? () => setPreviewItem(item) : null
+          const fallbackHref = item.href || item.storyUrl || item.adsManagerUrl || item.destinationUrl || null
 
-            <div className="min-w-0 flex-1">
-              {primaryHref ? (
-                <a
-                  href={primaryHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-stone-200 hover:text-accent-400 transition font-medium leading-snug"
-                >
-                  <span className="truncate">{item.label}</span>
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                </a>
-              ) : (
-                <p className="text-stone-200 font-medium leading-snug truncate">{item.label}</p>
+          return (
+            <li
+              key={item.id ? `${item.id}-${index}` : `${item.label}-${index}`}
+              className="flex items-center gap-3 rounded-xl border border-brand-800/40 bg-brand-950/30 p-3"
+            >
+              {(item.thumbnail || canPreview || fallbackHref) && (
+                <AdThumbnail src={item.thumbnail} onClick={openPreview} alt={item.label} />
               )}
 
-              {item.sub ? <p className="text-xs text-stone-500 mt-0.5 truncate">{item.sub}</p> : null}
+              <div className="min-w-0 flex-1">
+                {canPreview ? (
+                  <button
+                    type="button"
+                    onClick={openPreview}
+                    className="inline-flex max-w-full items-center gap-1 text-left font-medium leading-snug text-stone-200 transition hover:text-accent-400"
+                  >
+                    <span className="truncate">{item.label}</span>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                  </button>
+                ) : fallbackHref ? (
+                  <a
+                    href={fallbackHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-medium leading-snug text-stone-200 transition hover:text-accent-400"
+                  >
+                    <span className="truncate">{item.label}</span>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                  </a>
+                ) : (
+                  <p className="truncate font-medium leading-snug text-stone-200">{item.label}</p>
+                )}
 
-              {item.destinationUrl && item.destinationUrl !== primaryHref ? (
-                <a
-                  href={item.destinationUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-[11px] text-sky-400/90 hover:text-sky-300 transition truncate max-w-full"
-                  title={item.destinationUrl}
-                >
-                  <span className="truncate">{truncateUrl(item.destinationUrl)}</span>
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
+                {item.sub ? <p className="mt-0.5 truncate text-xs text-stone-500">{item.sub}</p> : null}
+
+                {canPreview ? (
+                  <button
+                    type="button"
+                    onClick={openPreview}
+                    className="mt-1 inline-flex items-center gap-1 text-[11px] text-accent-400/90 transition hover:text-accent-300"
+                  >
+                    Ver prévia do anúncio
+                  </button>
+                ) : null}
+
+                {item.destinationUrl ? (
+                  <a
+                    href={item.destinationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 flex items-center gap-1 text-[11px] text-sky-400/90 transition hover:text-sky-300 truncate max-w-full"
+                    title={item.destinationUrl}
+                  >
+                    <span className="truncate">{truncateUrl(item.destinationUrl)}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                ) : null}
+
+                {item.adsManagerUrl ? (
+                  <a
+                    href={item.adsManagerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-1 inline-flex items-center gap-1 text-[11px] text-stone-500 transition hover:text-stone-300"
+                  >
+                    Abrir no Ads Manager
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                ) : null}
+              </div>
+
+              {item.value ? (
+                <Badge variant="muted" className="shrink-0 tabular-nums">
+                  {item.value}
+                </Badge>
               ) : null}
+            </li>
+          )
+        })}
+      </ul>
 
-              {item.storyUrl && item.storyUrl !== primaryHref ? (
-                <a
-                  href={item.storyUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-[11px] text-stone-500 hover:text-stone-300 transition"
-                >
-                  Ver criativo
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
-              ) : null}
-
-              {item.adsManagerUrl && item.adsManagerUrl !== primaryHref ? (
-                <a
-                  href={item.adsManagerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-flex items-center gap-1 text-[11px] text-stone-500 hover:text-stone-300 transition"
-                >
-                  Abrir no Ads Manager
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
-              ) : null}
-            </div>
-
-            {item.value ? (
-              <Badge variant="muted" className="shrink-0 tabular-nums">
-                {item.value}
-              </Badge>
-            ) : null}
-          </li>
-        )
-      })}
-    </ul>
+      {previewItem ? <AdPreviewModal item={previewItem} onClose={() => setPreviewItem(null)} /> : null}
+    </>
   )
 }
