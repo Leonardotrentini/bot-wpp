@@ -656,6 +656,7 @@ export function Admin() {
               <Input
                 label="Senha"
                 type="password"
+                revealable
                 value={newOrgOwner.password}
                 onChange={(e) => setNewOrgOwner((f) => ({ ...f, password: e.target.value }))}
                 placeholder="Mínimo 6 caracteres"
@@ -855,7 +856,8 @@ export function Admin() {
                         />
                         <Input
                           label="Senha"
-                          type="text"
+                          type="password"
+                          revealable
                           autoComplete="off"
                           value={draft.password}
                           placeholder="Digite nova senha ou deixe vazio"
@@ -922,7 +924,8 @@ export function Admin() {
                 />
                 <Input
                   label="Senha"
-                  type="text"
+                  type="password"
+                  revealable
                   autoComplete="off"
                   value={memberForm.password}
                   onChange={(e) => setMemberForm((f) => ({ ...f, password: e.target.value }))}
@@ -1051,6 +1054,7 @@ export function Admin() {
           <Input
             label="Senha"
             type="password"
+            revealable
             value={createForm.password}
             onChange={(e) => setCreateForm((prev) => ({ ...prev, password: e.target.value }))}
             placeholder="Mínimo 6 caracteres"
