@@ -219,10 +219,18 @@ router.patch("/users/:id", authMiddleware, requireAdmin, async (req, res) => {
 
 router.get("/organizations", authMiddleware, requireAdmin, async (req, res) => {
   const page = Math.max(1, parseInt(req.query.page || "1", 10) || 1)
-  const pageSize = Math.min(50, Math.max(1, parseInt(req.query.pageSize || "20", 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize || "20", 10) || 20))
   const q = typeof req.query.q === "string" ? req.query.q.trim() : ""
 
-  const where = q ? { name: { contains: q, mode: "insensitive" } } : {}
+  const where = q
+    ? {
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { members: { some: { user: { name: { contains: q, mode: "insensitive" } } } } },
+          { members: { some: { user: { email: { contains: q, mode: "insensitive" } } } } },
+        ],
+      }
+    : {}
 
   const [total, rows] = await prisma.$transaction([
     prisma.organization.count({ where }),
@@ -262,11 +270,18 @@ router.patch("/organizations/:id", authMiddleware, requireAdmin, async (req, res
   const parsed = schema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Nome inválido." })
 
-  const org = await prisma.organization.update({
+  const existing = await prisma.organization.findUnique({ where: { id: req.params.id }, select: { id: true } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Empresa não encontrada." })
+
+  await prisma.organization.update({
     where: { id: req.params.id },
     data: { name: parsed.data.name },
   })
-  res.json({ organization: { id: org.id, name: org.name, createdAt: org.createdAt.toISOString() } })
+  const org = await prisma.organization.findUnique({
+    where: { id: req.params.id },
+    include: orgInclude,
+  })
+  res.json({ organization: mapAdminOrganization(org) })
 })
 
 router.post("/organizations/:id/members", authMiddleware, requireAdmin, async (req, res) => {
@@ -474,9 +489,25 @@ router.post("/organizations", authMiddleware, requireAdmin, async (req, res) => 
   const schema = z.object({
     name: z.string().trim().min(2).max(120),
     ownerUserId: z.string().optional(),
+    owner: z
+      .object({
+        name: z.string().trim().min(2),
+        email: z.string().trim().email(),
+        password: z.string().min(6),
+      })
+      .optional(),
   })
   const parsed = schema.safeParse(req.body)
-  if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Nome inválido." })
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: "VALIDATION_ERROR",
+      message: "Dados inválidos. Informe o nome da empresa e, se criar o dono, nome, e-mail e senha.",
+    })
+  }
+
+  if (parsed.data.ownerUserId && parsed.data.owner) {
+    return res.status(400).json({ error: "VALIDATION_ERROR", message: "Use o dono existente ou crie um novo, não os dois." })
+  }
 
   if (parsed.data.ownerUserId) {
     const ownerUser = await prisma.user.findUnique({ where: { id: parsed.data.ownerUserId } })
@@ -485,6 +516,18 @@ router.post("/organizations", authMiddleware, requireAdmin, async (req, res) => 
     if (existingMember) {
       return res.status(409).json({ error: "ALREADY_MEMBER", message: "Usuário já pertence a uma empresa." })
     }
+  }
+
+  if (parsed.data.owner) {
+    const email = parsed.data.owner.email.toLowerCase()
+    const exists = await prisma.user.findUnique({ where: { email } })
+    if (exists) return res.status(409).json({ error: "EMAIL_IN_USE", message: "E-mail do dono já cadastrado." })
+  }
+
+  await ensureDefaultPlans()
+  const freePlan = parsed.data.owner ? await prisma.plan.findUnique({ where: { slug: "free" } }) : null
+  if (parsed.data.owner && !freePlan) {
+    return res.status(503).json({ error: "NO_DEFAULT_PLAN", message: "Plano padrão indisponível." })
   }
 
   const org = await prisma.$transaction(async (tx) => {
@@ -499,11 +542,38 @@ router.post("/organizations", authMiddleware, requireAdmin, async (req, res) => 
         },
       })
     }
+    if (parsed.data.owner) {
+      const passwordHash = await bcrypt.hash(parsed.data.owner.password, 10)
+      const user = await tx.user.create({
+        data: {
+          name: parsed.data.owner.name,
+          email: parsed.data.owner.email.toLowerCase(),
+          passwordHash,
+          role: "USER",
+        },
+      })
+      await tx.subscription.create({
+        data: { userId: user.id, planId: freePlan.id, status: "ACTIVE" },
+      })
+      await tx.organizationMember.create({
+        data: {
+          organizationId: created.id,
+          userId: user.id,
+          role: "OWNER",
+          joinedAt: new Date(),
+        },
+      })
+    }
     return created
   })
 
+  const full = await prisma.organization.findUnique({
+    where: { id: org.id },
+    include: orgInclude,
+  })
+
   res.status(201).json({
-    organization: { id: org.id, name: org.name, createdAt: org.createdAt.toISOString() },
+    organization: mapAdminOrganization(full),
   })
 })
 

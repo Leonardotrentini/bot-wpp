@@ -45,8 +45,7 @@ async function backfillAllUserOrganizations() {
     created += 1
   }
 
-  const { removed } = await cleanupEmptyOrganizations()
-  return { scanned: users.length, created, removed }
+  return { scanned: users.length, created, removed: 0 }
 }
 
 /** Remove empresas órfãs (sem membros), ex.: duplicatas criadas por engano. */

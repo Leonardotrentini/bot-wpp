@@ -20,6 +20,7 @@ import {
   getAdminUsers,
   impersonateAdminUser,
   patchAdminOrgMember,
+  patchAdminOrganization,
   patchAdminUser,
   patchAdminUserPlan,
 } from '../../services/api.js'
@@ -59,7 +60,13 @@ export function Admin() {
   const [appliedOrgQ, setAppliedOrgQ] = useState('')
   const [manageOrg, setManageOrg] = useState(null)
   const [newOrgName, setNewOrgName] = useState('')
+  const [newOrgOwner, setNewOrgOwner] = useState({ name: '', email: '', password: '' })
   const [creatingOrg, setCreatingOrg] = useState(false)
+  const [renamingId, setRenamingId] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [savingRenameId, setSavingRenameId] = useState(null)
+  const [orgNameDraft, setOrgNameDraft] = useState('')
+  const [savingOrgName, setSavingOrgName] = useState(false)
   const [memberForm, setMemberForm] = useState({ name: '', email: '', password: '', role: 'SELLER' })
   const [addingMember, setAddingMember] = useState(false)
   const [memberEdits, setMemberEdits] = useState({})
@@ -81,6 +88,7 @@ export function Admin() {
       const { data } = await getAdminOrganization(org.id)
       const fresh = data.organization
       setManageOrg(fresh)
+      setOrgNameDraft(fresh.name || '')
       initMemberEdits(fresh)
     } catch {
       setManageOrg(org)
@@ -96,15 +104,18 @@ export function Admin() {
   }
 
   async function refreshManageOrg(orgId) {
-      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
-    const list = (data.organizations || []).sort((a, b) => {
-      if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount
-      return a.name.localeCompare(b.name, 'pt-BR')
-    })
-    setOrgs(list)
-    const updated = list.find((o) => o.id === orgId)
+      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 200 })
+      const list = (data.organizations || []).slice().sort((a, b) => {
+        const aAt = new Date(a.createdAt || 0).getTime()
+        const bAt = new Date(b.createdAt || 0).getTime()
+        if (bAt !== aAt) return bAt - aAt
+        return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR')
+      })
+      setOrgs(list)
+      const updated = list.find((o) => o.id === orgId)
     if (updated) {
       setManageOrg(updated)
+      setOrgNameDraft(updated.name || '')
       initMemberEdits(updated)
     }
     await load()
@@ -166,10 +177,12 @@ export function Admin() {
     setOrgsLoading(true)
     try {
       await backfillAdminOrganizations().catch(() => {})
-      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 100 })
-      const list = (data.organizations || []).sort((a, b) => {
-        if (b.memberCount !== a.memberCount) return b.memberCount - a.memberCount
-        return a.name.localeCompare(b.name, 'pt-BR')
+      const { data } = await getAdminOrganizations({ q: appliedOrgQ.trim() || undefined, pageSize: 200 })
+      const list = (data.organizations || []).slice().sort((a, b) => {
+        const aAt = new Date(a.createdAt || 0).getTime()
+        const bAt = new Date(b.createdAt || 0).getTime()
+        if (bAt !== aAt) return bAt - aAt
+        return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR')
       })
       setOrgs(list)
     } catch (e) {
@@ -318,17 +331,62 @@ export function Admin() {
 
   async function onCreateOrg() {
     const name = newOrgName.trim()
+    const ownerName = newOrgOwner.name.trim()
+    const ownerEmail = newOrgOwner.email.trim().toLowerCase()
+    const ownerPassword = newOrgOwner.password
     if (name.length < 2) return toast.error('Informe o nome da empresa.')
+    if (ownerName.length < 2) return toast.error('Informe o nome do dono.')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) return toast.error('Informe um e-mail válido para o dono.')
+    if (ownerPassword.length < 6) return toast.error('Senha do dono deve ter pelo menos 6 caracteres.')
     setCreatingOrg(true)
     try {
-      await createAdminOrganization({ name })
-      toast.success('Empresa criada.')
+      const { data } = await createAdminOrganization({
+        name,
+        owner: { name: ownerName, email: ownerEmail, password: ownerPassword },
+      })
+      toast.success('Empresa e usuário dono criados.')
       setNewOrgName('')
+      setNewOrgOwner({ name: '', email: '', password: '' })
       await loadOrgs()
+      const created = data?.organization
+      if (created?.id) {
+        setOrgs((prev) => {
+          const rest = prev.filter((o) => o.id !== created.id)
+          return [created, ...rest]
+        })
+      }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Falha ao criar empresa.')
     } finally {
       setCreatingOrg(false)
+    }
+  }
+
+  function startRename(org) {
+    setRenamingId(org.id)
+    setRenameValue(org.name || '')
+  }
+
+  async function saveOrgName(orgId, name) {
+    const trimmed = String(name || '').trim()
+    if (trimmed.length < 2) return toast.error('Nome da empresa deve ter pelo menos 2 caracteres.')
+    setSavingRenameId(orgId)
+    setSavingOrgName(true)
+    try {
+      const { data } = await patchAdminOrganization(orgId, { name: trimmed })
+      const updated = data.organization
+      setOrgs((prev) => prev.map((o) => (o.id === orgId ? { ...o, ...updated } : o)))
+      if (manageOrg?.id === orgId) {
+        setManageOrg((prev) => (prev ? { ...prev, ...updated } : prev))
+        setOrgNameDraft(updated.name)
+      }
+      setRenamingId(null)
+      toast.success('Nome da empresa atualizado.')
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Falha ao renomear empresa.')
+    } finally {
+      setSavingRenameId(null)
+      setSavingOrgName(false)
     }
   }
 
@@ -348,7 +406,7 @@ export function Admin() {
         password,
         role: memberForm.role,
       })
-      toast.success('Membro adicionado à empresa.')
+      toast.success('Usuário adicionado à empresa.')
       setMemberForm({ name: '', email: '', password: '', role: 'SELLER' })
       await refreshManageOrg(manageOrg.id)
     } catch (e) {
@@ -570,32 +628,59 @@ export function Admin() {
       {tab === 'organizations' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-brand-800/80 bg-brand-900/40 px-4 py-3 text-sm text-stone-400">
-            Cada linha é uma <strong className="text-stone-200">empresa</strong>. O dono é quem criou a conta. Use{' '}
-            <strong className="text-stone-200">Gerenciar acessos</strong> para adicionar vendedores dentro da empresa.
+            Cada linha é uma <strong className="text-stone-200">empresa</strong>. Ao criar, informe também o dono (login).
+            Use o lápis para <strong className="text-stone-200">renomear</strong> e{' '}
+            <strong className="text-stone-200">Gerenciar acessos</strong> para adicionar vendedores.
           </div>
           <Card className="p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="flex-1">
-                <label className="mb-1 block text-xs text-stone-500">Nova empresa</label>
-                <Input
-                  value={newOrgName}
-                  onChange={(e) => setNewOrgName(e.target.value)}
-                  placeholder="Ex.: Baseset"
-                />
-              </div>
-              <Button type="button" onClick={onCreateOrg} disabled={creatingOrg}>
-                {creatingOrg ? 'Criando…' : 'Criar empresa'}
-              </Button>
-              <input
-                type="search"
-                placeholder="Buscar empresa…"
-                value={orgQ}
-                onChange={(e) => setOrgQ(e.target.value)}
-                className="min-w-[180px] rounded-xl border border-brand-700 bg-brand-900/80 px-3 py-2 text-sm text-stone-200"
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Input
+                label="Nome da empresa"
+                value={newOrgName}
+                onChange={(e) => setNewOrgName(e.target.value)}
+                placeholder="Ex.: Baseset"
               />
-              <Button variant="secondary" type="button" onClick={() => setAppliedOrgQ(orgQ)}>
-                Buscar
+              <Input
+                label="Nome do dono"
+                value={newOrgOwner.name}
+                onChange={(e) => setNewOrgOwner((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Ex.: George"
+              />
+              <Input
+                label="E-mail (login)"
+                type="email"
+                value={newOrgOwner.email}
+                onChange={(e) => setNewOrgOwner((f) => ({ ...f, email: e.target.value }))}
+                placeholder="george@empresa.com"
+              />
+              <Input
+                label="Senha"
+                type="password"
+                value={newOrgOwner.password}
+                onChange={(e) => setNewOrgOwner((f) => ({ ...f, password: e.target.value }))}
+                placeholder="Mínimo 6 caracteres"
+              />
+            </div>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button type="button" onClick={onCreateOrg} disabled={creatingOrg}>
+                <UserPlus className="h-4 w-4" />
+                {creatingOrg ? 'Criando…' : 'Criar empresa e dono'}
               </Button>
+              <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                <input
+                  type="search"
+                  placeholder="Buscar empresa, dono ou e-mail…"
+                  value={orgQ}
+                  onChange={(e) => setOrgQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') setAppliedOrgQ(orgQ)
+                  }}
+                  className="min-w-[180px] rounded-xl border border-brand-700 bg-brand-900/80 px-3 py-2 text-sm text-stone-200"
+                />
+                <Button variant="secondary" type="button" onClick={() => setAppliedOrgQ(orgQ)}>
+                  Buscar
+                </Button>
+              </div>
             </div>
           </Card>
 
@@ -619,9 +704,46 @@ export function Admin() {
                     {orgs.map((org) => (
                       <tr key={org.id} className="text-stone-300 hover:bg-white/[0.03]">
                         <td className="px-4 py-3 font-medium text-stone-100">
-                          {org.name}
-                          {org.memberCount === 0 && (
-                            <span className="ml-2 text-xs text-amber-500">(vazia)</span>
+                          {renamingId === org.id ? (
+                            <div className="flex min-w-[220px] items-center gap-2">
+                              <input
+                                value={renameValue}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') saveOrgName(org.id, renameValue)
+                                  if (e.key === 'Escape') setRenamingId(null)
+                                }}
+                                className="w-full rounded-lg border border-brand-700 bg-brand-950 px-2 py-1.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+                                autoFocus
+                              />
+                              <Button
+                                size="sm"
+                                type="button"
+                                disabled={savingRenameId === org.id}
+                                onClick={() => saveOrgName(org.id, renameValue)}
+                              >
+                                {savingRenameId === org.id ? '…' : 'Salvar'}
+                              </Button>
+                              <Button size="sm" variant="ghost" type="button" onClick={() => setRenamingId(null)}>
+                                Cancelar
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span>{org.name}</span>
+                              {org.memberCount === 0 && (
+                                <span className="text-xs text-amber-500">(vazia)</span>
+                              )}
+                              <button
+                                type="button"
+                                className="rounded-lg p-1 text-stone-500 transition hover:bg-white/5 hover:text-stone-100"
+                                title="Renomear empresa"
+                                aria-label="Renomear empresa"
+                                onClick={() => startRename(org)}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td className="px-4 py-3 text-stone-400">
@@ -673,6 +795,26 @@ export function Admin() {
       >
         {manageOrg && (
           <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-1 vg-scrollbar">
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium text-stone-300">Nome da empresa</h4>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <Input
+                    value={orgNameDraft}
+                    onChange={(e) => setOrgNameDraft(e.target.value)}
+                    placeholder="Nome da empresa"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={savingOrgName || orgNameDraft.trim() === (manageOrg.name || '')}
+                  onClick={() => saveOrgName(manageOrg.id, orgNameDraft)}
+                >
+                  {savingOrgName ? 'Salvando…' : 'Salvar nome'}
+                </Button>
+              </div>
+            </div>
             <div>
               <h4 className="mb-3 text-sm font-medium text-stone-300">Membros com acesso</h4>
               <div className="space-y-3">
@@ -765,7 +907,7 @@ export function Admin() {
               </div>
             </div>
             <div className="border-t border-brand-800 pt-4">
-              <h4 className="mb-3 text-sm font-medium text-stone-300">Adicionar vendedor</h4>
+              <h4 className="mb-3 text-sm font-medium text-stone-300">Adicionar usuário na empresa</h4>
               <div className="space-y-3">
                 <Input
                   label="Nome"
@@ -785,8 +927,21 @@ export function Admin() {
                   value={memberForm.password}
                   onChange={(e) => setMemberForm((f) => ({ ...f, password: e.target.value }))}
                 />
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-stone-300">Papel</span>
+                  <select
+                    value={memberForm.role}
+                    onChange={(e) => setMemberForm((f) => ({ ...f, role: e.target.value }))}
+                    className="w-full rounded-xl border border-brand-700 bg-brand-900/50 px-4 py-2.5 text-sm text-stone-50 outline-none focus:border-accent-500/60"
+                  >
+                    <option value="SELLER">Vendedor</option>
+                    <option value="OWNER" disabled={Boolean(manageOrg.owner)}>
+                      Dono{manageOrg.owner ? ' (já existe)' : ''}
+                    </option>
+                  </select>
+                </label>
                 <Button type="button" disabled={addingMember} onClick={onAddOrgMember}>
-                  {addingMember ? 'Adicionando…' : 'Criar vendedor na empresa'}
+                  {addingMember ? 'Adicionando…' : 'Criar usuário na empresa'}
                 </Button>
               </div>
             </div>
