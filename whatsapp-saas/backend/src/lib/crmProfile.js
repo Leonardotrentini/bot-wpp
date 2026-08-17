@@ -206,17 +206,28 @@ async function applyLidPhoneMap(deps, userId, lidPhoneMap) {
   let updated = 0
   for (const [remoteJid, phone] of lidPhoneMap.entries()) {
     if (!phone) continue
-    const contact = await prisma.crmContact.findUnique({
+    let contact = await prisma.crmContact.findUnique({
       where: { userId_remoteJid: { userId, remoteJid } },
       select: { id: true, phone: true },
     })
-    if (!contact || contact.phone) continue
-    await prisma.crmContact.update({ where: { id: contact.id }, data: { phone } }).catch(() => {})
-    updated += 1
+    if (!contact) {
+      const { findContactByLidJid } = require("./crmContactMerge")
+      contact = await findContactByLidJid(prisma, { userId, lidJid: remoteJid })
+    }
+    if (!contact) continue
+    if (!contact.phone) {
+      await prisma.crmContact.update({ where: { id: contact.id }, data: { phone } }).catch(() => {})
+      updated += 1
+    }
+
+    const { unifyContactSiblings, emitUnificationEvents } = require("./crmContactMerge")
+    const unification = await unifyContactSiblings(prisma, { userId, contactId: contact.id }).catch(() => null)
+    emitUnificationEvents(emitCrmEvent, io, userId, unification)
 
     if (io) {
+      const keptRemoteJid = unification?.contact?.remoteJid || remoteJid
       const conversation = await prisma.crmConversation.findUnique({
-        where: { userId_remoteJid: { userId, remoteJid } },
+        where: { userId_remoteJid: { userId, remoteJid: keptRemoteJid } },
         include: CONVERSATION_INCLUDE,
       })
       if (conversation) {
@@ -337,6 +348,13 @@ async function reidentifyContactsFromMessages(deps, userId) {
     await prisma.crmContact.update({ where: { id: contact.id }, data }).catch(() => {})
     updated += 1
 
+    if (data.phone) {
+      const { unifyContactSiblings, emitUnificationEvents } = require("./crmContactMerge")
+      const unification = await unifyContactSiblings(prisma, { userId, contactId: contact.id }).catch(() => null)
+      emitUnificationEvents(emitCrmEvent, io, userId, unification)
+      if (unification?.merged) continue
+    }
+
     if (io) {
       const conversation = await prisma.crmConversation.findUnique({
         where: { userId_remoteJid: { userId, remoteJid: contact.remoteJid } },
@@ -381,8 +399,13 @@ async function syncContactProfiles(deps, { userId, instanceName, chats = [] } = 
   const enriched = await enrichContactsFromDirectory(prisma, userId, directory).catch(() => 0)
   const queued = await queueMissingProfileFetches(deps, { userId, instanceName, limit: PROFILE_BATCH_QUEUE_MAX })
   const avatarQueued = await queueStaleAvatarRefreshes(deps, { userId, instanceName, limit: PROFILE_BATCH_QUEUE_MAX })
+  const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("./crmContactMerge")
+  const lidMerged = await unifyLidPhoneDuplicates(prisma, { userId, limit: 80 }).catch(() => ({ merged: 0, results: [] }))
+  for (const row of lidMerged.results || []) {
+    emitUnificationEvents(emitCrmEvent, deps.io, userId, row)
+  }
 
-  return { enriched, queued, avatarQueued, namesFromMessages, lidPhonesResolved, phonesBackfilled, clearedPushNames, directorySize: directory.size, directory }
+  return { enriched, queued, avatarQueued, namesFromMessages, lidPhonesResolved, phonesBackfilled, clearedPushNames, directorySize: directory.size, directory, lidMerged: lidMerged.merged }
 }
 
 function queueMissingProfileFetches(deps, { userId, instanceName, limit = PROFILE_BATCH_QUEUE_MAX }) {

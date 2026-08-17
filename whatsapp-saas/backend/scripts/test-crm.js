@@ -56,6 +56,61 @@ test("phoneFromJid extrai telefone válido", () => {
   assert.strictEqual(phoneFromJid("12@s.whatsapp.net"), null) // curto demais
 })
 
+const { phoneLookupVariants } = require("../src/lib/participantIdentity")
+const {
+  pickCanonicalPair,
+  pickOrphanLidTwin,
+  isDistinctPreview,
+} = require("../src/lib/crmContactMerge")
+
+test("phoneLookupVariants cobre 9º dígito e DDI 55", () => {
+  const v = phoneLookupVariants("5546999744840")
+  assert.ok(v.includes("5546999744840"))
+  assert.ok(v.includes("554699744840"))
+})
+
+test("pickCanonicalPair prefere o contato com telefone/JID real", () => {
+  const lid = {
+    id: "lid",
+    remoteJid: "999@lid",
+    name: "Contato",
+    phone: null,
+    tags: [],
+  }
+  const pn = {
+    id: "pn",
+    remoteJid: "5546999744840@s.whatsapp.net",
+    name: "Lizete - Modzel personalizados",
+    phone: "5546999744840",
+    tags: [{ tag: { name: "QUALIFICADO" } }],
+  }
+  const { target, source } = pickCanonicalPair(lid, pn)
+  assert.strictEqual(target.id, "pn")
+  assert.strictEqual(source.id, "lid")
+})
+
+test("isDistinctPreview ignora rótulos curtos de mídia", () => {
+  assert.strictEqual(isDistinctPreview("📷 Imagem"), false)
+  assert.strictEqual(isDistinctPreview("A satisfação é minha, Lizete. 🤝"), true)
+})
+
+test("pickOrphanLidTwin une pelo preview+avatar e recusa ambiguidade", () => {
+  const lid = { id: "lid", avatarUrl: "https://pic/lizete.jpg" }
+  const preview = "A satisfação é minha, Lizete. 🤝"
+  const pn = {
+    lastMessagePreview: preview,
+    contact: { id: "pn", avatarUrl: "https://pic/lizete.jpg" },
+  }
+  assert.strictEqual(pickOrphanLidTwin(lid, preview, [pn])?.contact.id, "pn")
+  assert.strictEqual(pickOrphanLidTwin(lid, "oi", [pn]), null)
+  const other = {
+    lastMessagePreview: preview,
+    contact: { id: "other", avatarUrl: "https://pic/outra.jpg" },
+  }
+  assert.strictEqual(pickOrphanLidTwin(lid, preview, [pn, other])?.contact.id, "pn")
+  assert.strictEqual(pickOrphanLidTwin({ id: "lid" }, preview, [pn, other]), null)
+})
+
 test("previewFromBody usa texto quando existe e rótulo de mídia quando não", () => {
   assert.strictEqual(previewFromBody("Olá, tudo bem?", "text"), "Olá, tudo bem?")
   assert.strictEqual(previewFromBody("", "imageMessage"), "📷 Imagem")

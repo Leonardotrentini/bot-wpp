@@ -14,6 +14,7 @@ const {
   looksLikeInternalIdName,
   phoneDigitsFromJid,
   phoneDigitsFromValue,
+  phoneLookupVariants,
 } = require("./participantIdentity")
 
 const INDIVIDUAL_JID_RE = /@(s\.whatsapp\.net|lid)$/i
@@ -140,12 +141,15 @@ function resolveContactDisplayName(contact) {
 }
 
 function siblingPhoneWhere(userId, contactId, phone) {
-  const digits = String(phone || "").replace(/\D/g, "")
-  if (!digits || digits.length < 8) return null
+  const variants = phoneLookupVariants(phone)
+  if (!variants.length) return null
   return {
     userId,
     id: { not: contactId },
-    OR: [{ phone: digits }, { remoteJid: `${digits}@s.whatsapp.net` }],
+    OR: [
+      { phone: { in: variants } },
+      { remoteJid: { in: variants.map((v) => `${v}@s.whatsapp.net`) } },
+    ],
   }
 }
 
@@ -351,25 +355,77 @@ function cleanIncomingPushName(value, remoteJid) {
   return sanitizePushName(value, phoneDigits)
 }
 
-/** Garante contato + conversa para um JID individual. */
-async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint } = {}) {
-  const jid = String(remoteJid).trim()
-  const phone = phoneHint || phoneFromJid(jid) || phoneDigitsFromJid(jid)
-
+async function lookupExistingContact(prisma, { userId, jid, phone }) {
   let contact = await prisma.crmContact.findUnique({
     where: { userId_remoteJid: { userId, remoteJid: jid } },
   })
+  if (contact) return contact
+
+  const { findContactByLidJid, findContactByPhone } = require("./crmContactMerge")
+
+  if (isLidJid(jid)) {
+    contact = await findContactByLidJid(prisma, { userId, lidJid: jid })
+    if (contact) return contact
+  }
+
+  if (phone) {
+    contact = await findContactByPhone(prisma, { userId, phone })
+    if (contact) return contact
+  }
+  return null
+}
+
+async function promoteLidContactToPhoneJid(prisma, contact, { phoneJid, phone }) {
+  if (!contact || !phoneJid || !isLidJid(contact.remoteJid)) return contact
+  if (contact.remoteJid === phoneJid) return contact
+  const taken = await prisma.crmContact.findUnique({
+    where: { userId_remoteJid: { userId: contact.userId, remoteJid: phoneJid } },
+    select: { id: true },
+  })
+  if (taken && taken.id !== contact.id) return contact
+
+  try {
+    const previousLid = contact.lidJid || contact.remoteJid
+    contact = await prisma.crmContact.update({
+      where: { id: contact.id },
+      data: {
+        remoteJid: phoneJid,
+        phone: phone || contact.phone,
+        isLid: false,
+        lidJid: previousLid,
+      },
+    })
+    await prisma.crmConversation.updateMany({
+      where: { contactId: contact.id },
+      data: { remoteJid: phoneJid },
+    })
+  } catch (err) {
+    if (err?.code !== "P2002") throw err
+  }
+  return contact
+}
+
+/** Garante contato + conversa para um JID individual (reusa LID↔telefone da mesma inbox). */
+async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint } = {}) {
+  const jid = String(remoteJid).trim()
+  const phone = phoneHint || phoneFromJid(jid) || phoneDigitsFromJid(jid)
+  const incomingIsLid = isLidJid(jid)
+  const { unifyContactSiblings } = require("./crmContactMerge")
+
+  let contact = await lookupExistingContact(prisma, { userId, jid, phone })
   let shouldInheritName = false
+
   if (!contact) {
     try {
       contact = await prisma.crmContact.create({
         data: {
           userId,
           remoteJid: jid,
+          lidJid: incomingIsLid ? jid : null,
           pushName: pushName || null,
           avatarUrl: avatarUrl || null,
           phone,
-          isLid: isLidJid(jid),
+          isLid: incomingIsLid,
         },
       })
       shouldInheritName = true
@@ -388,6 +444,9 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
       data.phone = phone
       shouldInheritName = isGenericSavedName(contact.name)
     }
+    if (incomingIsLid && !contact.lidJid && !isLidJid(contact.remoteJid)) {
+      data.lidJid = jid
+    }
     if (Object.keys(data).length) {
       contact = await prisma.crmContact.update({
         where: { id: contact.id },
@@ -396,14 +455,33 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
     }
   }
 
+  if (!incomingIsLid && phone && isLidJid(contact.remoteJid)) {
+    contact = await promoteLidContactToPhoneJid(prisma, contact, {
+      phoneJid: `${phone}@s.whatsapp.net`,
+      phone,
+    })
+  }
+
   if (shouldInheritName) {
     contact = await inheritSavedNameFromPhoneSiblings(prisma, { userId, contact })
   }
 
+  const unification = await unifyContactSiblings(prisma, { userId, contactId: contact.id }).catch((err) => {
+    console.warn("[crm] unifyContactSiblings:", err?.message || err)
+    return null
+  })
+  if (unification?.contact) contact = unification.contact
+
   let conversation = await prisma.crmConversation.findUnique({
-    where: { userId_remoteJid: { userId, remoteJid: jid } },
+    where: { contactId: contact.id },
     include: CONVERSATION_INCLUDE,
   })
+  if (!conversation) {
+    conversation = await prisma.crmConversation.findUnique({
+      where: { userId_remoteJid: { userId, remoteJid: contact.remoteJid } },
+      include: CONVERSATION_INCLUDE,
+    })
+  }
   if (!conversation) {
     const defaultStage = await prisma.crmKanbanStage.findFirst({
       where: { userId, isDefault: true },
@@ -414,7 +492,7 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
         data: {
           userId,
           contactId: contact.id,
-          remoteJid: jid,
+          remoteJid: contact.remoteJid,
           kanbanStageId: defaultStage?.id || null,
         },
         include: CONVERSATION_INCLUDE,
@@ -423,14 +501,20 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
     } catch (err) {
       if (err?.code !== "P2002") throw err
       conversation = await prisma.crmConversation.findUnique({
-        where: { userId_remoteJid: { userId, remoteJid: jid } },
+        where: { userId_remoteJid: { userId, remoteJid: contact.remoteJid } },
         include: CONVERSATION_INCLUDE,
       })
+      if (!conversation) {
+        conversation = await prisma.crmConversation.findUnique({
+          where: { contactId: contact.id },
+          include: CONVERSATION_INCLUDE,
+        })
+      }
       if (!conversation) throw err
     }
   }
 
-  return { contact, conversation }
+  return { contact, conversation, unification }
 }
 
 const { unwrapBaileysMessage, mergeInboundMessageRaw } = require("./crmMedia")
@@ -492,10 +576,12 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
 
   const hints = extractIdentityHintsFromRecord(record, remoteJid)
 
-  const { conversation } = await ensureContactAndConversation(prisma, userId, remoteJid, {
+  const { conversation, unification } = await ensureContactAndConversation(prisma, userId, remoteJid, {
     pushName: pushName || (!mapped.fromMe ? hints.pushName : null),
     phone: hints.phone,
   })
+  const { emitUnificationEvents, unifyContactSiblings } = require("./crmContactMerge")
+  emitUnificationEvents(emitCrmEvent, deps.io, userId, unification)
   const isNewConversation = Boolean(conversation.__isNew)
 
   if (!mapped.fromMe) {
@@ -538,7 +624,7 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     ? mergeInboundMessageRaw(existing.raw, mapped.raw)
     : mapped.raw
 
-  const message = await prisma.crmMessage.upsert({
+  let message = await prisma.crmMessage.upsert({
     where: { conversationId_messageId: { conversationId: conversation.id, messageId: mapped.messageId } },
     create: {
       userId,
@@ -561,7 +647,7 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       mediaMime: extractMediaMime(record) || existing?.mediaMime || null,
     },
   })
-  const created = !existing
+  let created = !existing
 
   const convData = {}
   if (!conversation.lastMessageAt || mapped.timestamp >= conversation.lastMessageAt) {
@@ -607,7 +693,35 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     include: CONVERSATION_INCLUDE,
   })
 
-  if (isNewConversation) {
+  let lateUnify = null
+  if (updatedConversation?.contact && isLidJid(updatedConversation.remoteJid || remoteJid)) {
+    lateUnify = await unifyContactSiblings(prisma, {
+      userId,
+      contactId: updatedConversation.contact.id,
+    }).catch(() => null)
+    emitUnificationEvents(emitCrmEvent, deps.io, userId, lateUnify)
+    if (lateUnify?.merged && lateUnify.conversationId) {
+      const kept = await prisma.crmConversation.findUnique({
+        where: { id: lateUnify.conversationId },
+        include: CONVERSATION_INCLUDE,
+      })
+      if (kept) updatedConversation = kept
+      const keptMsg = await prisma.crmMessage.findUnique({
+        where: {
+          conversationId_messageId: {
+            conversationId: lateUnify.conversationId,
+            messageId: mapped.messageId,
+          },
+        },
+      })
+      if (keptMsg) {
+        if (keptMsg.id !== message.id) created = false
+        message = keptMsg
+      }
+    }
+  }
+
+  if (isNewConversation && !lateUnify?.merged) {
     const { logContactActivity } = require("./crmContactActivity")
     await logContactActivity(prisma, {
       userId,

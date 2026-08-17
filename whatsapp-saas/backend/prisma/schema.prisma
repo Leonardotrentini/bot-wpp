@@ -346,6 +346,8 @@ model CrmContact {
   id           String           @id @default(cuid())
   userId       String
   remoteJid    String
+  /// JID @lid quando o contato canônico já é o número (@s.whatsapp.net).
+  lidJid       String?
   name         String?
   pushName     String?
   phone        String?
@@ -368,6 +370,8 @@ model CrmContact {
 
   @@unique([userId, remoteJid])
   @@index([userId])
+  @@index([userId, lidJid])
+  @@index([userId, phone])
 }
 
 model CrmContactReminder {

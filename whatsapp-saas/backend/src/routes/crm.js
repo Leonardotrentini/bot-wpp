@@ -63,6 +63,7 @@ const { listCrmSales } = require("../lib/crmSales")
 const { ensureDefaultTags, isQualifiedTagName, resolveTagForContactUser, tagNameKey } = require("../lib/crmDefaults")
 const { trackMetaForContactTag } = require("../lib/metaConversions")
 const { reassignContactToSeller } = require("../lib/crmReassign")
+const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("../lib/crmContactMerge")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -213,8 +214,6 @@ function createCrmRouter({ io }) {
     const userId = req.user.sub
     await ensureDefaultStages(userId)
 
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || "100", 10) || 100))
-    const offset = Math.max(0, parseInt(req.query.offset || "0", 10) || 0)
     const { status, stageId, tagId, q, sellerUserId } = req.query
 
     const where = scopeWhere(req)
@@ -241,6 +240,19 @@ function createCrmRouter({ io }) {
       }
       where.userId = sid
     }
+
+    const unifyIds = typeof where.userId === "string"
+      ? [where.userId]
+      : Array.isArray(where.userId?.in)
+        ? where.userId.in
+        : [userId]
+    const lidCleanup = await unifyLidPhoneDuplicates(prisma, { userIds: unifyIds, limit: 80 }).catch(() => ({ results: [] }))
+    for (const row of lidCleanup.results || []) {
+      emitUnificationEvents(emitCrmEvent, io, row.contact?.userId || userId, row)
+    }
+
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit || "100", 10) || 100))
+    const offset = Math.max(0, parseInt(req.query.offset || "0", 10) || 0)
     if (q && String(q).trim()) {
       const term = String(q).trim()
       where.OR = [

@@ -42,6 +42,27 @@ function phoneDigitsFromValue(value) {
   return isLikelyPhoneDigits(digits) ? digits : null
 }
 
+/** Variantes BR (9º dígito / +55) para achar o mesmo número em JIDs diferentes. */
+function phoneLookupVariants(digits) {
+  const d = digitsOnly(digits)
+  const out = new Set()
+  if (!d || d.length < 8) return []
+  out.add(d)
+  if (d.startsWith("55") && d.length === 13) {
+    out.add(d.slice(0, 4) + d.slice(5))
+    out.add(d.slice(2))
+  } else if (d.startsWith("55") && d.length === 12) {
+    out.add(d.slice(0, 4) + "9" + d.slice(4))
+    out.add(d.slice(2))
+  }
+  if (!d.startsWith("55") && d.length === 11) out.add("55" + d)
+  if (!d.startsWith("55") && d.length === 10) {
+    out.add("55" + d)
+    out.add("55" + d.slice(0, 2) + "9" + d.slice(2))
+  }
+  return [...out]
+}
+
 function formatPhoneBr(digits) {
   if (!digits) return "—"
   if (digits.length === 13 && digits.startsWith("55")) {
@@ -203,6 +224,7 @@ module.exports = {
   resolvePhoneDigits,
   phoneDigitsFromJid,
   phoneDigitsFromValue,
+  phoneLookupVariants,
   displayNameFromParticipant,
   digitsOnly,
   isLikelyPhoneDigits,
