@@ -135,6 +135,7 @@ function CrmTabHeader({
   refreshing,
   onImportPack,
   packImporting,
+  showImportPack = false,
   showSellerFilter,
   sellerFilter,
   onSellerFilterChange,
@@ -183,16 +184,18 @@ function CrmTabHeader({
             </Select>
           </div>
         ) : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={packImporting}
-          onClick={onImportPack}
-          title="Importar pack JSON (tags, estágios e fluxos)"
-        >
-          {packImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-          Importar pack
-        </Button>
+        {showImportPack ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={packImporting}
+            onClick={onImportPack}
+            title="Importar pack JSON (tags, estágios e fluxos)"
+          >
+            {packImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            Importar pack
+          </Button>
+        ) : null}
         <CrmSettingsToolBtn title="Gerenciar tags do CRM" label="Tags" onClick={() => onOpenSettings('tags')}>
           <TagIcon className="h-4 w-4" />
         </CrmSettingsToolBtn>
@@ -1779,7 +1782,7 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
 export function Crm() {
   const toast = useToast()
   const navigate = useNavigate()
-  const { user, isOrgOwner } = useAuth()
+  const { user, isOrgOwner, isAdmin } = useAuth()
   const [sellerFilter, setSellerFilter] = useState('')
   const [orgMembers, setOrgMembers] = useState([])
   const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '' })
@@ -1945,6 +1948,10 @@ export function Crm() {
 
   const handleImportPackFile = useCallback(
     async (file) => {
+      if (!isAdmin) {
+        toast.error('Somente administradores podem importar pack.')
+        return
+      }
       if (!file) return
       setPackImporting(true)
       try {
@@ -1977,7 +1984,7 @@ export function Crm() {
         if (packFileRef.current) packFileRef.current.value = ''
       }
     },
-    [toast, reloadFlowsForce],
+    [toast, reloadFlowsForce, isAdmin],
   )
 
   const loadAgents = useCallback(async () => {
@@ -2147,22 +2154,25 @@ export function Crm() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <input
-          ref={packFileRef}
-          type="file"
-          accept="application/json,.json"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) void handleImportPackFile(file)
-          }}
-        />
+        {isAdmin ? (
+          <input
+            ref={packFileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void handleImportPackFile(file)
+            }}
+          />
+        ) : null}
         <CrmTabHeader
           tab={tab}
           onChange={setTab}
           onOpenSettings={setSettingsPanel}
           onImportPack={() => packFileRef.current?.click()}
           packImporting={packImporting}
+          showImportPack={isAdmin}
         />
         <div className="flex justify-center py-20">
           <Spinner />
@@ -2173,16 +2183,18 @@ export function Crm() {
 
   return (
     <div className="space-y-4">
-      <input
-        ref={packFileRef}
-        type="file"
-        accept="application/json,.json"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) void handleImportPackFile(file)
-        }}
-      />
+      {isAdmin ? (
+        <input
+          ref={packFileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) void handleImportPackFile(file)
+          }}
+        />
+      ) : null}
       <CrmTabHeader
         tab={tab}
         onChange={setTab}
@@ -2190,6 +2202,7 @@ export function Crm() {
         refreshing={refreshing}
         onImportPack={() => packFileRef.current?.click()}
         packImporting={packImporting}
+        showImportPack={isAdmin}
         showSellerFilter={tab === 'kanban' && isOrgOwner && orgMembers.length > 0}
         sellerFilter={sellerFilter}
         onSellerFilterChange={setSellerFilter}
