@@ -8,6 +8,18 @@ const { trackCrmQuoteEvent, trackCrmPurchaseEvent } = require("./metaConversions
 const QUOTE_TAG_NAME = "Orçamento"
 const LEGACY_QUOTE_TAG_PREFIX = "Orçamento "
 const PURCHASE_TAG_NAME = "Comprou"
+const CUSTOMER_TYPES = Object.freeze(["new", "returning"])
+
+function normalizeCustomerType(value) {
+  const v = String(value || "").trim()
+  return CUSTOMER_TYPES.includes(v) ? v : null
+}
+
+function customerTypeLabel(value) {
+  if (value === "new") return "Cliente novo"
+  if (value === "returning") return "Cliente antigo"
+  return null
+}
 const PURCHASE_STAGE_PATTERN = /fechado|ganho|vendido/i
 
 function formatBrl(amount) {
@@ -38,8 +50,12 @@ function activityLabel(type, payload = {}) {
       return payload.tagName ? `Tag removida: ${payload.tagName}` : "Tag removida"
     case "quote_saved":
       return payload.amount != null ? `Orçamento salvo: ${formatBrl(payload.amount)}` : "Orçamento salvo"
-    case "purchase_confirmed":
-      return payload.amount != null ? `Compra confirmada: ${formatBrl(payload.amount)}` : "Compra confirmada"
+    case "purchase_confirmed": {
+      const amountPart =
+        payload.amount != null ? `Compra confirmada: ${formatBrl(payload.amount)}` : "Compra confirmada"
+      const typePart = customerTypeLabel(payload.customerType)
+      return typePart ? `${amountPart} · ${typePart}` : amountPart
+    }
     case "contact_named":
       return payload.name ? `Contato salvo como ${payload.name}` : "Nome do contato atualizado"
     case "lead_reassigned":
@@ -286,7 +302,7 @@ async function deleteContactActivity(prisma, userId, contactId, activityId) {
 async function updateContactActivity(
   prisma,
   io,
-  { userId, contactId, activityId, amount, ticket, at, actorUserId, actorName },
+  { userId, contactId, activityId, amount, ticket, customerType, at, actorUserId, actorName },
 ) {
   const contact = await prisma.crmContact.findFirst({ where: { id: contactId, userId } })
   if (!contact) return { error: "NOT_FOUND" }
@@ -312,6 +328,11 @@ async function updateContactActivity(
   }
   if (activity.type === "purchase_confirmed" && ticket !== undefined) {
     nextPayload.ticket = ticket ? String(ticket).trim() : null
+  }
+  if (activity.type === "purchase_confirmed" && customerType !== undefined) {
+    const normalized = normalizeCustomerType(customerType)
+    if (!normalized) return { error: "INVALID_CUSTOMER_TYPE" }
+    nextPayload.customerType = normalized
   }
   if (actorUserId && !nextPayload.actorUserId) {
     nextPayload.actorUserId = actorUserId
@@ -342,6 +363,7 @@ async function updateContactActivity(
         amount: nextPayload.amount,
         currency: "BRL",
         ticket: nextPayload.ticket || null,
+        customerType: nextPayload.customerType || null,
         confirmedAt: updatedActivity.createdAt.toISOString(),
       }
     } else {
@@ -483,7 +505,7 @@ async function saveContactQuote(prisma, io, { userId, contactId, amount, actorUs
 async function confirmContactPurchase(
   prisma,
   io,
-  { userId, contactId, amount, ticket, moveToClosed = true, actorUserId, actorName },
+  { userId, contactId, amount, ticket, customerType, moveToClosed = true, actorUserId, actorName },
 ) {
   const contact = await prisma.crmContact.findFirst({
     where: { id: contactId, userId },
@@ -493,6 +515,9 @@ async function confirmContactPurchase(
 
   const value = Math.round(Number(amount) * 100) / 100
   if (!Number.isFinite(value) || value <= 0) return { error: "INVALID_AMOUNT" }
+
+  const normalizedCustomerType = normalizeCustomerType(customerType)
+  if (!normalizedCustomerType) return { error: "INVALID_CUSTOMER_TYPE" }
 
   const tag = await ensureTag(prisma, userId, PURCHASE_TAG_NAME, "#34d399")
   const tagLink = await addContactTagLink(prisma, contact.id, tag.id)
@@ -507,6 +532,7 @@ async function confirmContactPurchase(
     amount: value,
     currency: "BRL",
     ticket: ticketValue,
+    customerType: normalizedCustomerType,
     confirmedAt,
   }
 
@@ -536,6 +562,7 @@ async function confirmContactPurchase(
   const purchasePayload = {
     amount: value,
     ticket: ticketValue,
+    customerType: normalizedCustomerType,
     actorUserId: actorUserId || userId,
     actorName: actorName || null,
   }
@@ -576,6 +603,9 @@ module.exports = {
   QUOTE_TAG_NAME,
   LEGACY_QUOTE_TAG_PREFIX,
   PURCHASE_TAG_NAME,
+  CUSTOMER_TYPES,
+  normalizeCustomerType,
+  customerTypeLabel,
   formatBrl,
   logContactActivity,
   getContactActivityTimeline,

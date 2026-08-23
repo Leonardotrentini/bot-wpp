@@ -115,6 +115,12 @@ function amountToInput(value) {
   return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+function customerTypeLabel(value) {
+  if (value === 'new') return 'Cliente novo'
+  if (value === 'returning') return 'Cliente antigo'
+  return null
+}
+
 function isoToDatetimeLocal(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -151,6 +157,7 @@ export function Sales() {
   const [editSale, setEditSale] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [editTicket, setEditTicket] = useState('')
+  const [editCustomerType, setEditCustomerType] = useState(null)
   const [editAt, setEditAt] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const [deleteSale, setDeleteSale] = useState(null)
@@ -315,6 +322,9 @@ export function Sales() {
     setEditSale(sale)
     setEditAmount(amountToInput(sale.amount))
     setEditTicket(sale.ticket || '')
+    setEditCustomerType(
+      sale.customerType === 'new' || sale.customerType === 'returning' ? sale.customerType : null,
+    )
     setEditAt(isoToDatetimeLocal(sale.confirmedAt))
   }
 
@@ -333,11 +343,16 @@ export function Sales() {
       toast.error('Informe uma data válida.')
       return
     }
+    if (!editCustomerType) {
+      toast.error('Selecione se é Cliente Novo ou Cliente Antigo.')
+      return
+    }
     setSavingEdit(true)
     try {
       await updateCrmContactActivity(editSale.contact.id, editSale.id, {
         amount,
         ticket: editTicket.trim() || null,
+        customerType: editCustomerType,
         at,
       })
       toast.success('Venda atualizada.')
@@ -591,6 +606,7 @@ export function Sales() {
                     <th className="px-3 py-3 font-medium">Tags</th>
                     <th className="px-3 py-3 font-medium">Valor</th>
                     <th className="px-3 py-3 font-medium">Ticket</th>
+                    <th className="px-3 py-3 font-medium">Tipo</th>
                     <th className="px-3 py-3 font-medium text-right">Ação</th>
                   </tr>
                 </thead>
@@ -641,6 +657,9 @@ export function Sales() {
                         </td>
                         <td className="px-3 py-3 font-semibold text-emerald-400">{formatBrl(sale.amount)}</td>
                         <td className="px-3 py-3 text-stone-400">{sale.ticket || '—'}</td>
+                        <td className="px-3 py-3 text-stone-300">
+                          {customerTypeLabel(sale.customerType) || '—'}
+                        </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
@@ -723,7 +742,7 @@ export function Sales() {
         }
       >
         <p className="mb-3 text-sm text-stone-400">
-          Corrige valor, ticket e data no registro. Não reenvia Purchase à Meta.
+          Corrige valor, ticket, tipo de cliente e data no registro. Não reenvia Purchase à Meta.
         </p>
         <label className="mb-1 block text-xs font-medium text-stone-500">Valor (R$)</label>
         <input
@@ -739,6 +758,38 @@ export function Sales() {
           placeholder="Ex.: #1234"
           className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
         />
+        <label className="mb-1.5 block text-xs font-medium text-stone-500">Tipo de cliente</label>
+        <div className="mb-3 space-y-2" role="radiogroup" aria-label="Tipo de cliente">
+          {[
+            { value: 'new', label: 'Cliente Novo' },
+            { value: 'returning', label: 'Cliente Antigo (J\u00e1 comprou antes)' },
+          ].map((opt) => {
+            const selected = editCustomerType === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setEditCustomerType(opt.value)}
+                className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm transition ${
+                  selected
+                    ? 'border-accent-500/70 bg-accent-500/15 text-stone-100'
+                    : 'border-brand-700 bg-brand-900/60 text-stone-300 hover:border-brand-600'
+                }`}
+              >
+                <span
+                  className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                    selected ? 'border-accent-400' : 'border-stone-500'
+                  }`}
+                >
+                  {selected ? <span className="h-2 w-2 rounded-full bg-accent-400" /> : null}
+                </span>
+                <span className="font-medium">{opt.label}</span>
+              </button>
+            )
+          })}
+        </div>
         <label className="mb-1 block text-xs font-medium text-stone-500">Data / hora</label>
         <input
           type="datetime-local"

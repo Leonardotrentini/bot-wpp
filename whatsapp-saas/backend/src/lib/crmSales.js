@@ -29,10 +29,14 @@ function formatSaleRow(row, sellerById = {}) {
         ? { userId: sellerUserId, name: null, email: null }
         : null)
 
+  const customerType =
+    payload.customerType === "new" || payload.customerType === "returning" ? payload.customerType : null
+
   return {
     id: row.id,
     amount: parsePayloadAmount(payload),
     ticket: payload.ticket ? String(payload.ticket) : null,
+    customerType,
     confirmedAt: row.createdAt.toISOString(),
     seller,
     tags: (contact?.tags || []).map((link) => ({

@@ -1062,14 +1062,23 @@ function createCrmRouter({ io }) {
     const schema = z.object({
       amount: z.coerce.number().positive().optional(),
       ticket: z.string().max(120).optional().nullable(),
+      customerType: z.enum(["new", "returning"]).optional(),
       at: z.string().optional().nullable(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos para editar a etapa." })
     }
-    if (parsed.data.amount == null && parsed.data.ticket === undefined && !parsed.data.at) {
-      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe valor, ticket ou data para editar." })
+    if (
+      parsed.data.amount == null &&
+      parsed.data.ticket === undefined &&
+      parsed.data.customerType === undefined &&
+      !parsed.data.at
+    ) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Informe valor, ticket, tipo de cliente ou data para editar.",
+      })
     }
     const actor = await resolveActorProfile(req)
     const result = await updateContactActivity(prisma, io, {
@@ -1078,6 +1087,7 @@ function createCrmRouter({ io }) {
       activityId: req.params.activityId,
       amount: parsed.data.amount,
       ticket: parsed.data.ticket,
+      customerType: parsed.data.customerType,
       at: parsed.data.at,
       actorUserId: actor.actorUserId,
       actorName: actor.actorName,
@@ -1090,6 +1100,12 @@ function createCrmRouter({ io }) {
     }
     if (result.error === "INVALID_AMOUNT") {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
+    }
+    if (result.error === "INVALID_CUSTOMER_TYPE") {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione se é Cliente Novo ou Cliente Antigo.",
+      })
     }
     if (result.error === "INVALID_DATE") {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Data inválida." })
@@ -1134,11 +1150,18 @@ function createCrmRouter({ io }) {
     const schema = z.object({
       amount: z.coerce.number().positive(),
       ticket: z.string().max(120).optional().nullable(),
+      customerType: z.enum(["new", "returning"]),
       moveToClosed: z.boolean().optional().default(true),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
-      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um valor de compra válido." })
+      const missingType = parsed.error.issues?.some((i) => i.path?.includes("customerType"))
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: missingType
+          ? "Selecione se é Cliente Novo ou Cliente Antigo."
+          : "Informe um valor de compra válido.",
+      })
     }
     const actor = await resolveActorProfile(req)
     const result = await confirmContactPurchase(prisma, io, {
@@ -1146,6 +1169,7 @@ function createCrmRouter({ io }) {
       contactId: req.params.id,
       amount: parsed.data.amount,
       ticket: parsed.data.ticket,
+      customerType: parsed.data.customerType,
       moveToClosed: parsed.data.moveToClosed,
       actorUserId: actor.actorUserId,
       actorName: actor.actorName,
@@ -1155,6 +1179,12 @@ function createCrmRouter({ io }) {
     }
     if (result.error === "INVALID_AMOUNT") {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
+    }
+    if (result.error === "INVALID_CUSTOMER_TYPE") {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione se é Cliente Novo ou Cliente Antigo.",
+      })
     }
     return res.json({ contact: result.contact, conversation: result.conversation, tracking: result.tracking || null })
   })

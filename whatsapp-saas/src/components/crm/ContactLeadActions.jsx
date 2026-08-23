@@ -78,6 +78,51 @@ function amountToInput(value) {
   return Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+const CUSTOMER_TYPE_OPTIONS = [
+  { value: 'new', label: 'Cliente Novo' },
+  { value: 'returning', label: 'Cliente Antigo (J\u00e1 comprou antes)' },
+]
+
+function customerTypeShortLabel(value) {
+  if (value === 'new') return 'Cliente novo'
+  if (value === 'returning') return 'Cliente antigo'
+  return null
+}
+
+function CustomerTypePicker({ value, onChange, name = 'customerType' }) {
+  return (
+    <div className="space-y-2" role="radiogroup" aria-label="Tipo de cliente">
+      {CUSTOMER_TYPE_OPTIONS.map((opt) => {
+        const selected = value === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(opt.value)}
+            className={`flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-left text-sm transition ${
+              selected
+                ? 'border-accent-500/70 bg-accent-500/15 text-stone-100'
+                : 'border-brand-700 bg-brand-900/60 text-stone-300 hover:border-brand-600'
+            }`}
+          >
+            <span
+              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                selected ? 'border-accent-400' : 'border-stone-500'
+              }`}
+            >
+              {selected ? <span className="h-2 w-2 rounded-full bg-accent-400" /> : null}
+            </span>
+            <span className="font-medium">{opt.label}</span>
+            <input type="radio" name={name} value={opt.value} checked={selected} readOnly className="sr-only" />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function isoToDatetimeLocal(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -127,6 +172,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
   const [quoteAmount, setQuoteAmount] = useState('')
   const [purchaseAmount, setPurchaseAmount] = useState('')
   const [purchaseTicket, setPurchaseTicket] = useState('')
+  const [purchaseCustomerType, setPurchaseCustomerType] = useState(null)
   const [reminderDate, setReminderDate] = useState(defaultReminderDate)
   const [reminderTime, setReminderTime] = useState(defaultReminderTime)
   const [reminderNote, setReminderNote] = useState('')
@@ -138,6 +184,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
   const [editActivity, setEditActivity] = useState(null)
   const [editAmount, setEditAmount] = useState('')
   const [editTicket, setEditTicket] = useState('')
+  const [editCustomerType, setEditCustomerType] = useState(null)
   const [editAt, setEditAt] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
@@ -193,6 +240,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       const base = contact?.quote?.amount
       setPurchaseAmount(base != null ? String(base).replace('.', ',') : '')
       setPurchaseTicket('')
+      setPurchaseCustomerType(null)
     }
   }, [purchaseOpen, contact?.quote?.amount])
 
@@ -233,6 +281,11 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
     setEditActivity(item)
     setEditAmount(amountToInput(item.payload?.amount))
     setEditTicket(item.payload?.ticket || '')
+    setEditCustomerType(
+      item.payload?.customerType === 'new' || item.payload?.customerType === 'returning'
+        ? item.payload.customerType
+        : null,
+    )
     setEditAt(isoToDatetimeLocal(item.at))
   }
 
@@ -248,11 +301,16 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       toastRef.current.error('Informe uma data válida.')
       return
     }
+    if (editActivity.type === 'purchase_confirmed' && !editCustomerType) {
+      toastRef.current.error('Selecione se é Cliente Novo ou Cliente Antigo.')
+      return
+    }
     setSavingEdit(true)
     try {
       const payload = { amount, at }
       if (editActivity.type === 'purchase_confirmed') {
         payload.ticket = editTicket.trim() || null
+        payload.customerType = editCustomerType
       }
       const { data } = await updateCrmContactActivity(contactId, editActivity.id, payload)
       if (data.activity) {
@@ -301,22 +359,21 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       toastRef.current.error('Informe um valor válido.')
       return
     }
+    if (!purchaseCustomerType) {
+      toastRef.current.error('Selecione se é Cliente Novo ou Cliente Antigo.')
+      return
+    }
     setConfirmingPurchase(true)
     try {
       const { data } = await confirmCrmContactPurchase(contactId, {
         amount,
         ticket: purchaseTicket.trim() || null,
+        customerType: purchaseCustomerType,
       })
       if (data.contact) onContactUpdate?.(data.contact)
       if (data.conversation) onConversationUpdate?.(data.conversation)
-      const metaWarned = notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
-      if (!metaWarned) {
-        toastRef.current.success('Compra confirmada.')
-      } else if (data.tracking?.sent) {
-        // toast Meta já cobriu; reforço curto no CRM
-      } else {
-        toastRef.current.success('Compra salva no CRM.')
-      }
+      toastRef.current.success('Compra registrada no CRM.')
+      notifyMetaTracking(toastRef.current, data.tracking, 'Compra')
       setPurchaseOpen(false)
       if (historyOpen) loadHistory()
     } catch (err) {
@@ -474,6 +531,11 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
                     {item.payload?.ticket ? (
                       <p className="mt-0.5 text-xs text-stone-500">Ticket: {item.payload.ticket}</p>
                     ) : null}
+                    {item.type === 'purchase_confirmed' && customerTypeShortLabel(item.payload?.customerType) ? (
+                      <p className="mt-0.5 text-xs text-stone-500">
+                        {customerTypeShortLabel(item.payload.customerType)}
+                      </p>
+                    ) : null}
                     <p className="mt-1 text-[11px] text-stone-500">
                       {new Date(item.at).toLocaleString('pt-BR', {
                         day: '2-digit',
@@ -556,7 +618,10 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
             <Button variant="ghost" onClick={() => setPurchaseOpen(false)}>
               Cancelar
             </Button>
-            <Button onClick={handleConfirmPurchase} disabled={confirmingPurchase}>
+            <Button
+              onClick={handleConfirmPurchase}
+              disabled={confirmingPurchase || !purchaseCustomerType}
+            >
               {confirmingPurchase ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirmar'}
             </Button>
           </>
@@ -564,7 +629,7 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
       >
         <p className="mb-3 text-sm text-stone-400">
           Registra uma nova venda neste lead (pode haver várias). Aplica a tag &quot;Comprou&quot; e move para
-          Fechado quando existir. O evento Purchase na Meta continua enviando só 1x por lead.
+          Fechado quando existir. O evento Purchase na Meta é enviado para cada venda confirmada.
         </p>
         <label className="mb-1 block text-xs font-medium text-stone-500">Valor da compra (R$)</label>
         <input
@@ -577,9 +642,14 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
         <input
           value={purchaseTicket}
           onChange={(e) => setPurchaseTicket(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleConfirmPurchase()}
           placeholder="Ex.: #1234 ou pedido manual"
-          className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+          className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
+        />
+        <label className="mb-1.5 block text-xs font-medium text-stone-500">Tipo de cliente</label>
+        <CustomerTypePicker
+          value={purchaseCustomerType}
+          onChange={setPurchaseCustomerType}
+          name="purchaseCustomerType"
         />
       </Modal>
 
@@ -711,6 +781,14 @@ export function ContactLeadActions({ contact, onContactUpdate, onConversationUpd
               placeholder="Ex.: #1234"
               className="mb-3 w-full rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 outline-none focus:border-accent-500/60"
             />
+            <label className="mb-1.5 block text-xs font-medium text-stone-500">Tipo de cliente</label>
+            <div className="mb-3">
+              <CustomerTypePicker
+                value={editCustomerType}
+                onChange={setEditCustomerType}
+                name="editPurchaseCustomerType"
+              />
+            </div>
           </>
         ) : null}
         <label className="mb-1 block text-xs font-medium text-stone-500">Data / hora</label>

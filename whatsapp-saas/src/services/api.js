@@ -1019,18 +1019,28 @@ export async function saveCrmContactQuote(contactId, { amount }) {
   })
 }
 
-export async function confirmCrmContactPurchase(contactId, { amount, ticket, moveToClosed = true }) {
+export async function confirmCrmContactPurchase(
+  contactId,
+  { amount, ticket, customerType, moveToClosed = true },
+) {
   if (resolveUseRealApi()) {
     return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/purchase/confirm`, {
       amount,
       ticket,
+      customerType,
       moveToClosed,
     })
   }
   return mockResponse({
     contact: {
       id: contactId,
-      purchase: { amount, ticket, currency: 'BRL', confirmedAt: new Date().toISOString() },
+      purchase: {
+        amount,
+        ticket,
+        customerType,
+        currency: 'BRL',
+        confirmedAt: new Date().toISOString(),
+      },
     },
     conversation: null,
   })
