@@ -935,14 +935,21 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           {flow.trigger.type === 'stage_change' && (
             <div className="mt-2">
               <p className="mb-1.5 text-sm font-medium text-stone-300">Para o estágio</p>
-              <Select value={flow.trigger.stageId || ''} onChange={(e) => setTrigger({ stageId: e.target.value || null })}>
+              <Select
+                value={flow.trigger.stageId || ''}
+                onChange={(e) => setTrigger({ stageId: e.target.value || null })}
+              >
                 <option value="">Qualquer estágio</option>
+                <option value="__none__">Sem estágio</option>
                 {stages.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
                 ))}
               </Select>
+              <p className="mt-1.5 text-[11px] text-stone-500">
+                “Sem estágio” é a coluna dos cards que ainda não estão em nenhum estágio do Kanban.
+              </p>
             </div>
           )}
           {flow.trigger.type === 'tag_added' && (

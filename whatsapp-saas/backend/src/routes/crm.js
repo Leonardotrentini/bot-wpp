@@ -541,17 +541,25 @@ function createCrmRouter({ io }) {
 
     emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(updated) })
 
-    const stageChanged = data.kanbanStageId && data.kanbanStageId !== convo.kanbanStageId
+    const stagePatched = Object.prototype.hasOwnProperty.call(parsed.data, "kanbanStageId")
+    const nextStageId = stagePatched ? parsed.data.kanbanStageId || null : undefined
+    const stageChanged =
+      stagePatched && (nextStageId || null) !== (convo.kanbanStageId || null)
     if (stageChanged) {
-      const stage = await prisma.crmKanbanStage.findUnique({ where: { id: data.kanbanStageId } })
+      const stage = nextStageId
+        ? await prisma.crmKanbanStage.findUnique({ where: { id: nextStageId } })
+        : null
       logContactActivity(prisma, {
         userId,
         contactId: convo.contactId,
         type: "stage_changed",
-        payload: { stageId: data.kanbanStageId, stageName: stage?.name || null },
+        payload: {
+          stageId: nextStageId,
+          stageName: stage?.name || (nextStageId ? null : "Sem estágio"),
+        },
       }).catch((err) => console.error("[crm-activity] stage_changed:", err?.message || err))
 
-      onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: data.kanbanStageId }).catch((err) =>
+      onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: nextStageId }).catch((err) =>
         console.error("[crm-flow] stage_change:", err?.message || err),
       )
     }

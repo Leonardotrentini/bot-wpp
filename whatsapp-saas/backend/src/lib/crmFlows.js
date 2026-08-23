@@ -373,9 +373,12 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation }) 
 /** Chamado quando um card muda de estágio no Kanban. */
 async function onStageChange(deps, { conversation, stageId }) {
   const { prisma } = deps
+  // Coluna virtual "Sem estágio" no board = kanbanStageId null → chave __none__ no trigger.
+  const targetKey = stageId == null || stageId === "" ? "__none__" : String(stageId)
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "stage_change")) {
     const trigger = normalizeTrigger(flow.trigger)
-    if (trigger && (!trigger.stageId || trigger.stageId === stageId)) {
+    if (!trigger) continue
+    if (!trigger.stageId || trigger.stageId === targetKey) {
       await runFlow(deps, flow, conversation, "stage_change").catch(() => {})
     }
   }
