@@ -119,16 +119,12 @@ function readCrmInitialState() {
   }
 }
 
-function CrmSettingsToolBtn({ title, onClick, children }) {
+function CrmSettingsToolBtn({ title, label, onClick, children }) {
   return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      className="rounded-lg border border-accent-500/35 bg-accent-500/10 p-2 text-accent-400 transition hover:border-accent-500/55 hover:bg-accent-500/20 hover:text-accent-300"
-    >
+    <Button size="sm" variant="ghost" onClick={onClick} title={title}>
       {children}
-    </button>
+      <span>{label}</span>
+    </Button>
   )
 }
 
@@ -197,13 +193,21 @@ function CrmTabHeader({
           {packImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
           Importar pack
         </Button>
-        <CrmSettingsToolBtn title="Tags" onClick={() => onOpenSettings('tags')}>
+        <CrmSettingsToolBtn title="Gerenciar tags do CRM" label="Tags" onClick={() => onOpenSettings('tags')}>
           <TagIcon className="h-4 w-4" />
         </CrmSettingsToolBtn>
-        <CrmSettingsToolBtn title="Estágios do Kanban" onClick={() => onOpenSettings('stages')}>
+        <CrmSettingsToolBtn
+          title="Gerenciar estágios do Kanban"
+          label="Estágios"
+          onClick={() => onOpenSettings('stages')}
+        >
           <Kanban className="h-4 w-4" />
         </CrmSettingsToolBtn>
-        <CrmSettingsToolBtn title="Atalhos de mensagem" onClick={() => onOpenSettings('quickReplies')}>
+        <CrmSettingsToolBtn
+          title="Gerenciar atalhos de mensagem"
+          label="Atalhos"
+          onClick={() => onOpenSettings('quickReplies')}
+        >
           <MessageSquare className="h-4 w-4" />
         </CrmSettingsToolBtn>
       </div>
