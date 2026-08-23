@@ -5,6 +5,7 @@ import {
   CheckCheck,
   ChevronLeft,
   ChevronRight,
+  GripVertical,
   Kanban,
   Loader2,
   MessageSquare,
@@ -74,6 +75,7 @@ import {
   getCrmStages,
   createCrmStage,
   updateCrmStage,
+  reorderCrmStages,
   deleteCrmStage,
   getCrmQuickReplies,
   createCrmQuickReply,
@@ -1327,6 +1329,9 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
   const [stageEditing, setStageEditing] = useState(null)
   const [stageForm, setStageForm] = useState({ name: '', color: '#64748b' })
   const [stageSaving, setStageSaving] = useState(false)
+  const [dragStageId, setDragStageId] = useState(null)
+  const [dragOverStageId, setDragOverStageId] = useState(null)
+  const [reorderingStages, setReorderingStages] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null) // { kind, id, label }
 
   const addTag = async () => {
@@ -1350,6 +1355,30 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
       toast.success('Estágio criado.')
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao criar estágio.')
+    }
+  }
+
+  const moveStageBefore = async (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId || reorderingStages) return
+    const prev = stages
+    const fromIdx = prev.findIndex((s) => s.id === fromId)
+    const toIdx = prev.findIndex((s) => s.id === toId)
+    if (fromIdx < 0 || toIdx < 0) return
+    const next = [...prev]
+    const [item] = next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, item)
+    setStages(next)
+    setReorderingStages(true)
+    try {
+      const { data } = await reorderCrmStages(next.map((s) => s.id))
+      const ordered = data?.stages || next
+      setStages(ordered)
+      setCrmBootstrapCache({ stages: ordered })
+    } catch (err) {
+      setStages(prev)
+      toast.error(err?.response?.data?.message || 'Falha ao reordenar estágios.')
+    } finally {
+      setReorderingStages(false)
     }
   }
 
@@ -1517,30 +1546,76 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
             <Plus className="h-4 w-4" />
           </Button>
         </div>
-        <div className="mt-3 space-y-2">
-          {stages.map((s) => (
-            <div key={s.id} className="flex items-center gap-2 rounded-xl border border-brand-700/60 bg-brand-900/50 px-3 py-2">
-              <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
-              <span className="flex-1 truncate text-sm text-stone-200">{s.name}</span>
-              {s.isDefault && <Badge variant="muted">padrão</Badge>}
-              <button
-                type="button"
-                onClick={() => openEditStage(s)}
-                className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
-                title="Editar estágio"
+        <p className="mt-3 text-xs text-stone-500">
+          Arraste pelo ícone <GripVertical className="mx-0.5 inline h-3.5 w-3.5 align-text-bottom" /> para reordenar as
+          colunas do Kanban.
+        </p>
+        <div className="mt-2 space-y-2">
+          {stages.map((s) => {
+            const isDragging = dragStageId === s.id
+            const isOver = dragOverStageId === s.id && dragStageId && dragStageId !== s.id
+            return (
+              <div
+                key={s.id}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  if (dragStageId && dragStageId !== s.id) setDragOverStageId(s.id)
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  const fromId = dragStageId || e.dataTransfer.getData('text/plain')
+                  setDragOverStageId(null)
+                  setDragStageId(null)
+                  void moveStageBefore(fromId, s.id)
+                }}
+                className={`flex items-center gap-2 rounded-xl border bg-brand-900/50 px-3 py-2 transition ${
+                  isOver
+                    ? 'border-accent-500/70 bg-accent-500/10'
+                    : isDragging
+                      ? 'border-brand-600 opacity-50'
+                      : 'border-brand-700/60'
+                }`}
               >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete({ kind: 'stage', id: s.id, label: `estágio "${s.name}"` })}
-                className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-red-400"
-                title="Excluir estágio"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
+                <button
+                  type="button"
+                  draggable={!reorderingStages}
+                  onDragStart={(e) => {
+                    setDragStageId(s.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                    e.dataTransfer.setData('text/plain', s.id)
+                  }}
+                  onDragEnd={() => {
+                    setDragStageId(null)
+                    setDragOverStageId(null)
+                  }}
+                  className="cursor-grab touch-none rounded-lg p-1 text-stone-500 transition hover:bg-white/5 hover:text-stone-200 active:cursor-grabbing"
+                  title="Arrastar para reordenar"
+                  aria-label={`Arrastar estágio ${s.name}`}
+                >
+                  <GripVertical className="h-4 w-4" />
+                </button>
+                <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: s.color }} />
+                <span className="flex-1 truncate text-sm text-stone-200">{s.name}</span>
+                {s.isDefault && <Badge variant="muted">padrão</Badge>}
+                <button
+                  type="button"
+                  onClick={() => openEditStage(s)}
+                  className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-stone-200"
+                  title="Editar estágio"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete({ kind: 'stage', id: s.id, label: `estágio "${s.name}"` })}
+                  className="rounded-lg p-1.5 text-stone-500 transition hover:bg-white/5 hover:text-red-400"
+                  title="Excluir estágio"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )
+          })}
         </div>
       </Modal>
 
