@@ -88,6 +88,7 @@ async function buildContextMessages(prisma, agent, conversation) {
     where: { conversationId: conversation.id },
     orderBy: { timestamp: "desc" },
     take: AI_CONTEXT_MESSAGES,
+    select: { fromMe: true, body: true },
   })
   history.reverse()
 

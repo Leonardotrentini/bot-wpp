@@ -311,6 +311,7 @@ function createCrmRouter({ io }) {
       where,
       orderBy: { timestamp: "desc" },
       take: limit,
+      omit: { raw: true },
     })
     rows.reverse()
 

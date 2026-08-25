@@ -61,16 +61,68 @@ function stripMediaBase64(value) {
   return s.replace(/\s/g, "")
 }
 
+const RAW_BLOB_KEYS = new Set([
+  "jpegThumbnail",
+  "jpeg_thumbnail",
+  "waveform",
+  "scansSidecar",
+  "firstScanSidecar",
+  "midQualityFileSha256",
+])
+
+function isNumericByteArray(value) {
+  if (!Array.isArray(value) || value.length < 64) return false
+  return typeof value[0] === "number"
+}
+
+function looksLikeBase64Blob(value) {
+  return typeof value === "string" && value.length > 8000
+}
+
+/**
+ * Remove thumbnails/buffers/base64 do payload Evolution.
+ * Mantém key + ponteiros de mídia (mediaKey, url, directPath, mimetype)
+ * para o download via getBase64FromMediaMessage continuar igual.
+ * Não apaga raw._localMedia (preview de envio do CRM).
+ */
+function sanitizeMessageRaw(value, depth = 0) {
+  if (value == null || depth > 16) return value
+  if (typeof value === "string") {
+    if (looksLikeBase64Blob(value)) return undefined
+    return value
+  }
+  if (typeof value !== "object") return value
+  if (Array.isArray(value)) {
+    if (isNumericByteArray(value)) return undefined
+    return value.map((item) => sanitizeMessageRaw(item, depth + 1)).filter((item) => item !== undefined)
+  }
+  if (value.type === "Buffer" && Array.isArray(value.data)) return undefined
+
+  const out = {}
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "_localMedia") {
+      out[key] = nested
+      continue
+    }
+    if (RAW_BLOB_KEYS.has(key)) continue
+    if ((key === "base64" || key === "dataUrl" || key === "buffer") && looksLikeBase64Blob(nested)) continue
+    const cleaned = sanitizeMessageRaw(nested, depth + 1)
+    if (cleaned !== undefined) out[key] = cleaned
+  }
+  return out
+}
+
 /** Mantém mídia enviada pelo CRM quando o webhook do WhatsApp atualiza a mensagem. */
 function mergeInboundMessageRaw(existingRaw, incomingRaw) {
   const local = existingRaw?._localMedia
-  if (!local?.base64) return incomingRaw ?? existingRaw ?? null
+  const incoming = sanitizeMessageRaw(incomingRaw)
+  if (!local?.base64) return incoming ?? sanitizeMessageRaw(existingRaw) ?? null
 
   const base =
-    incomingRaw && typeof incomingRaw === "object"
-      ? { ...incomingRaw }
+    incoming && typeof incoming === "object"
+      ? { ...incoming }
       : existingRaw && typeof existingRaw === "object"
-        ? { ...existingRaw }
+        ? { ...sanitizeMessageRaw(existingRaw) }
         : {}
 
   return { ...base, _localMedia: local }
@@ -99,7 +151,7 @@ function buildOutboundMessageRaw({ providerMessageId, remoteJid, evolutionResp, 
   let raw
 
   if (hasCdn) {
-    raw = JSON.parse(JSON.stringify(evolutionResp))
+    raw = sanitizeMessageRaw(JSON.parse(JSON.stringify(evolutionResp))) || {}
   } else {
     const id = providerMessageId || `manual-${Date.now()}`
     raw = {
@@ -184,8 +236,9 @@ async function ensureMessageRaw(deps, msg) {
     messageId: msg.messageId,
   })
   if (raw) {
-    await deps.prisma.crmMessage.update({ where: { id: msg.id }, data: { raw } }).catch(() => {})
-    return prepareMediaMessageRecord(raw)
+    const slim = sanitizeMessageRaw(raw)
+    await deps.prisma.crmMessage.update({ where: { id: msg.id }, data: { raw: slim } }).catch(() => {})
+    return prepareMediaMessageRecord(slim)
   }
 
   return prepareMediaMessageRecord(msg.raw)
@@ -204,8 +257,9 @@ async function ensureGroupMessageRaw(deps, row, { instanceName, groupJid } = {})
     messageId: row?.messageId,
   })
   if (raw) {
-    await deps.prisma.whatsAppMessage.update({ where: { id: row.id }, data: { raw } }).catch(() => {})
-    return prepareMediaMessageRecord(raw)
+    const slim = sanitizeMessageRaw(raw)
+    await deps.prisma.whatsAppMessage.update({ where: { id: row.id }, data: { raw: slim } }).catch(() => {})
+    return prepareMediaMessageRecord(slim)
   }
 
   return prepareMediaMessageRecord(row?.raw)
@@ -223,4 +277,5 @@ module.exports = {
   ensureGroupMessageRaw,
   findCompleteRawInChat,
   stripMediaBase64,
+  sanitizeMessageRaw,
 }

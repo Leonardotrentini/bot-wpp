@@ -657,6 +657,42 @@ test("buildOutboundMessageRaw preserva _localMedia mesmo com resposta Evolution 
   assert.strictEqual(stored.mimetype, "video/mp4")
 })
 
+test("sanitizeMessageRaw remove thumbnail/buffer e preserva ponteiro de mídia", () => {
+  const { sanitizeMessageRaw, mediaRecordIsComplete } = require("../src/lib/crmMedia")
+  const raw = {
+    key: { id: "MSG1", remoteJid: "5511999999999@s.whatsapp.net", fromMe: false },
+    message: {
+      imageMessage: {
+        mimetype: "image/jpeg",
+        url: "https://mmg.whatsapp.net/x",
+        directPath: "/v/t",
+        mediaKey: "abc",
+        jpegThumbnail: { type: "Buffer", data: Array.from({ length: 200 }, (_, i) => i) },
+        waveform: Array.from({ length: 128 }, (_, i) => i),
+      },
+    },
+    jpegThumbnail: "A".repeat(9000),
+  }
+  const slim = sanitizeMessageRaw(raw)
+  assert.strictEqual(slim.message.imageMessage.mimetype, "image/jpeg")
+  assert.strictEqual(slim.message.imageMessage.mediaKey, "abc")
+  assert.strictEqual(slim.message.imageMessage.jpegThumbnail, undefined)
+  assert.strictEqual(slim.jpegThumbnail, undefined)
+  assert.ok(mediaRecordIsComplete(slim))
+})
+
+test("sanitizeMessageRaw preserva _localMedia do CRM", () => {
+  const { sanitizeMessageRaw, readStoredMessageMedia } = require("../src/lib/crmMedia")
+  const slim = sanitizeMessageRaw({
+    key: { id: "MSG1" },
+    jpegThumbnail: { type: "Buffer", data: [1, 2, 3] },
+    _localMedia: { base64: "ZGF0YQ==", mimetype: "audio/ogg" },
+  })
+  assert.strictEqual(slim.jpegThumbnail, undefined)
+  const stored = readStoredMessageMedia({ raw: slim, mediaMime: "audio/ogg" })
+  assert.strictEqual(stored.base64, "ZGF0YQ==")
+})
+
 test("mergeInboundMessageRaw preserva _localMedia quando webhook atualiza mensagem", () => {
   const { mergeInboundMessageRaw, readStoredMessageMedia } = require("../src/lib/crmMedia")
   const existing = {
@@ -665,10 +701,11 @@ test("mergeInboundMessageRaw preserva _localMedia quando webhook atualiza mensag
   }
   const incoming = {
     key: { id: "MSG1", remoteJid: "5511999999999@s.whatsapp.net", fromMe: true },
-    message: { videoMessage: { mimetype: "video/mp4" } },
+    message: { videoMessage: { mimetype: "video/mp4", jpegThumbnail: "A".repeat(9000) } },
   }
   const merged = mergeInboundMessageRaw(existing, incoming)
   assert.ok(merged.message?.videoMessage)
+  assert.strictEqual(merged.message.videoMessage.jpegThumbnail, undefined)
   const stored = readStoredMessageMedia({ raw: merged, mediaMime: "video/mp4" })
   assert.strictEqual(stored.base64, "dmlkZW8=")
 })

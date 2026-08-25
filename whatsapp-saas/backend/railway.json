@@ -6,6 +6,12 @@
   "deploy": {
     "preDeployCommand": "npm run prisma:push && npm run prisma:seed",
     "startCommand": "npm start",
-    "healthcheckPath": "/health"
+    "healthcheckPath": "/health",
+    "limitOverride": {
+      "containers": {
+        "cpu": 1,
+        "memoryBytes": 3221225472
+      }
+    }
   }
 }

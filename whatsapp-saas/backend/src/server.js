@@ -1674,6 +1674,7 @@ app.get("/api/groups/:id/messages", authMiddleware, async (req, res) => {
       where: { groupId: group.id, timestamp: { gte: floor } },
       orderBy: { timestamp: "desc" },
       take: limit,
+      omit: { raw: true },
     })
 
     res.json({

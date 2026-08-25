@@ -13,6 +13,7 @@ import {
   createAdminOrganization,
   backfillAdminOrganizations,
   deleteAdminOrgMember,
+  deleteAdminOrganization,
   deleteAdminUser,
   getAdminOrganizations,
   getAdminOrganization,
@@ -30,7 +31,7 @@ import { useToast } from '../../contexts/ToastContext.jsx'
 export function Admin() {
   const toast = useToast()
   const navigate = useNavigate()
-  const { setCurrentUser, refreshImpersonation } = useAuth()
+  const { setCurrentUser, refreshImpersonation, user: adminUser } = useAuth()
   const [loading, setLoading] = useState(true)
   const [users, setUsers] = useState([])
   const [plans, setPlans] = useState([])
@@ -46,6 +47,10 @@ export function Admin() {
   const [editSaving, setEditSaving] = useState(false)
   const [deleteUser, setDeleteUser] = useState(null)
   const [deleteSaving, setDeleteSaving] = useState(false)
+  const [deleteOrg, setDeleteOrg] = useState(null)
+  const [deleteOrgSaving, setDeleteOrgSaving] = useState(false)
+  const [removeMember, setRemoveMember] = useState(null)
+  const [removeMemberSaving, setRemoveMemberSaving] = useState(false)
   const [viewAsId, setViewAsId] = useState(null)
   const [createForm, setCreateForm] = useState({
     name: '',
@@ -117,6 +122,8 @@ export function Admin() {
       setManageOrg(updated)
       setOrgNameDraft(updated.name || '')
       initMemberEdits(updated)
+    } else {
+      setManageOrg(null)
     }
     await load()
   }
@@ -271,6 +278,8 @@ export function Admin() {
       toast.success('Usuário excluído.')
       setDeleteUser(null)
       await load()
+      await loadOrgs()
+      if (manageOrg?.id) await refreshManageOrg(manageOrg.id).catch(() => setManageOrg(null))
     } catch (e) {
       toast.error(e.response?.data?.message || 'Falha ao excluir.')
     } finally {
@@ -420,14 +429,36 @@ export function Admin() {
     updateMemberEdit(userId, { role })
   }
 
-  async function onRemoveOrgMember(orgId, userId, name) {
-    if (!window.confirm(`Remover ${name} da empresa?`)) return
+  async function confirmDeleteOrg() {
+    if (!deleteOrg) return
+    setDeleteOrgSaving(true)
     try {
-      await deleteAdminOrgMember(orgId, userId)
-      toast.success('Membro removido.')
+      await deleteAdminOrganization(deleteOrg.id)
+      toast.success(`Empresa "${deleteOrg.name}" excluída.`)
+      if (manageOrg?.id === deleteOrg.id) setManageOrg(null)
+      setDeleteOrg(null)
+      await loadOrgs()
+      await load()
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Falha ao excluir a empresa.')
+    } finally {
+      setDeleteOrgSaving(false)
+    }
+  }
+
+  async function confirmRemoveMember() {
+    if (!removeMember) return
+    setRemoveMemberSaving(true)
+    try {
+      await deleteAdminOrgMember(removeMember.orgId, removeMember.userId)
+      toast.success('Membro removido da empresa.')
+      const orgId = removeMember.orgId
+      setRemoveMember(null)
       await refreshManageOrg(orgId)
     } catch (e) {
       toast.error(e.response?.data?.message || 'Falha ao remover membro.')
+    } finally {
+      setRemoveMemberSaving(false)
     }
   }
 
@@ -584,9 +615,10 @@ export function Admin() {
                         </button>
                         <button
                           type="button"
-                          className="rounded-lg p-2 text-stone-400 transition hover:bg-red-500/10 hover:text-red-300"
-                          title="Excluir usuário"
+                          className="rounded-lg p-2 text-stone-400 transition hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
+                          title={u.id === adminUser?.id ? 'Você não pode excluir a própria conta' : 'Excluir usuário'}
                           aria-label="Excluir usuário"
+                          disabled={u.id === adminUser?.id}
                           onClick={() => setDeleteUser(u)}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -766,6 +798,21 @@ export function Admin() {
                             <Button size="sm" variant="secondary" type="button" onClick={() => openManageOrg(org)}>
                               Gerenciar acessos
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="danger"
+                              type="button"
+                              disabled={org.owner?.id === adminUser?.id}
+                              title={
+                                org.owner?.id === adminUser?.id
+                                  ? 'Você não pode excluir a própria empresa'
+                                  : 'Excluir empresa e todos os dados'
+                              }
+                              onClick={() => setDeleteOrg(org)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Excluir
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -784,14 +831,25 @@ export function Admin() {
         onClose={() => !addingMember && !savingMemberId && setManageOrg(null)}
         title={manageOrg ? `Acessos — ${manageOrg.name}` : 'Empresa'}
         footer={
-          <Button
-            variant="ghost"
-            type="button"
-            disabled={addingMember || savingMemberId}
-            onClick={() => setManageOrg(null)}
-          >
-            Fechar
-          </Button>
+          <div className="flex w-full items-center justify-between gap-2">
+            <Button
+              variant="danger"
+              type="button"
+              disabled={addingMember || savingMemberId || manageOrg.owner?.id === adminUser?.id}
+              onClick={() => setDeleteOrg(manageOrg)}
+            >
+              <Trash2 className="h-4 w-4" />
+              Excluir empresa
+            </Button>
+            <Button
+              variant="ghost"
+              type="button"
+              disabled={addingMember || savingMemberId}
+              onClick={() => setManageOrg(null)}
+            >
+              Fechar
+            </Button>
+          </div>
         }
       >
         {manageOrg && (
@@ -880,16 +938,39 @@ export function Admin() {
                           Entrar na conta
                         </Button>
                         {draft.role === 'SELLER' && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="text-red-400 hover:text-red-300"
-                            onClick={() => onRemoveOrgMember(manageOrg.id, m.userId, draft.name)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Remover
-                          </Button>
+                          <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="text-red-400 hover:text-red-300"
+                              onClick={() =>
+                                setRemoveMember({
+                                  orgId: manageOrg.id,
+                                  userId: m.userId,
+                                  name: draft.name,
+                                })
+                              }
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Remover da empresa
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="danger"
+                              disabled={m.userId === adminUser?.id}
+                              onClick={() =>
+                                setDeleteUser({
+                                  id: m.userId,
+                                  name: draft.name,
+                                  email: draft.email,
+                                })
+                              }
+                            >
+                              Excluir conta
+                            </Button>
+                          </>
                         )}
                         <Button
                           type="button"
@@ -1006,7 +1087,33 @@ export function Admin() {
         title="Excluir usuário"
         message={
           deleteUser
-            ? `Excluir "${deleteUser.name}" (${deleteUser.email})? Grupos, automações e dados do WhatsApp serão removidos permanentemente.`
+            ? `Excluir "${deleteUser.name}" (${deleteUser.email})? Grupos, CRM, automações, WhatsApp e todos os dados desta conta serão removidos permanentemente.`
+            : ''
+        }
+      />
+
+      <ConfirmModal
+        isOpen={!!deleteOrg}
+        onClose={() => !deleteOrgSaving && setDeleteOrg(null)}
+        onConfirm={confirmDeleteOrg}
+        loading={deleteOrgSaving}
+        title="Excluir empresa"
+        message={
+          deleteOrg
+            ? `Excluir a empresa "${deleteOrg.name}" e ${deleteOrg.memberCount || deleteOrg.members?.length || 0} conta(s)? Donos, vendedores, WhatsApp, grupos, CRM e automações serão apagados de forma permanente. Esta ação não tem volta.`
+            : ''
+        }
+      />
+
+      <ConfirmModal
+        isOpen={!!removeMember}
+        onClose={() => !removeMemberSaving && setRemoveMember(null)}
+        onConfirm={confirmRemoveMember}
+        loading={removeMemberSaving}
+        title="Remover vendedor"
+        message={
+          removeMember
+            ? `Remover "${removeMember.name}" desta empresa? A conta de login não será apagada — só o acesso a esta empresa.`
             : ''
         }
       />

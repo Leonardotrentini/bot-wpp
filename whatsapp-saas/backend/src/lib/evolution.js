@@ -540,6 +540,13 @@ async function logoutInstance(instanceName) {
   ])
 }
 
+async function deleteInstance(instanceName) {
+  return firstSuccess([
+    () => requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
+    () => requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "GET" }),
+  ])
+}
+
 module.exports = {
   createInstance,
   setInstanceWebhook,
@@ -560,6 +567,7 @@ module.exports = {
   getBase64FromMediaMessage,
   extractMediaBase64Payload,
   logoutInstance,
+  deleteInstance,
   pickQrSync,
   resolveQrForStorage,
   pickConnected,

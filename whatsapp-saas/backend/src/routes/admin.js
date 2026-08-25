@@ -5,7 +5,8 @@ const { prisma } = require("../lib/prisma")
 const { authMiddleware, signToken } = require("../lib/auth")
 const { requireAdmin } = require("../lib/adminAuth")
 const { ensureDefaultPlans } = require("../lib/ensureBillingDefaults")
-const { ensureUserOrganization, backfillAllUserOrganizations } = require("../lib/orgScope")
+const { ensureUserOrganization, backfillAllUserOrganizations, cleanupEmptyOrganizations } = require("../lib/orgScope")
+const { purgeUserById, purgeOrganizationById } = require("../lib/adminPurge")
 
 const router = express.Router()
 
@@ -282,6 +283,20 @@ router.patch("/organizations/:id", authMiddleware, requireAdmin, async (req, res
     include: orgInclude,
   })
   res.json({ organization: mapAdminOrganization(org) })
+})
+
+router.delete("/organizations/:id", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const result = await purgeOrganizationById(req.params.id, { actorId: req.adminUser.id })
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    const status = Number(err?.status) || 500
+    if (status >= 500) console.error("[admin] purge org:", err)
+    return res.status(status).json({
+      error: err.code || "INTERNAL_ERROR",
+      message: err.message || "Não foi possível excluir a empresa.",
+    })
+  }
 })
 
 router.post("/organizations/:id/members", authMiddleware, requireAdmin, async (req, res) => {
@@ -578,16 +593,18 @@ router.post("/organizations", authMiddleware, requireAdmin, async (req, res) => 
 })
 
 router.delete("/users/:id", authMiddleware, requireAdmin, async (req, res) => {
-  const id = req.params.id
-  if (id === req.adminUser.id) {
-    return res.status(403).json({ error: "FORBIDDEN", message: "Você não pode excluir a própria conta." })
+  try {
+    await purgeUserById(req.params.id, { actorId: req.adminUser.id })
+    await cleanupEmptyOrganizations().catch(() => {})
+    res.json({ ok: true })
+  } catch (err) {
+    const status = Number(err?.status) || 500
+    if (status >= 500) console.error("[admin] purge user:", err)
+    return res.status(status).json({
+      error: err.code || "INTERNAL_ERROR",
+      message: err.message || "Não foi possível excluir o usuário.",
+    })
   }
-
-  const existing = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } })
-  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Utilizador não encontrado." })
-
-  await prisma.user.delete({ where: { id } })
-  res.json({ ok: true })
 })
 
 router.post("/users", authMiddleware, requireAdmin, async (req, res) => {

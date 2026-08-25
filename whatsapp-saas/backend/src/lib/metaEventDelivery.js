@@ -2,6 +2,17 @@
  * Persistência de tentativas CAPI — fonte da verdade do que a Meta aceitou.
  */
 
+function compactMetaMessages(value) {
+  if (value == null) return undefined
+  try {
+    const serialized = JSON.stringify(value)
+    if (serialized.length <= 1500) return JSON.parse(serialized)
+    return { truncated: true, preview: serialized.slice(0, 1200) }
+  } catch {
+    return undefined
+  }
+}
+
 async function recordMetaEventDelivery(prisma, row) {
   if (!prisma?.metaEventDelivery?.create) return null
   try {
@@ -23,7 +34,7 @@ async function recordMetaEventDelivery(prisma, row) {
         eventsReceived: Math.max(0, Number(row.eventsReceived) || 0),
         fbtraceId: row.fbtraceId ? String(row.fbtraceId).slice(0, 120) : null,
         error: row.error ? String(row.error).slice(0, 500) : null,
-        metaMessages: row.metaMessages ?? undefined,
+        metaMessages: compactMetaMessages(row.metaMessages),
         testMode: Boolean(row.testMode),
       },
     })

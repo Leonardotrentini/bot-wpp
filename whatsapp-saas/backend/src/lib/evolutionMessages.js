@@ -138,6 +138,7 @@ function extractTimestampRaw(record) {
 }
 
 function mapEvolutionMessage(record) {
+  const { sanitizeMessageRaw } = require("./crmMedia")
   const key = record?.key || {}
   const messageId = key.id || record?.id
   const iso = toIsoFromEvolutionTimestamp(extractTimestampRaw(record))
@@ -162,7 +163,7 @@ function mapEvolutionMessage(record) {
     type: record?.messageType || "text",
     body: body ? String(body).slice(0, 4000) : "",
     timestamp: iso ? new Date(iso) : null,
-    raw: serializeJson(record),
+    raw: sanitizeMessageRaw(serializeJson(record)),
   }
 }
 

@@ -181,6 +181,11 @@ export async function patchAdminOrganization(orgId, body) {
   return apiClient.patch(`/admin/organizations/${orgId}`, body)
 }
 
+export async function deleteAdminOrganization(orgId) {
+  if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
+  return apiClient.delete(`/admin/organizations/${encodeURIComponent(orgId)}`)
+}
+
 export async function createAdminOrgMember(orgId, body) {
   if (!resolveUseRealApi()) throw new Error('Disponível apenas com API real.')
   return apiClient.post(`/admin/organizations/${orgId}/members/create`, body)
