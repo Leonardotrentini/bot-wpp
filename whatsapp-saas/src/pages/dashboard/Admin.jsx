@@ -835,8 +835,8 @@ export function Admin() {
             <Button
               variant="danger"
               type="button"
-              disabled={addingMember || savingMemberId || manageOrg.owner?.id === adminUser?.id}
-              onClick={() => setDeleteOrg(manageOrg)}
+              disabled={addingMember || savingMemberId || manageOrg?.owner?.id === adminUser?.id}
+              onClick={() => manageOrg && setDeleteOrg(manageOrg)}
             >
               <Trash2 className="h-4 w-4" />
               Excluir empresa
