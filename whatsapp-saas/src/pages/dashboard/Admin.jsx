@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Eye, LogIn, LogOut, Pencil, Shield, Trash2, UserPlus, Building2 } from 'lucide-react'
+import { Eye, LogIn, LogOut, Pencil, Shield, Trash2, UserPlus, Building2, Settings2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -783,25 +783,35 @@ export function Admin() {
                           {org.owner ? `${org.owner.name} (${org.owner.email})` : '—'}
                         </td>
                         <td className="px-4 py-3 text-stone-400">{org.memberCount}</td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex flex-wrap items-center justify-end gap-2">
+                        <td className="whitespace-nowrap px-4 py-3 text-right">
+                          <div className="inline-flex items-center gap-1.5">
                             <Button
                               size="sm"
                               type="button"
+                              className="shrink-0"
                               disabled={!org.owner?.id || viewAsId === org.owner?.id}
                               title={org.owner ? `Entrar como ${org.owner.name}` : 'Empresa sem dono'}
                               onClick={() => onEnterAsUser(org.owner.id, org.owner.name)}
                             >
                               <LogIn className="h-4 w-4" />
-                              Entrar na conta
+                              Entrar
                             </Button>
-                            <Button size="sm" variant="secondary" type="button" onClick={() => openManageOrg(org)}>
-                              Gerenciar acessos
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              type="button"
+                              className="shrink-0"
+                              title="Gerenciar acessos"
+                              onClick={() => openManageOrg(org)}
+                            >
+                              <Settings2 className="h-4 w-4" />
+                              Acessos
                             </Button>
                             <Button
                               size="sm"
                               variant="danger"
                               type="button"
+                              className="shrink-0"
                               disabled={org.owner?.id === adminUser?.id}
                               title={
                                 org.owner?.id === adminUser?.id
