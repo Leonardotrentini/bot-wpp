@@ -12,6 +12,7 @@ const {
   sendText,
   sendMedia,
   sendWhatsAppAudio,
+  sendPresence,
   findChats,
   findContacts,
   fetchChatMessages,
@@ -1594,6 +1595,7 @@ function createCrmRouter({ io }) {
           value: z.string().optional(),
           delayUnit: z.enum(["seconds", "minutes", "hours"]).optional(),
           delayValue: z.number().min(0).max(86400).optional(),
+          recordingDelayValue: z.number().min(0).max(120).optional(),
         }),
       )
       .min(1)
@@ -1706,7 +1708,7 @@ function createCrmRouter({ io }) {
     })
   })
 
-  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio }
+  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence }
 
   router.post("/flows/:id/test", async (req, res) => {
     const conversationId = String(req.body?.conversationId || "").trim()

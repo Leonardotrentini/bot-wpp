@@ -20,6 +20,7 @@ const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require(".
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
 const { resolveActionDelayMs } = require("./flowActionDelay")
+const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
 
 function resolveNoReplyMinutes(trigger) {
   if (!trigger) return 24 * 60
@@ -178,6 +179,31 @@ async function executeActions(deps, flow, conversation, options = {}) {
   let tagsMutated = false
   let cumulativeDelayMs = 0
 
+  async function queueMessageDelivery({ body, mediaType, mediaBase64, mediaMime, mediaName, presenceDelayMs }, offsetMs) {
+    const mt = mediaType && mediaType !== "none" ? String(mediaType) : "none"
+    const hasMedia = ["image", "video", "audio", "document"].includes(mt)
+    const text = String(body || "").trim()
+    if (!text && !hasMedia) return
+
+    const jitter = immediate ? 0 : deliveryDelayMs()
+    await prisma.crmDelivery.create({
+      data: {
+        userId: conversation.userId,
+        conversationId: conversation.id,
+        remoteJid: conversation.remoteJid,
+        kind: options.deliveryKind || "flow",
+        sourceId: flow.id || null,
+        body: text || null,
+        mediaType: mt,
+        mediaBase64: hasMedia ? String(mediaBase64 || "") : null,
+        mediaMime: hasMedia ? mediaMime || null : null,
+        mediaName: hasMedia ? mediaName || null : null,
+        presenceDelayMs: mt === "audio" ? Number(presenceDelayMs) || 0 : 0,
+        scheduledAt: new Date(Date.now() + offsetMs + jitter),
+      },
+    })
+  }
+
   async function runOneAction(action, offsetMs) {
     const type = String(action?.type || "")
     try {
@@ -186,22 +212,38 @@ async function executeActions(deps, flow, conversation, options = {}) {
         const mediaType = action.mediaType && action.mediaType !== "none" ? String(action.mediaType) : "none"
         const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
         if (!body && !hasMedia) return
-        const jitter = immediate ? 0 : deliveryDelayMs()
-        await prisma.crmDelivery.create({
-          data: {
-            userId: conversation.userId,
-            conversationId: conversation.id,
-            remoteJid: conversation.remoteJid,
-            kind: options.deliveryKind || "flow",
-            sourceId: flow.id || null,
-            body: body || null,
+
+        const presenceDelayMs = resolveRecordingDelayMs(action)
+
+        // Nota de voz não aceita legenda — fila áudio primeiro, texto depois (ordem por createdAt).
+        if (hasMedia && mediaType === "audio" && body) {
+          await queueMessageDelivery(
+            {
+              body: null,
+              mediaType,
+              mediaBase64: action.mediaBase64,
+              mediaMime: action.mediaMime,
+              mediaName: action.mediaName,
+              presenceDelayMs,
+            },
+            offsetMs,
+          )
+          await queueMessageDelivery({ body, mediaType: "none" }, offsetMs)
+          detail.push("send_message:audio+text")
+          return
+        }
+
+        await queueMessageDelivery(
+          {
+            body,
             mediaType,
-            mediaBase64: hasMedia ? String(action.mediaBase64 || "") : null,
-            mediaMime: hasMedia ? action.mediaMime || null : null,
-            mediaName: hasMedia ? action.mediaName || null : null,
-            scheduledAt: new Date(Date.now() + offsetMs + jitter),
+            mediaBase64: action.mediaBase64,
+            mediaMime: action.mediaMime,
+            mediaName: action.mediaName,
+            presenceDelayMs,
           },
-        })
+          offsetMs,
+        )
         detail.push(hasMedia ? `send_message:${mediaType}` : "send_message")
       } else if (type === "add_tag" && action.tagId) {
         const tagId = String(action.tagId)

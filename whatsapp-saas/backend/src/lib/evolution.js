@@ -396,6 +396,24 @@ async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize =
   return fetchGroupMessages(instanceName, remoteJid, { page, pageSize, cutoffMs })
 }
 
+/** presence: "composing" | "recording" — delay em ms (máx ~20s por chamada no WhatsApp). */
+async function sendPresence(instanceName, number, { presence = "recording", delayMs = 3000 } = {}) {
+  const delay = Math.max(500, Math.min(Number(delayMs) || 3000, 20000))
+  const instance = encodeURIComponent(instanceName)
+  return firstSuccess([
+    () =>
+      requestEvolution(`/chat/sendPresence/${instance}`, {
+        method: "POST",
+        body: { number, options: { delay, presence, number } },
+      }),
+    () =>
+      requestEvolution(`/message/sendPresence/${instance}`, {
+        method: "POST",
+        body: { number, options: { delay, presence, number } },
+      }),
+  ])
+}
+
 async function sendText(instanceName, number, text, options = {}) {
   const { linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest } = options
   const body = {
@@ -562,6 +580,7 @@ module.exports = {
   findChats,
   fetchChatMessages,
   sendText,
+  sendPresence,
   sendMedia,
   sendWhatsAppAudio,
   getBase64FromMediaMessage,

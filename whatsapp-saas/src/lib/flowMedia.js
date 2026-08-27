@@ -7,6 +7,7 @@ import {
 } from './quickReplyMedia.js'
 import { buildNoReplyTriggerPatch, getNoReplyDelayUi } from './flowNoReplyDelay.js'
 import { resolveActionDelayMs } from './flowActionDelay.js'
+import { resolveRecordingDelayMs } from './flowRecordingDelay.js'
 
 export const FLOW_FILE_ACCEPT = QUICK_REPLY_FILE_ACCEPT
 export const FLOW_MEDIA_LABELS = QUICK_REPLY_MEDIA_LABELS
@@ -32,6 +33,9 @@ function appendActionDelayFields(out, action) {
   if (resolveActionDelayMs(action) > 0) {
     out.delayUnit = action.delayUnit || 'minutes'
     out.delayValue = Number(action.delayValue)
+  }
+  if (resolveRecordingDelayMs(action) > 0) {
+    out.recordingDelayValue = Number(action.recordingDelayValue)
   }
   return out
 }

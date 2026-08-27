@@ -73,12 +73,16 @@ export function FlowMessageMedia({ action, onChange, onError }) {
         placeholder={
           mediaType === 'none'
             ? 'Texto da mensagem… Cole um link ou anexe um PDF do catálogo abaixo.'
-            : 'Legenda (opcional)…'
+            : mediaType === 'audio'
+              ? 'Texto enviado depois do áudio (mensagem separada)…'
+              : 'Legenda (opcional)…'
         }
         className="w-full resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
       />
       <p className="text-[11px] leading-relaxed text-stone-500">
-        Links (https://…) ficam clicáveis no WhatsApp. Ideal para catálogo online; para PDF, use o anexo abaixo.
+        {mediaType === 'audio'
+          ? 'Notas de voz não têm legenda no WhatsApp — o texto acima será enviado como mensagem separada, depois do áudio.'
+          : 'Links (https://…) ficam clicáveis no WhatsApp. Ideal para catálogo online; para PDF, use o anexo abaixo.'}
       </p>
       <div className="rounded-xl border border-brand-800 bg-brand-900/40 p-3">
         <div className="mb-2 flex items-center justify-between gap-2">

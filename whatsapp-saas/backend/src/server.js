@@ -43,6 +43,7 @@ const {
   sendText,
   sendMedia,
   sendWhatsAppAudio,
+  sendPresence,
   getBase64FromMediaMessage,
   extractMediaBase64Payload,
   logoutInstance,
@@ -3934,7 +3935,7 @@ async function updateGroupsFromWebhook(instanceName, body) {
 
 /** Deps compartilhadas dos motores do CRM (fluxos, IA, fila de envio). */
 function getCrmDeps() {
-  return { prisma, io, sendText, sendMedia, sendWhatsAppAudio, findChats, fetchChatMessages }
+  return { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, findChats, fetchChatMessages }
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */

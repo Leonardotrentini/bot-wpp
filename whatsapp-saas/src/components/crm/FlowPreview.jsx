@@ -2,6 +2,7 @@ import { Bot, Clock, FileText, Film, ImageIcon, Kanban, Mic, Tag as TagIcon, Zap
 import { ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
 import { FLOW_MEDIA_LABELS, flowMessageHasContent } from '../../lib/flowMedia.js'
 import { formatActionDelay } from '../../lib/flowActionDelay.js'
+import { formatRecordingDelay } from '../../lib/flowRecordingDelay.js'
 
 const URL_IN_TEXT_RE = /(https?:\/\/[^\s]+)/g
 
@@ -54,6 +55,19 @@ function actionSummary(action, { tags, stages, agents }) {
   return action.type
 }
 
+function RecordingChip({ action }) {
+  const label = formatRecordingDelay(action)
+  if (!label) return null
+  return (
+    <div className="flex justify-center py-1">
+      <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-0.5 text-[10px] font-medium text-sky-200">
+        <Mic className="h-3 w-3" />
+        {label}
+      </span>
+    </div>
+  )
+}
+
 function DelayChip({ action }) {
   const label = formatActionDelay(action)
   if (!label) return null
@@ -67,18 +81,20 @@ function DelayChip({ action }) {
   )
 }
 
-function MessageBubble({ action }) {
+function MessageBubble({ action, bodyOnly = false, mediaOnly = false }) {
   const mediaType = action.mediaType || 'none'
   const previewSrc = action.mediaPreviewUrl || action.mediaBase64 || null
   const body = String(action.body || '').trim()
+  const showMedia = !bodyOnly && mediaType !== 'none'
+  const showBody = !mediaOnly && body
 
   return (
     <div className="flex justify-end">
       <div className="max-w-[92%] overflow-hidden rounded-lg rounded-tr-none bg-[#005c4b] px-3 py-2 text-sm text-stone-100 shadow-md">
-        {mediaType === 'audio' && previewSrc ? (
+        {showMedia && mediaType === 'audio' && previewSrc ? (
           <audio src={previewSrc} controls className="mb-1 h-9 w-full min-w-[200px] max-w-xs" preload="metadata" />
         ) : null}
-        {mediaType === 'video' && previewSrc ? (
+        {showMedia && mediaType === 'video' && previewSrc ? (
           <VideoMediaPreview
             src={previewSrc}
             mediaName={action.mediaName}
@@ -86,10 +102,10 @@ function MessageBubble({ action }) {
             compact
           />
         ) : null}
-        {mediaType === 'image' && previewSrc ? (
+        {showMedia && mediaType === 'image' && previewSrc ? (
           <ImageMediaPreview src={previewSrc} alt="" className="mb-1 max-h-40 w-full rounded-md object-cover" />
         ) : null}
-        {mediaType !== 'none' && !previewSrc ? (
+        {showMedia && !previewSrc ? (
           <div className="mb-1 flex items-center gap-2 rounded-md bg-black/20 px-2 py-1.5 text-xs text-stone-300">
             {mediaType === 'audio' ? (
               <Mic className="h-4 w-4" />
@@ -105,10 +121,10 @@ function MessageBubble({ action }) {
               (mediaType === 'audio' ? 'Áudio anexado' : 'Arquivo anexado')}
           </div>
         ) : null}
-        {body ? (
+        {showBody ? (
           <p className="whitespace-pre-wrap break-words leading-relaxed">{renderTextWithLinks(body)}</p>
         ) : null}
-        {!body && mediaType === 'none' ? (
+        {!showBody && !showMedia ? (
           <p className="text-xs italic text-stone-400">Mensagem vazia</p>
         ) : null}
         <p className="mt-1 text-right text-[10px] text-stone-400/80">
@@ -155,12 +171,27 @@ export function FlowPreview({ flow, tags = [], stages = [], agents = [], compact
       >
         {actions.map((action, i) => {
           const delayLabel = formatActionDelay(action)
-          const showDelay = i > 0 && delayLabel
+          const showDelay = Boolean(delayLabel)
 
           if (action.type === 'send_message' && flowMessageHasContent(action)) {
+            const body = String(action.body || '').trim()
+            const isAudioWithText = action.mediaType === 'audio' && body
+
+            if (isAudioWithText) {
+              return (
+                <div key={i} className="space-y-2">
+                  {showDelay ? <DelayChip action={action} /> : null}
+                  <RecordingChip action={action} />
+                  <MessageBubble action={action} mediaOnly />
+                  <MessageBubble action={action} bodyOnly />
+                </div>
+              )
+            }
+
             return (
               <div key={i}>
                 {showDelay ? <DelayChip action={action} /> : null}
+                {action.mediaType === 'audio' ? <RecordingChip action={action} /> : null}
                 <MessageBubble action={action} />
               </div>
             )

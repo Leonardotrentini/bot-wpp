@@ -1,4 +1,4 @@
-/** Delay configurável antes de cada ação do fluxo (a partir da 2ª). */
+/** Delay configurável antes de cada ação do fluxo. */
 
 export const MAX_ACTION_DELAY_SECONDS = 3600
 export const MAX_ACTION_DELAY_MINUTES = 24 * 60

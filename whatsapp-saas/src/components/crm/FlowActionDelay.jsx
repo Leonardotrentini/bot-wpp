@@ -3,15 +3,15 @@ import { Input } from '../common/Input.jsx'
 import { Select } from '../common/Select.jsx'
 import { buildActionDelayPatch, getActionDelayUi, maxDelayForUnit } from '../../lib/flowActionDelay.js'
 
-export function FlowActionDelay({ action, onChange }) {
+export function FlowActionDelay({ action, onChange, isFirst = false }) {
   const delay = getActionDelayUi(action)
   const max = maxDelayForUnit(delay.unit)
 
   return (
-    <div className="mt-3 rounded-lg border border-brand-800/80 bg-brand-950/40 p-2.5">
+    <div className="rounded-lg border border-brand-800/80 bg-brand-950/40 p-2.5">
       <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-stone-400">
         <Clock className="h-3.5 w-3.5 text-accent-400" />
-        Aguardar antes desta ação
+        {isFirst ? 'Aguardar antes de começar' : 'Aguardar antes desta ação'}
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <div className="min-w-[100px] flex-1">
@@ -45,8 +45,12 @@ export function FlowActionDelay({ action, onChange }) {
       </div>
       <p className="mt-1.5 text-[11px] text-stone-500">
         {delay.value > 0
-          ? 'O fluxo espera esse tempo após a ação anterior antes de executar esta.'
-          : 'Deixe 0 para executar logo após a ação anterior.'}
+          ? isFirst
+            ? 'O fluxo espera esse tempo após o gatilho antes da primeira ação.'
+            : 'O fluxo espera esse tempo após a ação anterior antes de executar esta.'
+          : isFirst
+            ? 'Deixe 0 para executar assim que o gatilho disparar.'
+            : 'Deixe 0 para executar logo após a ação anterior.'}
       </p>
     </div>
   )

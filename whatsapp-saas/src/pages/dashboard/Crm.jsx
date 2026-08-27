@@ -31,8 +31,7 @@ import { Spinner } from '../../components/common/Spinner.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.jsx'
-import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
-import { FlowActionDelay } from '../../components/crm/FlowActionDelay.jsx'
+import { FlowActionsEditor } from '../../components/crm/FlowActionsEditor.jsx'
 import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
@@ -860,8 +859,6 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
   }, [isOpen, initial])
 
   const setTrigger = (patch) => setFlow((f) => ({ ...f, trigger: { ...f.trigger, ...patch } }))
-  const setAction = (i, patch) =>
-    setFlow((f) => ({ ...f, actions: f.actions.map((a, idx) => (idx === i ? { ...a, ...patch } : a)) }))
 
   const valid =
     flow.name.trim() &&
@@ -1035,115 +1032,14 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           )}
         </div>
 
-        <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <p className="text-sm font-medium text-stone-300">Então (ações)</p>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                setFlow((f) => ({
-                  ...f,
-                  actions: [
-                    ...f.actions,
-                    { type: 'send_message', body: '', delayValue: 0, delayUnit: 'minutes', ...emptyFlowMessageMedia() },
-                  ],
-                }))
-              }
-              disabled={flow.actions.length >= 10}
-            >
-              <Plus className="h-3.5 w-3.5" /> Ação
-            </Button>
-          </div>
-          <div className="space-y-3">
-            {flow.actions.map((action, i) => (
-              <div key={i} className="rounded-xl border border-brand-700/70 bg-brand-900/50 p-3">
-                {i > 0 && (
-                  <FlowActionDelay action={action} onChange={(patch) => setAction(i, patch)} />
-                )}
-                <div className={`flex items-center gap-2${i > 0 ? ' mt-3' : ''}`}>
-                  <div className="flex-1">
-                    <Select value={action.type} onChange={(e) => setAction(i, { type: e.target.value, body: '', tagId: '', stageId: '', value: '', ...emptyFlowMessageMedia() })}>
-                      <option value="send_message">Enviar mensagem</option>
-                      <option value="add_tag">Adicionar tag ao contato</option>
-                      <option value="remove_tag">Remover tag do contato</option>
-                      <option value="move_stage">Mover no Kanban</option>
-                      <option value="assign_ai">Ativar agente de IA</option>
-                      <option value="set_status">Mudar status da conversa</option>
-                    </Select>
-                  </div>
-                  {flow.actions.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setFlow((f) => ({ ...f, actions: f.actions.filter((_, idx) => idx !== i) }))}
-                      className="rounded-lg p-2 text-stone-500 hover:bg-white/5 hover:text-red-400"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-                <div className="mt-2">
-                  {action.type === 'send_message' && (
-                    <FlowMessageMedia
-                      action={action}
-                      onChange={(patch) => setAction(i, patch)}
-                      onError={(msg) => toast.error(msg)}
-                    />
-                  )}
-                  {action.type === 'add_tag' && (
-                    <Select value={action.tagId || ''} onChange={(e) => setAction(i, { tagId: e.target.value })}>
-                      <option value="">Escolha a tag…</option>
-                      {tags.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                  {action.type === 'remove_tag' && (
-                    <Select value={action.tagId || ''} onChange={(e) => setAction(i, { tagId: e.target.value })}>
-                      <option value="">Escolha a tag…</option>
-                      {tags.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                  {action.type === 'move_stage' && (
-                    <Select value={action.stageId || ''} onChange={(e) => setAction(i, { stageId: e.target.value })}>
-                      <option value="">Escolha o estágio…</option>
-                      {stages.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                  {action.type === 'assign_ai' && (
-                    <Select value={action.agentId || ''} onChange={(e) => setAction(i, { agentId: e.target.value || undefined })}>
-                      <option value="">Agente padrão</option>
-                      {agents.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                  {action.type === 'set_status' && (
-                    <Select value={action.value || ''} onChange={(e) => setAction(i, { value: e.target.value })}>
-                      <option value="">Escolha o status…</option>
-                      <option value="open">Aberta</option>
-                      <option value="pending">Pendente</option>
-                      <option value="resolved">Resolvida</option>
-                      <option value="archived">Arquivada</option>
-                    </Select>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <FlowActionsEditor
+          actions={flow.actions}
+          tags={tags}
+          stages={stages}
+          agents={agents}
+          onChange={(actions) => setFlow((f) => ({ ...f, actions }))}
+          onError={(msg) => toast.error(msg)}
+        />
 
         <div>
           <Input

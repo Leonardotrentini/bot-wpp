@@ -12,12 +12,30 @@ const CRM_DELIVERY_GAP_MS = Number(process.env.CRM_DELIVERY_GAP_MS || 2000)
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 let busy = false
 
+const PRESENCE_CHUNK_MS = 18000
+
+async function playRecordingPresence(deps, instanceName, to, totalMs) {
+  if (!totalMs || totalMs <= 0 || typeof deps.sendPresence !== "function") return
+  let remaining = totalMs
+  while (remaining > 0) {
+    const chunk = Math.min(remaining, PRESENCE_CHUNK_MS)
+    try {
+      await deps.sendPresence(instanceName, to, { presence: "recording", delayMs: chunk })
+    } catch (err) {
+      console.warn("[crm-delivery] presence recording:", err?.message || err)
+      break
+    }
+    remaining -= chunk
+    if (remaining > 0) await wait(300)
+  }
+}
+
 function extractProviderMessageId(resp) {
   return resp?.key?.id || resp?.messageId || resp?.id || null
 }
 
 async function processOneDelivery(deps, delivery) {
-  const { prisma, sendText, sendMedia, sendWhatsAppAudio, io } = deps
+  const { prisma, sendText, sendMedia, sendWhatsAppAudio, sendPresence, io } = deps
 
   const conversation = await prisma.crmConversation.findUnique({
     where: { id: delivery.conversationId },
@@ -49,6 +67,12 @@ async function processOneDelivery(deps, delivery) {
     if (hasMedia) {
       const to = resolveEvolutionRecipient(conversation)
       const media = stripMediaBase64(delivery.mediaBase64)
+      if (mediaType === "audio") {
+        const presenceMs = Number(delivery.presenceDelayMs) || 0
+        if (presenceMs > 0) {
+          await playRecordingPresence(deps, conn.instanceName, to, presenceMs)
+        }
+      }
       if (mediaType === "audio" && typeof sendWhatsAppAudio === "function") {
         const mimetype = delivery.mediaMime || "audio/ogg; codecs=opus"
         resp = await sendWhatsAppAudio(conn.instanceName, to, {
@@ -134,15 +158,38 @@ async function processOneDelivery(deps, delivery) {
   }
 }
 
+async function pickEligibleDeliveries(prisma, limit) {
+  const now = new Date()
+  const candidates = await prisma.crmDelivery.findMany({
+    where: { status: "pending", scheduledAt: { lte: now } },
+    orderBy: [{ conversationId: "asc" }, { createdAt: "asc" }],
+    take: Math.max(limit * 4, limit),
+  })
+  if (!candidates.length) return []
+
+  const sendingRows = await prisma.crmDelivery.findMany({
+    where: { status: "sending" },
+    select: { conversationId: true },
+  })
+  const blocked = new Set(sendingRows.map((r) => r.conversationId))
+  const picked = []
+  const pickedConversations = new Set()
+
+  for (const row of candidates) {
+    if (blocked.has(row.conversationId)) continue
+    if (pickedConversations.has(row.conversationId)) continue
+    picked.push(row)
+    pickedConversations.add(row.conversationId)
+    if (picked.length >= limit) break
+  }
+  return picked
+}
+
 async function processPendingCrmDeliveries(deps) {
   if (busy) return 0
   busy = true
   try {
-    const pending = await deps.prisma.crmDelivery.findMany({
-      where: { status: "pending", scheduledAt: { lte: new Date() } },
-      orderBy: { scheduledAt: "asc" },
-      take: CRM_DELIVERY_BATCH,
-    })
+    const pending = await pickEligibleDeliveries(deps.prisma, CRM_DELIVERY_BATCH)
     for (let i = 0; i < pending.length; i += 1) {
       await processOneDelivery(deps, pending[i])
       if (i < pending.length - 1) await wait(CRM_DELIVERY_GAP_MS)
