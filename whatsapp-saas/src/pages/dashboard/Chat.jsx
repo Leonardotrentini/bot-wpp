@@ -79,6 +79,7 @@ import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveConta
 import { toastMetaTracking } from '../../lib/metaTrackingFeedback.js'
 import { contactHasTag } from '../../lib/crmTags.js'
 import {
+  dedupeGroupsByJid,
   groupChatId,
   groupToListItem,
   isGroupChatId,
@@ -340,14 +341,17 @@ export function Chat() {
   }, [])
 
   const chatList = useMemo(() => {
-    const groupItems = monitoredGroups.map(groupToListItem)
+    const groupItems = dedupeGroupsByJid(monitoredGroups, user?.id).map(groupToListItem)
     return sortChatListItems([...conversations, ...groupItems])
-  }, [conversations, monitoredGroups])
+  }, [conversations, monitoredGroups, user?.id])
 
   const active = useMemo(() => chatList.find((c) => c.id === activeId) || null, [chatList, activeId])
   const activeIsGroup = active?.kind === 'group'
 
-  const monitoredGroupCount = monitoredGroups.length
+  const monitoredGroupCount = useMemo(
+    () => dedupeGroupsByJid(monitoredGroups, user?.id).length,
+    [monitoredGroups, user?.id],
+  )
 
   const displayedConversations = useMemo(() => {
     const term = query.trim().toLowerCase()
@@ -362,15 +366,23 @@ export function Chat() {
     }
 
     if (groupsOnly) {
-      return sortChatListItems(monitoredGroups.map(groupToListItem).filter(filterGroup))
+      return sortChatListItems(
+        dedupeGroupsByJid(monitoredGroups, user?.id)
+          .map(groupToListItem)
+          .filter(filterGroup),
+      )
     }
 
     let direct = conversations.filter((c) => isConversationInScope(c, scope))
     if (unidentifiedOnly) {
       direct = direct.filter((c) => contactNeedsIdentification(c.contact))
     }
+    // Defesa: conversas CRM antigas com JID de grupo não devem poluir a inbox.
+    direct = direct.filter((c) => !String(c.remoteJid || '').endsWith('@g.us'))
 
-    const groups = monitoredGroups.map(groupToListItem).filter(filterGroup)
+    const groups = dedupeGroupsByJid(monitoredGroups, user?.id)
+      .map(groupToListItem)
+      .filter(filterGroup)
     return sortChatListItems([...groups, ...direct])
   }, [monitoredGroups, conversations, groupsOnly, unidentifiedOnly, query, sellerFilter, user?.id, isOrgOwner])
 
@@ -405,7 +417,10 @@ export function Chat() {
         mirrorConversationsListCache(rows, listParams)
       }
       if (groupsRes.status === 'fulfilled') {
-        setAllMonitoredGroups((groupsRes.value.data.groups || []).filter(isMonitoredGroup))
+        const preferred = user?.id || null
+        setAllMonitoredGroups(
+          dedupeGroupsByJid((groupsRes.value.data.groups || []).filter(isMonitoredGroup), preferred),
+        )
       }
       if (convRes.status === 'rejected') throw convRes.reason
     } catch {
@@ -421,20 +436,23 @@ export function Chat() {
         setRefreshingList(false)
       }
     }
-  }, [listParams])
+  }, [listParams, user?.id])
 
   loadConversationsRef.current = loadConversations
 
   useEffect(() => {
+    const preferred = user?.id || null
     const refreshGroups = () => {
       getGroups()
-        .then(({ data }) => setAllMonitoredGroups((data.groups || []).filter(isMonitoredGroup)))
+        .then(({ data }) =>
+          setAllMonitoredGroups(dedupeGroupsByJid((data.groups || []).filter(isMonitoredGroup), preferred)),
+        )
         .catch(() => {})
     }
     refreshGroups()
     const id = setInterval(refreshGroups, 30000)
     return () => clearInterval(id)
-  }, [])
+  }, [user?.id])
 
   useEffect(() => {
     if (!sellerFilter) {
@@ -1437,7 +1455,7 @@ export function Chat() {
           ) : (
             displayedConversations.map((c) => (
               <ConversationListItem
-                key={c.id}
+                key={c.kind === 'group' ? `${c.id}:${c.ownerUserId || 'self'}` : c.id}
                 conversation={c}
                 active={activeId}
                 onOpen={openConversation}

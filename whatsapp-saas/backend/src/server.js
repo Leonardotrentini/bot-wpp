@@ -914,13 +914,34 @@ async function readCachedGroupsScoped(dataScope) {
       ? { user: { select: { id: true, name: true, email: true } } }
       : undefined,
   })
-  return rows
-    .filter((row) => row.monitoringEnabled || isPlausibleWhatsAppGroup(row))
-    .map((row) => ({
+  const preferredUserId = dataScope?.actorId || null
+  const byJid = new Map()
+  for (const row of rows) {
+    if (!(row.monitoringEnabled || isPlausibleWhatsAppGroup(row))) continue
+    const jid = String(row.groupJid || "").trim()
+    if (!jid) continue
+    const payload = {
       ...getGroupApiPayload(row),
       ownerUserId: row.userId,
       ownerName: row.user?.name || null,
-    }))
+    }
+    const current = byJid.get(jid)
+    if (!current) {
+      byJid.set(jid, payload)
+      continue
+    }
+    if (preferredUserId && row.userId === preferredUserId && current.ownerUserId !== preferredUserId) {
+      byJid.set(jid, payload)
+      continue
+    }
+    if (preferredUserId && current.ownerUserId === preferredUserId && row.userId !== preferredUserId) {
+      continue
+    }
+    const nextMs = row.lastMessageAt ? new Date(row.lastMessageAt).getTime() : 0
+    const curMs = current.lastMessageAt ? new Date(current.lastMessageAt).getTime() : 0
+    if (nextMs > curMs) byJid.set(jid, payload)
+  }
+  return [...byJid.values()]
 }
 
 async function updateConnectionSync(userId, data) {
@@ -1662,10 +1683,21 @@ app.post("/api/groups/status", authMiddleware, async (req, res) => {
 app.get("/api/groups/:id/messages", authMiddleware, async (req, res) => {
   try {
     const groupJid = decodeURIComponent(req.params.id)
-    const group = await prisma.whatsAppGroup.findUnique({
+    const scope = req.dataScope
+    let group = await prisma.whatsAppGroup.findUnique({
       where: { userId_groupJid: { userId: req.user.sub, groupJid } },
-      select: { id: true, name: true, activatedAt: true },
+      select: { id: true, name: true, activatedAt: true, userId: true },
     })
+    // Dono da empresa: pode abrir grupo monitorado por um membro.
+    if (!group && scope?.isOwner && Array.isArray(scope.userIds) && scope.userIds.length > 1) {
+      const candidates = await prisma.whatsAppGroup.findMany({
+        where: { userId: { in: scope.userIds }, groupJid },
+        select: { id: true, name: true, activatedAt: true, userId: true, lastMessageAt: true },
+        orderBy: [{ lastMessageAt: "desc" }, { activatedAt: "desc" }],
+        take: 5,
+      })
+      group = candidates[0] || null
+    }
     if (!group) return res.status(404).json({ error: "NOT_FOUND", message: "Grupo não encontrado no cache." })
 
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100))

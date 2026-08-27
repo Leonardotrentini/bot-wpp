@@ -17,14 +17,57 @@ export function parseGroupChatId(id) {
   return id.slice(GROUP_CHAT_PREFIX.length)
 }
 
+function groupJidOf(group) {
+  return String(group?.id || group?.groupJid || '').trim()
+}
+
+function groupActivityMs(group) {
+  const raw = group?.lastMessageAt || group?.messagesLastSyncAt || group?.activatedAt || null
+  if (!raw) return 0
+  const ms = new Date(raw).getTime()
+  return Number.isFinite(ms) ? ms : 0
+}
+
+/**
+ * Escopo de org pode devolver o mesmo @g.us uma vez por WhatsApp membro.
+ * Mantém uma entrada por JID (prefere o usuário logado; senão o mais recente).
+ */
+export function dedupeGroupsByJid(groups, preferredUserId = null) {
+  const list = Array.isArray(groups) ? groups : []
+  const byJid = new Map()
+  for (const group of list) {
+    const jid = groupJidOf(group)
+    if (!jid) continue
+    const ownerId = group.ownerUserId || group.userId || null
+    const current = byJid.get(jid)
+    if (!current) {
+      byJid.set(jid, group)
+      continue
+    }
+    const currentOwner = current.ownerUserId || current.userId || null
+    if (preferredUserId && ownerId === preferredUserId && currentOwner !== preferredUserId) {
+      byJid.set(jid, group)
+      continue
+    }
+    if (preferredUserId && currentOwner === preferredUserId && ownerId !== preferredUserId) {
+      continue
+    }
+    if (groupActivityMs(group) > groupActivityMs(current)) {
+      byJid.set(jid, group)
+    }
+  }
+  return [...byJid.values()]
+}
+
 export function groupToListItem(group) {
+  const jid = groupJidOf(group)
   const lastMessageAt =
     group.lastMessageAt || group.messagesLastSyncAt || group.activatedAt || null
   return {
-    id: groupChatId(group.id),
+    id: groupChatId(jid),
     kind: 'group',
-    groupJid: group.id,
-    remoteJid: group.id,
+    groupJid: jid,
+    remoteJid: jid,
     ownerUserId: group.ownerUserId || group.userId || null,
     lastMessageAt,
     lastMessagePreview: group.lastMessage || 'Grupo ativo',
@@ -32,7 +75,7 @@ export function groupToListItem(group) {
     unreadCount: 0,
     aiEnabled: false,
     contact: {
-      id: group.id,
+      id: jid,
       name: group.name,
       avatarUrl: group.image,
       isGroup: true,

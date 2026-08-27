@@ -220,6 +220,8 @@ function createCrmRouter({ io }) {
     // Arquivada some da inbox por padrão; para revê-las é preciso pedir status=archived.
     if (status && ["open", "pending", "resolved", "archived"].includes(status)) where.status = status
     else where.status = { not: "archived" }
+    // Grupos (@g.us) têm inbox própria — não misturar com conversas 1:1.
+    where.NOT = { ...(where.NOT || {}), remoteJid: { endsWith: "@g.us" } }
     if (stageId === "none") where.kanbanStageId = null
     else if (stageId) where.kanbanStageId = String(stageId)
     if (tagId) where.contact = { tags: { some: { tagId: String(tagId) } } }

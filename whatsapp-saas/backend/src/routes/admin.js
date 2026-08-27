@@ -7,6 +7,7 @@ const { requireAdmin } = require("../lib/adminAuth")
 const { ensureDefaultPlans } = require("../lib/ensureBillingDefaults")
 const { ensureUserOrganization, backfillAllUserOrganizations, cleanupEmptyOrganizations } = require("../lib/orgScope")
 const { purgeUserById, purgeOrganizationById } = require("../lib/adminPurge")
+const { compactMessageRawAll } = require("../lib/messageRawCompact")
 
 const router = express.Router()
 
@@ -803,6 +804,37 @@ router.post("/organizations/:id/meta/resend-purchases", authMiddleware, requireA
     summary: { total: purchases.length, sent: 0, skipped: purchases.length, failed: 0 },
     results,
   })
+})
+
+router.post("/maintenance/compact-message-raw", authMiddleware, requireAdmin, async (req, res) => {
+  const schema = z.object({
+    limit: z.number().int().min(50).max(500).optional(),
+    maxBatches: z.number().int().min(1).max(100).optional(),
+    target: z.enum(["both", "crm", "group"]).optional(),
+  })
+  const parsed = schema.safeParse(req.body || {})
+  if (!parsed.success) {
+    return res.status(400).json({ error: "VALIDATION_ERROR", message: "Parâmetros inválidos." })
+  }
+
+  const { limit = 200, maxBatches = 20, target = "both" } = parsed.data
+  try {
+    const result = await compactMessageRawAll(prisma, { limit, maxBatches, target })
+    return res.json({
+      ok: true,
+      message: result.finished
+        ? "Compactação concluída para todas as mensagens com raw."
+        : "Lote executado — rode novamente se finished=false.",
+      ...result,
+      bytesSavedMb: Math.round((result.bytesSavedTotal / (1024 * 1024)) * 100) / 100,
+    })
+  } catch (err) {
+    console.error("[admin] compact-message-raw:", err)
+    return res.status(500).json({
+      error: "COMPACT_FAILED",
+      message: err?.message || "Falha ao compactar mensagens.",
+    })
+  }
 })
 
 module.exports = router

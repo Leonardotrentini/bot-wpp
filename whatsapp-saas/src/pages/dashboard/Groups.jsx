@@ -9,11 +9,12 @@ import { Skeleton } from '../../components/common/Skeleton.jsx'
 import { discoverGroups, getGroups, setGroupsStatus } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
+import { dedupeGroupsByJid, isMonitoredGroup as isMonitoredGroupShared } from '../../lib/chatGroups.js'
 
 const DEFAULT_MAX_GROUPS = 50
 
 function isMonitoredGroup(g) {
-  return g.status === 'ativo' && g.monitoringEnabled
+  return isMonitoredGroupShared(g)
 }
 
 function isPendingGroup(g) {
@@ -47,7 +48,7 @@ export function Groups() {
   const initializedSelection = useRef(false)
 
   const applyData = useCallback((data) => {
-    const nextGroups = data.groups || []
+    const nextGroups = dedupeGroupsByJid(data.groups || [], user?.id || null)
     setGroups(nextGroups)
     setSync(data.sync || null)
     if (data.limits) setLimits(data.limits)
@@ -56,7 +57,7 @@ export function Groups() {
       if (monitored.length) setSelected(new Set(monitored))
       initializedSelection.current = true
     }
-  }, [])
+  }, [user?.id])
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
