@@ -1523,6 +1523,8 @@ function createCrmRouter({ io }) {
           stageId: z.string().optional(),
           agentId: z.string().optional(),
           value: z.string().optional(),
+          delayUnit: z.enum(["seconds", "minutes", "hours"]).optional(),
+          delayValue: z.number().min(0).max(86400).optional(),
         }),
       )
       .min(1)

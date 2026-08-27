@@ -6,6 +6,7 @@ import {
   emptyQuickReplyMedia,
 } from './quickReplyMedia.js'
 import { buildNoReplyTriggerPatch, getNoReplyDelayUi } from './flowNoReplyDelay.js'
+import { resolveActionDelayMs } from './flowActionDelay.js'
 
 export const FLOW_FILE_ACCEPT = QUICK_REPLY_FILE_ACCEPT
 export const FLOW_MEDIA_LABELS = QUICK_REPLY_MEDIA_LABELS
@@ -27,20 +28,36 @@ export function clearFlowMessageMedia(action) {
   return { ...action, body: action?.body || '', ...emptyFlowMessageMedia() }
 }
 
+function appendActionDelayFields(out, action) {
+  if (resolveActionDelayMs(action) > 0) {
+    out.delayUnit = action.delayUnit || 'minutes'
+    out.delayValue = Number(action.delayValue)
+  }
+  return out
+}
+
 export function stripFlowActionForSave(action) {
   if (action.type === 'send_message') {
     const { mediaPreviewUrl, mediaSize, ...rest } = action
-    return rest
+    return appendActionDelayFields(rest, action)
   }
-  if (action.type === 'add_tag') return { type: 'add_tag', tagId: String(action.tagId || '') }
-  if (action.type === 'remove_tag') return { type: 'remove_tag', tagId: String(action.tagId || '') }
-  if (action.type === 'move_stage') return { type: 'move_stage', stageId: String(action.stageId || '') }
+  if (action.type === 'add_tag') {
+    return appendActionDelayFields({ type: 'add_tag', tagId: String(action.tagId || '') }, action)
+  }
+  if (action.type === 'remove_tag') {
+    return appendActionDelayFields({ type: 'remove_tag', tagId: String(action.tagId || '') }, action)
+  }
+  if (action.type === 'move_stage') {
+    return appendActionDelayFields({ type: 'move_stage', stageId: String(action.stageId || '') }, action)
+  }
   if (action.type === 'assign_ai') {
     const out = { type: 'assign_ai' }
     if (action.agentId) out.agentId = String(action.agentId)
-    return out
+    return appendActionDelayFields(out, action)
   }
-  if (action.type === 'set_status') return { type: 'set_status', value: String(action.value || '') }
+  if (action.type === 'set_status') {
+    return appendActionDelayFields({ type: 'set_status', value: String(action.value || '') }, action)
+  }
   return { type: action.type }
 }
 

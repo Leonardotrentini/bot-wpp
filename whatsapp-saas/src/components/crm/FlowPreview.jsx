@@ -1,6 +1,7 @@
-import { Bot, FileText, Film, ImageIcon, Kanban, Mic, Tag as TagIcon, Zap } from 'lucide-react'
+import { Bot, Clock, FileText, Film, ImageIcon, Kanban, Mic, Tag as TagIcon, Zap } from 'lucide-react'
 import { ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
 import { FLOW_MEDIA_LABELS, flowMessageHasContent } from '../../lib/flowMedia.js'
+import { formatActionDelay } from '../../lib/flowActionDelay.js'
 
 const URL_IN_TEXT_RE = /(https?:\/\/[^\s]+)/g
 
@@ -51,6 +52,19 @@ function actionSummary(action, { tags, stages, agents }) {
     return `Status → ${labels[action.value] || action.value || '—'}`
   }
   return action.type
+}
+
+function DelayChip({ action }) {
+  const label = formatActionDelay(action)
+  if (!label) return null
+  return (
+    <div className="flex justify-center py-1">
+      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-medium text-amber-200">
+        <Clock className="h-3 w-3" />
+        Aguardar {label}
+      </span>
+    </div>
+  )
 }
 
 function MessageBubble({ action }) {
@@ -105,12 +119,23 @@ function MessageBubble({ action }) {
   )
 }
 
+function OtherActionRow({ action, tags, stages, agents }) {
+  const Icon = ACTION_ICONS[action.type] || Zap
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-brand-800/60 bg-brand-950/40 px-2.5 py-2 text-xs text-stone-400">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-accent-400" />
+      <span>{actionSummary(action, { tags, stages, agents })}</span>
+    </div>
+  )
+}
+
 export function FlowPreview({ flow, tags = [], stages = [], agents = [], compact = false }) {
   const actions = flow?.actions || []
-  const messageActions = actions.filter((a) => a.type === 'send_message' && flowMessageHasContent(a))
-  const otherActions = actions.filter((a) => a.type !== 'send_message')
+  const hasContent = actions.some(
+    (a) => (a.type === 'send_message' && flowMessageHasContent(a)) || a.type !== 'send_message',
+  )
 
-  if (!messageActions.length && !otherActions.length) {
+  if (!hasContent) {
     return (
       <div className={`rounded-xl border border-brand-700/60 bg-[#0b141a] ${compact ? 'p-3' : 'p-4'}`}>
         <p className="text-xs text-stone-500">Configure ações para ver o preview.</p>
@@ -128,24 +153,31 @@ export function FlowPreview({ flow, tags = [], stages = [], agents = [], compact
             'radial-gradient(circle at 20% 30%, rgba(255,255,255,0.02) 0%, transparent 50%), radial-gradient(circle at 80% 70%, rgba(255,255,255,0.015) 0%, transparent 45%)',
         }}
       >
-        {messageActions.map((action, i) => (
-          <MessageBubble key={i} action={action} />
-        ))}
-      </div>
-      {otherActions.length > 0 ? (
-        <div className="mt-3 space-y-1.5 border-t border-brand-800 pt-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Outras ações</p>
-          {otherActions.map((action, i) => {
-            const Icon = ACTION_ICONS[action.type] || Zap
+        {actions.map((action, i) => {
+          const delayLabel = formatActionDelay(action)
+          const showDelay = i > 0 && delayLabel
+
+          if (action.type === 'send_message' && flowMessageHasContent(action)) {
             return (
-              <div key={i} className="flex items-center gap-2 text-xs text-stone-400">
-                <Icon className="h-3.5 w-3.5 shrink-0 text-accent-400" />
-                <span>{actionSummary(action, { tags, stages, agents })}</span>
+              <div key={i}>
+                {showDelay ? <DelayChip action={action} /> : null}
+                <MessageBubble action={action} />
               </div>
             )
-          })}
-        </div>
-      ) : null}
+          }
+
+          if (action.type !== 'send_message') {
+            return (
+              <div key={i}>
+                {showDelay ? <DelayChip action={action} /> : null}
+                <OtherActionRow action={action} tags={tags} stages={stages} agents={agents} />
+              </div>
+            )
+          }
+
+          return null
+        })}
+      </div>
     </div>
   )
 }

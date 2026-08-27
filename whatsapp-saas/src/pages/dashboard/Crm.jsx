@@ -32,6 +32,7 @@ import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.jsx'
 import { FlowMessageMedia } from '../../components/crm/FlowMessageMedia.jsx'
+import { FlowActionDelay } from '../../components/crm/FlowActionDelay.jsx'
 import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
@@ -1014,7 +1015,10 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
               onClick={() =>
                 setFlow((f) => ({
                   ...f,
-                  actions: [...f.actions, { type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
+                  actions: [
+                    ...f.actions,
+                    { type: 'send_message', body: '', delayValue: 0, delayUnit: 'minutes', ...emptyFlowMessageMedia() },
+                  ],
                 }))
               }
               disabled={flow.actions.length >= 10}
@@ -1025,7 +1029,10 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           <div className="space-y-3">
             {flow.actions.map((action, i) => (
               <div key={i} className="rounded-xl border border-brand-700/70 bg-brand-900/50 p-3">
-                <div className="flex items-center gap-2">
+                {i > 0 && (
+                  <FlowActionDelay action={action} onChange={(patch) => setAction(i, patch)} />
+                )}
+                <div className={`flex items-center gap-2${i > 0 ? ' mt-3' : ''}`}>
                   <div className="flex-1">
                     <Select value={action.type} onChange={(e) => setAction(i, { type: e.target.value, body: '', tagId: '', stageId: '', value: '', ...emptyFlowMessageMedia() })}>
                       <option value="send_message">Enviar mensagem</option>

@@ -19,6 +19,7 @@ const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY |
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
+const { resolveActionDelayMs } = require("./flowActionDelay")
 
 function resolveNoReplyMinutes(trigger) {
   if (!trigger) return 24 * 60
@@ -173,15 +174,17 @@ async function executeActions(deps, flow, conversation, options = {}) {
   let stageChangedTo = null
   const newlyAddedTagIds = []
   let tagsMutated = false
+  let cumulativeDelayMs = 0
 
-  for (const action of actions) {
+  async function runOneAction(action, offsetMs) {
     const type = String(action?.type || "")
     try {
       if (type === "send_message") {
         const body = String(action.body || "").trim()
         const mediaType = action.mediaType && action.mediaType !== "none" ? String(action.mediaType) : "none"
         const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
-        if (!body && !hasMedia) continue
+        if (!body && !hasMedia) return
+        const jitter = immediate ? 0 : deliveryDelayMs()
         await prisma.crmDelivery.create({
           data: {
             userId: conversation.userId,
@@ -194,7 +197,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
             mediaBase64: hasMedia ? String(action.mediaBase64 || "") : null,
             mediaMime: hasMedia ? action.mediaMime || null : null,
             mediaName: hasMedia ? action.mediaName || null : null,
-            scheduledAt: immediate ? new Date() : new Date(Date.now() + deliveryDelayMs()),
+            scheduledAt: new Date(Date.now() + offsetMs + jitter),
           },
         })
         detail.push(hasMedia ? `send_message:${mediaType}` : "send_message")
@@ -210,7 +213,6 @@ async function executeActions(deps, flow, conversation, options = {}) {
             })
             newlyAddedTagIds.push(tagId)
           } catch (err) {
-            // corrida rara no unique — trata como já existente
             if (err?.code !== "P2002") throw err
           }
         }
@@ -246,6 +248,34 @@ async function executeActions(deps, flow, conversation, options = {}) {
     } catch (err) {
       console.error(`[crm-flow] ação ${type} falhou (flow ${flow.id}):`, err?.message || err)
     }
+  }
+
+  for (const action of actions) {
+    const stepDelayMs = immediate ? 0 : resolveActionDelayMs(action)
+    cumulativeDelayMs += stepDelayMs
+    const type = String(action?.type || "")
+
+    if (!immediate && cumulativeDelayMs > 0 && type !== "send_message") {
+      const offset = cumulativeDelayMs
+      setTimeout(() => {
+        runOneAction(action, 0).then(async () => {
+          if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
+            const updated = await prisma.crmConversation.findUnique({
+              where: { id: conversation.id },
+              include: CONVERSATION_INCLUDE,
+            })
+            if (updated) {
+              emitCrmEvent(io, conversation.userId, "crm:conversation", {
+                conversation: formatConversationRow(updated),
+              })
+            }
+          }
+        }).catch((err) => console.error("[crm-flow] ação atrasada:", err?.message || err))
+      }, offset).unref?.()
+      continue
+    }
+
+    await runOneAction(action, cumulativeDelayMs)
   }
 
   if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
