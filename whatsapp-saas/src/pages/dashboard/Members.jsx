@@ -7,9 +7,9 @@ import { Input } from '../../components/common/Input.jsx'
 import { Select } from '../../components/common/Select.jsx'
 import { DarkDropdown } from '../../components/common/DarkDropdown.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
-import { Modal } from '../../components/common/Modal.jsx'
+import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import { DateRangeCalendar } from '../../components/common/DateRangeCalendar.jsx'
-import { getMembers, syncMembersParticipants } from '../../services/api.js'
+import { getMembers, syncMembersParticipants, bulkDeleteCrmContacts } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import {
@@ -312,6 +312,8 @@ export function Members() {
   const maxDate = todayYmd()
 
   const [selected, setSelected] = useState(() => new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [deletingLeads, setDeletingLeads] = useState(false)
   const [tagsModal, setTagsModal] = useState(false)
   const [newTagName, setNewTagName] = useState('')
   const [applyTagValue, setApplyTagValue] = useState('')
@@ -484,7 +486,6 @@ export function Members() {
 
   const periodUsesTagDate = Boolean(tagFilter && (dateFrom || dateTo))
 
-  // Enquanto a API responde, pré-filtra a lista local (feedback imediato no "Hoje", etc.).
   const displayedMembers = useMemo(() => {
     if (!refreshing) return members
     let list = members
@@ -558,6 +559,42 @@ export function Members() {
   const toggleSelectAllHeader = () => {
     if (allVisibleSelected) clearAll()
     else selectAll()
+  }
+
+  const selectedWithCrm = useMemo(
+    () => displayedMembers.filter((m) => selected.has(m.id) && m.crmContactId),
+    [displayedMembers, selected],
+  )
+
+  const handleBulkDeleteLeads = async () => {
+    const contactIds = selectedWithCrm.map((m) => m.crmContactId)
+    if (!contactIds.length) {
+      setBulkDeleteOpen(false)
+      toast.error('Nenhum lead com conversa CRM entre os selecionados.')
+      return
+    }
+    setDeletingLeads(true)
+    try {
+      const { data } = await bulkDeleteCrmContacts(contactIds)
+      const deletedIds = new Set(data?.deletedIds || contactIds)
+      setApiMembers((prev) => prev.filter((m) => !deletedIds.has(m.crmContactId)))
+      setMembers((prev) => prev.filter((m) => !deletedIds.has(m.crmContactId)))
+      setSelected(new Set())
+      setBulkDeleteOpen(false)
+      const deleted = data?.deleted ?? deletedIds.size
+      toast.success(`${deleted} lead(s) excluído(s) do CRM.`)
+      if (data?.notFound?.length) {
+        toast.info(`${data.notFound.length} lead(s) já não existiam.`)
+      }
+      const skipped = selected.size - selectedWithCrm.length
+      if (skipped > 0) {
+        toast.info(`${skipped} selecionado(s) só em grupo permanecem na lista (sem CRM 1:1).`)
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao excluir leads.')
+    } finally {
+      setDeletingLeads(false)
+    }
   }
 
   const createTag = () => {
@@ -798,6 +835,23 @@ export function Members() {
         >
           <Download className="h-4 w-4" />
           {selected.size > 0 ? `Exportar ${selected.size}` : 'Exportar'}
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          className="gap-1.5"
+          onClick={() => setBulkDeleteOpen(true)}
+          disabled={selectedWithCrm.length === 0 || deletingLeads}
+          title={
+            selected.size === 0
+              ? 'Selecione leads com conversa CRM para excluir'
+              : selectedWithCrm.length === 0
+                ? 'Leads só de grupo não têm CRM 1:1 para excluir'
+                : `Excluir ${selectedWithCrm.length} lead(s) do CRM`
+          }
+        >
+          <Trash2 className="h-4 w-4" />
+          {selectedWithCrm.length > 0 ? `Excluir ${selectedWithCrm.length}` : 'Excluir CRM'}
         </Button>
         <span className="hidden h-6 w-px bg-brand-700 sm:inline" aria-hidden />
         <Button size="sm" variant="outline" className="gap-1.5" onClick={onSyncParticipants} disabled={syncing}>
@@ -1323,6 +1377,15 @@ export function Members() {
           </Button>
         </div>
       </Modal>
+
+      <ConfirmModal
+        isOpen={bulkDeleteOpen}
+        onClose={() => setBulkDeleteOpen(false)}
+        onConfirm={handleBulkDeleteLeads}
+        loading={deletingLeads}
+        title="Excluir leads do CRM"
+        message={`Excluir ${selectedWithCrm.length} lead(s) do CRM? Conversas, mensagens e histórico serão removidos permanentemente. Leads que existem só como participante de grupo permanecem na lista.`}
+      />
     </div>
   )
 }

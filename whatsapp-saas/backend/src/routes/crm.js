@@ -64,6 +64,7 @@ const { ensureDefaultTags, isQualifiedTagName, resolveTagForContactUser, tagName
 const { trackMetaForContactTag } = require("../lib/metaConversions")
 const { reassignContactToSeller } = require("../lib/crmReassign")
 const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("../lib/crmContactMerge")
+const { deleteScopedContact, deleteScopedContacts, emitContactDeleted } = require("../lib/crmContactDelete")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -571,6 +572,74 @@ function createCrmRouter({ io }) {
   })
 
   // ------------------------- Contatos -------------------------
+
+  router.post("/contacts/bulk-delete", async (req, res) => {
+    const schema = z.object({
+      contactIds: z.array(z.string().min(1)).min(1).max(100),
+    })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe entre 1 e 100 leads." })
+    }
+
+    const scoped = []
+    const forbidden = []
+    const notFound = []
+
+    for (const contactId of parsed.data.contactIds) {
+      const contact = await findScopedContact(req, contactId)
+      if (!contact) {
+        notFound.push(contactId)
+        continue
+      }
+      if (!canMutateAsActor(req, contact.userId)) {
+        forbidden.push(contactId)
+        continue
+      }
+      scoped.push(contactId)
+    }
+
+    if (!scoped.length) {
+      const status = forbidden.length ? 403 : 404
+      return res.status(status).json({
+        error: forbidden.length ? "FORBIDDEN" : "NOT_FOUND",
+        message: forbidden.length
+          ? "Sem permissão para excluir um ou mais leads selecionados."
+          : "Nenhum lead encontrado para excluir.",
+        notFound,
+        forbidden,
+      })
+    }
+
+    const result = await deleteScopedContacts(prisma, scoped)
+    for (const row of result.deleted) {
+      emitContactDeleted(io, emitCrmEvent, row)
+    }
+
+    return res.json({
+      ok: true,
+      deleted: result.deleted.length,
+      deletedIds: result.deleted.map((r) => r.contactId),
+      notFound: [...notFound, ...result.notFound],
+      forbidden,
+    })
+  })
+
+  router.delete("/contacts/:id", async (req, res) => {
+    const contact = await findScopedContact(req, req.params.id)
+    if (!contact) return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    if (!canMutateAsActor(req, contact.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Sem permissão para excluir este lead." })
+    }
+
+    const result = await deleteScopedContact(prisma, contact.id)
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    }
+
+    emitContactDeleted(io, emitCrmEvent, result)
+    return res.json({ ok: true, contactId: result.contactId, conversationId: result.conversationId })
+  })
 
   router.patch("/contacts/:id", async (req, res) => {
     const schema = z.object({

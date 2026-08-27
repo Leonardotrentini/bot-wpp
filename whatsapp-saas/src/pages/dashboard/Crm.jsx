@@ -96,6 +96,7 @@ import {
   testCrmAgent,
   getWhatsAppStatus,
   refreshCrmContactAvatar,
+  bulkDeleteCrmContacts,
 } from '../../services/api.js'
 
 const TABS = [
@@ -287,6 +288,9 @@ function KanbanCard({
   onTags,
   onRefreshAvatar,
   attendant,
+  selectable,
+  selected,
+  onToggleSelect,
 }) {
   return (
     <div
@@ -295,10 +299,21 @@ function KanbanCard({
       onDragEnd={onDragEnd}
       className={`rounded-xl border border-brand-700/70 bg-brand-900/90 shadow-sm transition hover:border-accent-500/30 ${
         dragId === c.id ? 'opacity-40' : ''
-      }`}
+      } ${selected ? 'ring-1 ring-accent-500/40' : ''}`}
     >
       <div className="cursor-grab p-3 active:cursor-grabbing">
         <div className="flex items-start gap-2.5">
+          {selectable ? (
+            <input
+              type="checkbox"
+              checked={Boolean(selected)}
+              onChange={() => onToggleSelect?.(c.contact?.id)}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              className="vg-checkbox mt-1 shrink-0"
+              aria-label={`Selecionar ${contactTitle(c.contact)}`}
+            />
+          ) : null}
           <div className="relative shrink-0">
             <UserAvatar
               name={contactTitle(c.contact)}
@@ -530,7 +545,18 @@ function KanbanTagModal({ conversation, tags, open, onClose, onSaved }) {
   )
 }
 
-function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags, onRefreshAvatar, attendantByUserId }) {
+function KanbanBoard({
+  stages,
+  conversations,
+  onMove,
+  onOpenChat,
+  onEdit,
+  onTags,
+  onRefreshAvatar,
+  attendantByUserId,
+  selectedContactIds,
+  onToggleSelect,
+}) {
   const [dragId, setDragId] = useState(null)
   const [overStage, setOverStage] = useState(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
@@ -584,6 +610,9 @@ function KanbanBoard({ stages, conversations, onMove, onOpenChat, onEdit, onTags
       conversation={c}
       dragId={dragId}
       attendant={c.userId ? attendantByUserId?.[c.userId] || null : null}
+      selectable={Boolean(c.contact?.id)}
+      selected={c.contact?.id ? selectedContactIds?.has(c.contact.id) : false}
+      onToggleSelect={onToggleSelect}
       onDragStart={(e) => {
         setDragId(c.id)
         e.dataTransfer.effectAllowed = 'move'
@@ -1831,6 +1860,9 @@ export function Crm() {
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [kanbanEdit, setKanbanEdit] = useState(null)
   const [kanbanTags, setKanbanTags] = useState(null)
+  const [selectedContactIds, setSelectedContactIds] = useState(() => new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [deletingLeads, setDeletingLeads] = useState(false)
   const [settingsPanel, setSettingsPanel] = useState(null)
   const [waConnected, setWaConnected] = useState(initial.waConnected)
   useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !loading })
@@ -2041,9 +2073,21 @@ export function Crm() {
         return prev.map((c) => (c.id === conversation.id ? merged : c))
       })
     })
+    const offRemoved = onSocketEvent('crm:conversation_removed', ({ conversationId, contactId }) => {
+      setConversations((prev) => prev.filter((c) => c.id !== conversationId && c.contact?.id !== contactId))
+      if (contactId) {
+        setSelectedContactIds((prev) => {
+          if (!prev.has(contactId)) return prev
+          const next = new Set(prev)
+          next.delete(contactId)
+          return next
+        })
+      }
+    })
     return () => {
       offConvo()
       offMessage()
+      offRemoved()
     }
   }, [])
 
@@ -2063,6 +2107,46 @@ export function Crm() {
     },
     [conversations, toast],
   )
+
+  const toggleKanbanSelect = useCallback((contactId) => {
+    if (!contactId) return
+    setSelectedContactIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(contactId)) next.delete(contactId)
+      else next.add(contactId)
+      return next
+    })
+  }, [])
+
+  const selectAllKanbanLeads = useCallback(() => {
+    setSelectedContactIds(new Set(conversations.filter((c) => c.contact?.id).map((c) => c.contact.id)))
+  }, [conversations])
+
+  const clearKanbanSelection = useCallback(() => {
+    setSelectedContactIds(new Set())
+  }, [])
+
+  const handleBulkDeleteLeads = useCallback(async () => {
+    const ids = [...selectedContactIds]
+    if (!ids.length) return
+    setDeletingLeads(true)
+    try {
+      const { data } = await bulkDeleteCrmContacts(ids)
+      const deletedIds = new Set(data?.deletedIds || ids)
+      setSelectedContactIds(new Set())
+      setBulkDeleteOpen(false)
+      setConversations((prev) => prev.filter((c) => !deletedIds.has(c.contact?.id)))
+      const deleted = data?.deleted ?? deletedIds.size
+      toast.success(`${deleted} lead(s) excluído(s).`)
+      if (data?.notFound?.length) {
+        toast.info(`${data.notFound.length} lead(s) já não existiam.`)
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao excluir leads.')
+    } finally {
+      setDeletingLeads(false)
+    }
+  }, [selectedContactIds, toast])
 
   const updateConversation = useCallback((updated) => {
     if (!updated) return
@@ -2244,6 +2328,32 @@ export function Crm() {
               </Button>
             </Card>
           )}
+          {conversations.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brand-800/80 bg-brand-950/40 px-3 py-2">
+              {selectedContactIds.size > 0 ? (
+                <>
+                  <span className="text-sm text-stone-400">
+                    <strong className="text-stone-200">{selectedContactIds.size}</strong> selecionado
+                    {selectedContactIds.size !== 1 ? 's' : ''}
+                  </span>
+                  <Button size="sm" variant="danger" onClick={() => setBulkDeleteOpen(true)} disabled={deletingLeads}>
+                    <Trash2 className="h-4 w-4" />
+                    Excluir selecionados
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={clearKanbanSelection} disabled={deletingLeads}>
+                    Limpar
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="text-sm text-stone-500">Marque cards para excluir leads do CRM</span>
+                  <Button size="sm" variant="outline" onClick={selectAllKanbanLeads}>
+                    Selecionar todos
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : null}
           <KanbanBoard
             stages={stages}
             conversations={conversations}
@@ -2253,6 +2363,8 @@ export function Crm() {
             onTags={setKanbanTags}
             onRefreshAvatar={refreshAvatar}
             attendantByUserId={attendantByUserId}
+            selectedContactIds={selectedContactIds}
+            onToggleSelect={toggleKanbanSelect}
           />
           <KanbanQuickEditModal
             conversation={kanbanEdit}
@@ -2542,6 +2654,14 @@ export function Crm() {
         onConfirm={runDelete}
         title="Remover"
         message={`Tem certeza que deseja remover ${confirmDelete?.label || 'este item'}?`}
+      />
+      <ConfirmModal
+        isOpen={bulkDeleteOpen}
+        onClose={() => setBulkDeleteOpen(false)}
+        onConfirm={handleBulkDeleteLeads}
+        loading={deletingLeads}
+        title="Excluir leads selecionados"
+        message={`Excluir ${selectedContactIds.size} lead(s) do CRM? A conversa, mensagens e histórico serão removidos permanentemente. Esta ação não pode ser desfeita.`}
       />
     </div>
   )

@@ -73,6 +73,7 @@ import {
   getGroupMessages,
   sendMessage,
   fetchOrgMembers,
+  bulkDeleteCrmContacts,
 } from '../../services/api.js'
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName, isGenericContactName, mergeIncomingConversation } from '../../lib/contactDisplay.js'
@@ -154,22 +155,38 @@ const ConversationListItem = memo(function ConversationListItem({
   onOpen,
   onPrefetch,
   onRefreshAvatar,
+  selectable,
+  selected,
+  onToggleSelect,
 }) {
   const isGroup = c.kind === 'group'
   const subtitle = isGroup ? null : contactSubtitle(c.contact)
   const unidentified = !isGroup && contactNeedsIdentification(c.contact)
   return (
-    <button
-      type="button"
-      onClick={() => onOpen(c.id)}
-      onMouseEnter={() => onPrefetch(c.id)}
-      onFocus={() => onPrefetch(c.id)}
-      className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
-        c.id === active
-          ? 'bg-accent-500/12 ring-1 ring-inset ring-accent-500/30'
-          : 'hover:bg-white/[0.04]'
+    <div
+      className={`flex items-stretch gap-1 rounded-xl transition ${
+        c.id === active ? 'bg-accent-500/12 ring-1 ring-inset ring-accent-500/30' : 'hover:bg-white/[0.04]'
       }`}
     >
+      {selectable ? (
+        <div className="flex items-center pl-2">
+          <input
+            type="checkbox"
+            checked={Boolean(selected)}
+            onChange={() => onToggleSelect?.(c.contact?.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="vg-checkbox"
+            aria-label={`Selecionar ${contactTitle(c.contact)}`}
+          />
+        </div>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => onOpen(c.id)}
+        onMouseEnter={() => onPrefetch(c.id)}
+        onFocus={() => onPrefetch(c.id)}
+        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+      >
       <UserAvatar
         name={contactTitle(c.contact)}
         src={c.contact?.avatarUrl}
@@ -214,7 +231,8 @@ const ConversationListItem = memo(function ConversationListItem({
           </div>
         )}
       </div>
-    </button>
+      </button>
+    </div>
   )
 })
 
@@ -294,6 +312,9 @@ export function Chat() {
   const [tagForm, setTagForm] = useState({ name: '', color: '#22c55e' })
   const [tagSaving, setTagSaving] = useState(false)
   const [tagToDelete, setTagToDelete] = useState(null)
+  const [selectedContactIds, setSelectedContactIds] = useState(() => new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [deletingLeads, setDeletingLeads] = useState(false)
 
   const listEndRef = useRef(null)
   const threadRef = useRef(null)
@@ -390,6 +411,55 @@ export function Chat() {
     () => conversations.filter((c) => contactNeedsIdentification(c.contact)).length,
     [conversations],
   )
+
+  const selectableLeadConversations = useMemo(
+    () => displayedConversations.filter((c) => c.kind !== 'group' && c.contact?.id),
+    [displayedConversations],
+  )
+
+  const toggleContactSelect = useCallback((contactId) => {
+    if (!contactId) return
+    setSelectedContactIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(contactId)) next.delete(contactId)
+      else next.add(contactId)
+      return next
+    })
+  }, [])
+
+  const selectAllVisibleLeads = useCallback(() => {
+    setSelectedContactIds(new Set(selectableLeadConversations.map((c) => c.contact.id)))
+  }, [selectableLeadConversations])
+
+  const clearLeadSelection = useCallback(() => {
+    setSelectedContactIds(new Set())
+  }, [])
+
+  const handleBulkDeleteLeads = useCallback(async () => {
+    const ids = [...selectedContactIds]
+    if (!ids.length) return
+    setDeletingLeads(true)
+    try {
+      const { data } = await bulkDeleteCrmContacts(ids)
+      const deletedIds = new Set(data?.deletedIds || ids)
+      setSelectedContactIds(new Set())
+      setBulkDeleteOpen(false)
+      setConversations((prev) => prev.filter((c) => !deletedIds.has(c.contact?.id)))
+      if (active?.contact?.id && deletedIds.has(active.contact.id)) {
+        setActiveId(null)
+        setMessages([])
+      }
+      const deleted = data?.deleted ?? deletedIds.size
+      toastRef.current.success(`${deleted} lead(s) excluído(s).`)
+      if (data?.notFound?.length) {
+        toastRef.current.info(`${data.notFound.length} lead(s) já não existiam.`)
+      }
+    } catch (err) {
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao excluir leads.')
+    } finally {
+      setDeletingLeads(false)
+    }
+  }, [selectedContactIds, active?.contact?.id])
 
   // ------------------------------------------------ carregamento
 
@@ -856,6 +926,14 @@ export function Chat() {
       setConversations((prev) =>
         prev.filter((c) => c.id !== conversationId && c.contact?.id !== contactId),
       )
+      if (contactId) {
+        setSelectedContactIds((prev) => {
+          if (!prev.has(contactId)) return prev
+          const next = new Set(prev)
+          next.delete(contactId)
+          return next
+        })
+      }
       if (
         activeIdRef.current === conversationId ||
         conversationsRef.current.find((c) => c.id === activeIdRef.current)?.contact?.id === contactId
@@ -1424,6 +1502,32 @@ export function Chat() {
             {displayedConversations.length} conversa{displayedConversations.length !== 1 ? 's' : ''}
           </p>
         )}
+        {!groupsOnly && selectableLeadConversations.length > 0 ? (
+          <div className="mx-2 mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-brand-800/80 bg-brand-950/40 px-2.5 py-2">
+            {selectedContactIds.size > 0 ? (
+              <>
+                <span className="text-xs text-stone-400">
+                  <strong className="text-stone-200">{selectedContactIds.size}</strong> selecionado
+                  {selectedContactIds.size !== 1 ? 's' : ''}
+                </span>
+                <Button size="sm" variant="danger" onClick={() => setBulkDeleteOpen(true)} disabled={deletingLeads}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Excluir
+                </Button>
+                <Button size="sm" variant="ghost" onClick={clearLeadSelection} disabled={deletingLeads}>
+                  Limpar
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="text-xs text-stone-500">Selecione leads para excluir</span>
+                <Button size="sm" variant="outline" onClick={selectAllVisibleLeads}>
+                  Selecionar todos
+                </Button>
+              </>
+            )}
+          </div>
+        ) : null}
         <div className="flex-1 overflow-y-auto vg-scrollbar px-1.5 py-1">
           {refreshingList && !loadingList && (
             <div className="flex justify-center py-2">
@@ -1461,6 +1565,9 @@ export function Chat() {
                 onOpen={openConversation}
                 onPrefetch={prefetchConversation}
                 onRefreshAvatar={refreshAvatar}
+                selectable={c.kind !== 'group' && Boolean(c.contact?.id)}
+                selected={c.contact?.id ? selectedContactIds.has(c.contact.id) : false}
+                onToggleSelect={toggleContactSelect}
               />
             ))
           )}
@@ -2063,6 +2170,15 @@ export function Chat() {
         onConfirm={handleDeleteTag}
         title="Excluir tag"
         message={`Excluir a tag "${tagToDelete?.name || ''}"? Ela será removida de todos os leads.`}
+      />
+
+      <ConfirmModal
+        isOpen={bulkDeleteOpen}
+        onClose={() => setBulkDeleteOpen(false)}
+        onConfirm={handleBulkDeleteLeads}
+        loading={deletingLeads}
+        title="Excluir leads selecionados"
+        message={`Excluir ${selectedContactIds.size} lead(s) do CRM? A conversa, mensagens e histórico serão removidos permanentemente. Esta ação não pode ser desfeita.`}
       />
     </div>
     </>

@@ -955,6 +955,16 @@ export async function reassignCrmContact(id, { sellerUserId }) {
   })
 }
 
+export async function deleteCrmContact(id) {
+  if (resolveUseRealApi()) return apiClient.delete(`/crm/contacts/${encodeURIComponent(id)}`)
+  return mockResponse({ ok: true, contactId: id, conversationId: null })
+}
+
+export async function bulkDeleteCrmContacts(contactIds) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/contacts/bulk-delete', { contactIds })
+  return mockResponse({ ok: true, deleted: contactIds.length, deletedIds: contactIds, notFound: [], forbidden: [] })
+}
+
 export async function addCrmContactTag(contactId, tagId) {
   if (resolveUseRealApi()) return apiClient.post(`/crm/contacts/${encodeURIComponent(contactId)}/tags`, { tagId })
   return mockResponse({ contact: null })
