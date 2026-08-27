@@ -217,7 +217,7 @@ function compileFlowDefs(rawFlows, tagByKey, stageByKey) {
       throw new Error(`Fluxo "${name}": trigger inválido após normalização.`)
     }
     const actions = compileActions(row.actions, tagByKey, stageByKey, name)
-    const cooldown = Math.min(720, Math.max(1, Number(row.cooldownPerContactHours) || 24))
+    const cooldown = Math.min(720, Math.max(0, Number(row.cooldownPerContactHours) ?? 24))
     return {
       name,
       enabled: row.enabled === true,

@@ -1529,7 +1529,7 @@ function createCrmRouter({ io }) {
       )
       .min(1)
       .max(10),
-    cooldownPerContactHours: z.number().int().min(1).max(720).optional().default(24),
+    cooldownPerContactHours: z.number().int().min(0).max(720).optional().default(24),
     quietHours: quietHoursSchema,
   })
 

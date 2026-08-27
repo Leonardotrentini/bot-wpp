@@ -146,15 +146,17 @@ async function conditionsPass(prisma, flow, conversation) {
 const CRM_FLOW_DEFAULT_COOLDOWN_HOURS = 24
 
 async function isFlowOnCooldown(prisma, flow, conversationId) {
-  const cooldownHours = Math.min(
-    720,
-    Math.max(1, Number(flow.cooldownPerContactHours ?? CRM_FLOW_DEFAULT_COOLDOWN_HOURS) || CRM_FLOW_DEFAULT_COOLDOWN_HOURS),
-  )
-  const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
-  const recent = await prisma.crmFlowRun.count({
-    where: { flowId: flow.id, conversationId, status: "ok", createdAt: { gte: since } },
-  })
-  if (recent > 0) return true
+  const raw = Number(flow.cooldownPerContactHours ?? CRM_FLOW_DEFAULT_COOLDOWN_HOURS)
+  const cooldownHours = Number.isFinite(raw) ? Math.min(720, Math.max(0, Math.round(raw))) : CRM_FLOW_DEFAULT_COOLDOWN_HOURS
+
+  if (cooldownHours > 0) {
+    const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
+    const recent = await prisma.crmFlowRun.count({
+      where: { flowId: flow.id, conversationId, status: "ok", createdAt: { gte: since } },
+    })
+    if (recent > 0) return true
+  }
+
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000)
   const runsToday = await prisma.crmFlowRun.count({
     where: { flowId: flow.id, status: "ok", createdAt: { gte: dayAgo } },

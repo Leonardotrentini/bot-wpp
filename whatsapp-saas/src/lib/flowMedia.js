@@ -65,7 +65,7 @@ export const DEFAULT_FLOW_COOLDOWN_HOURS = 24
 
 export function normalizeFlowCooldown(hours) {
   const n = Number(hours)
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_FLOW_COOLDOWN_HOURS
+  if (!Number.isFinite(n) || n <= 0) return 0
   return Math.min(720, Math.round(n))
 }
 

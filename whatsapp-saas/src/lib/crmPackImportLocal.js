@@ -159,7 +159,7 @@ export function importCrmPackLocal(pack, store) {
       trigger,
       conditions: Array.isArray(row.conditions) ? row.conditions : [],
       actions,
-      cooldownPerContactHours: Math.min(720, Math.max(1, Number(row.cooldownPerContactHours) || 24)),
+      cooldownPerContactHours: Math.min(720, Math.max(0, Number(row.cooldownPerContactHours) ?? 24)),
       quietHours: null,
       createdAt: new Date().toISOString(),
     }

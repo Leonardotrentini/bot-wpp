@@ -1120,13 +1120,13 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           <Input
             label="Cooldown por contato (horas)"
             type="number"
-            min={1}
+            min={0}
             max={720}
             value={flow.cooldownPerContactHours}
             onChange={(e) =>
               setFlow((f) => ({
                 ...f,
-                cooldownPerContactHours: e.target.value === '' ? '' : Math.max(1, Number(e.target.value) || 1),
+                cooldownPerContactHours: e.target.value === '' ? '' : Math.max(0, Number(e.target.value) || 0),
               }))
             }
             onBlur={() =>
@@ -1137,8 +1137,9 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             }
           />
           <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
-            Padrão: <span className="text-stone-400">{DEFAULT_FLOW_COOLDOWN_HOURS}h</span> — evita que o mesmo contato
-            receba este fluxo repetido (proteção anti-spam). Recomendado manter em 24h ou mais.
+            Use <span className="text-stone-400">0</span> para desligar o cooldown por contato. Padrão recomendado:{' '}
+            <span className="text-stone-400">{DEFAULT_FLOW_COOLDOWN_HOURS}h</span> — evita que o mesmo contato receba
+            este fluxo repetido em sequência.
           </p>
         </div>
         </div>
