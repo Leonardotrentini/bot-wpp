@@ -12,21 +12,37 @@ const CRM_DELIVERY_GAP_MS = Number(process.env.CRM_DELIVERY_GAP_MS || 2000)
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 let busy = false
 
+/** WhatsApp renova presença a cada ~20s; chunks menores para renovar antes de expirar. */
 const PRESENCE_CHUNK_MS = 18000
+const PRESENCE_CHUNK_GAP_MS = 400
 
 async function playRecordingPresence(deps, instanceName, to, totalMs) {
-  if (!totalMs || totalMs <= 0 || typeof deps.sendPresence !== "function") return
+  if (!totalMs || totalMs <= 0) return
+  if (typeof deps.sendPresence !== "function") {
+    console.warn("[crm-delivery] sendPresence indisponível — aguardando localmente", totalMs, "ms")
+    await wait(totalMs)
+    return
+  }
+
   let remaining = totalMs
   while (remaining > 0) {
     const chunk = Math.min(remaining, PRESENCE_CHUNK_MS)
     try {
       await deps.sendPresence(instanceName, to, { presence: "recording", delayMs: chunk })
     } catch (err) {
-      console.warn("[crm-delivery] presence recording:", err?.message || err)
-      break
+      console.warn(
+        `[crm-delivery] presence recording falhou (${chunk}ms → ${to}):`,
+        err?.message || err,
+      )
+      await wait(chunk)
+      remaining -= chunk
+      continue
     }
+
+    // Evolution responde rápido; a espera real precisa ser local.
+    await wait(chunk)
     remaining -= chunk
-    if (remaining > 0) await wait(300)
+    if (remaining > 0) await wait(PRESENCE_CHUNK_GAP_MS)
   }
 }
 

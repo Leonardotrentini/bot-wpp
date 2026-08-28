@@ -400,16 +400,28 @@ async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize =
 async function sendPresence(instanceName, number, { presence = "recording", delayMs = 3000 } = {}) {
   const delay = Math.max(500, Math.min(Number(delayMs) || 3000, 20000))
   const instance = encodeURIComponent(instanceName)
+  const flatBody = { number, delay, presence }
+  const nestedBody = { number, options: { delay, presence, number } }
   return firstSuccess([
     () =>
       requestEvolution(`/chat/sendPresence/${instance}`, {
         method: "POST",
-        body: { number, options: { delay, presence, number } },
+        body: flatBody,
+      }),
+    () =>
+      requestEvolution(`/chat/sendPresence/${instance}`, {
+        method: "POST",
+        body: nestedBody,
       }),
     () =>
       requestEvolution(`/message/sendPresence/${instance}`, {
         method: "POST",
-        body: { number, options: { delay, presence, number } },
+        body: flatBody,
+      }),
+    () =>
+      requestEvolution(`/message/sendPresence/${instance}`, {
+        method: "POST",
+        body: nestedBody,
       }),
   ])
 }
