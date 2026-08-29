@@ -53,6 +53,24 @@ function buildRecipientLookupJids(conversation, normalizedNumber) {
   return [...out].filter(Boolean)
 }
 
+function extractMessageAckStatus(record) {
+  if (!record) return null
+  const updates = record.MessageUpdate || record.messageUpdate
+  const fromUpdate = Array.isArray(updates) && updates.length ? updates[updates.length - 1]?.status : null
+  return (
+    record.status ??
+    record.message?.status ??
+    record.update?.status ??
+    fromUpdate ??
+    null
+  )
+}
+
+function extractSendResponseAck(resp) {
+  if (!resp || typeof resp !== "object") return null
+  return resp.status ?? resp.message?.status ?? resp.key?.status ?? null
+}
+
 function isAckOk(status) {
   const s = String(status ?? "").toUpperCase()
   if (!s || s === "PENDING" || s === "ERROR" || s === "0") return false
@@ -115,7 +133,7 @@ async function findMessageInChats(fetchChatMessages, instanceName, jids, message
 async function findOutboundMessage(deps, instanceName, jids, messageId) {
   if (typeof deps?.findMessageById === "function") {
     try {
-      const hit = await deps.findMessageById(instanceName, messageId)
+      const hit = await deps.findMessageById(instanceName, messageId, { jids })
       if (hit) return hit
     } catch {
       /* fallback por JID */
@@ -138,7 +156,7 @@ async function waitForOutboundAck(deps, instanceName, jids, messageId, options =
 
   while (Date.now() - started < timeoutMs) {
     last = await findOutboundMessage(deps, instanceName, jids, messageId)
-    lastStatus = last?.status ?? last?.message?.status ?? null
+    lastStatus = extractMessageAckStatus(last)
     if (last && isAckOk(lastStatus)) {
       return { record: last, status: lastStatus, delivered: isDeliveryAck(lastStatus) }
     }
@@ -178,32 +196,49 @@ function validateOutboundSendResponse(resp, { context, mediaType }) {
   return messageId
 }
 
-async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, messageId, mediaType }) {
+async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, messageId, mediaType, sendResp }) {
   const number = normalizeEvolutionNumber(to)
   const jids = buildRecipientLookupJids(conversation, number)
   const hasMedia = mediaType && mediaType !== "none"
+
+  const immediate = extractSendResponseAck(sendResp)
+  if (isAckOk(immediate)) {
+    return {
+      crmStatus: mapAckToCrmStatus(immediate),
+      ackOk: true,
+      detail: String(immediate),
+    }
+  }
 
   if (typeof deps?.fetchChatMessages !== "function" && typeof deps?.findMessageById !== "function") {
     return { crmStatus: "sent", ackOk: true, detail: "poll indisponível" }
   }
 
   const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, { hasMedia })
-  if (!isAckOk(ack.status)) {
-    const detail =
-      ack.status === "TIMEOUT"
-        ? "WhatsApp não confirmou a entrega a tempo"
-        : ack.status === "PENDING"
-          ? "mensagem presa em PENDING"
-          : `status ${ack.status || "desconhecido"}`
-    console.warn(`[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} → ${detail}`)
-    return { crmStatus: "failed", ackOk: false, detail }
+  if (isAckOk(ack.status)) {
+    return {
+      crmStatus: mapAckToCrmStatus(ack.status),
+      ackOk: true,
+      detail: String(ack.status || "ok"),
+    }
   }
 
-  return {
-    crmStatus: mapAckToCrmStatus(ack.status),
-    ackOk: true,
-    detail: String(ack.status || "ok"),
+  // Mensagem no histórico da instância = WhatsApp aceitou (ACK pode chegar depois via webhook).
+  if (ack.record) {
+    console.warn(
+      `[crm-outbound] ACK pendente messageId=${messageId} dest=${number || to} — confirmada no histórico (${ack.status || "?"})`,
+    )
+    return { crmStatus: "sent", ackOk: true, detail: "confirmada no histórico" }
   }
+
+  const detail =
+    ack.status === "TIMEOUT"
+      ? "WhatsApp não confirmou a entrega a tempo"
+      : ack.status === "PENDING"
+        ? "mensagem presa em PENDING"
+        : `status ${ack.status || "desconhecido"}`
+  console.warn(`[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} → ${detail}`)
+  return { crmStatus: "failed", ackOk: false, detail }
 }
 
 async function confirmEvolutionDelivery(deps, params) {
@@ -217,6 +252,7 @@ async function confirmEvolutionDelivery(deps, params) {
     to: params.to,
     messageId,
     mediaType: params.mediaType,
+    sendResp: params.resp,
   })
   return { messageId, crmStatus: ack.crmStatus, ackOk: ack.ackOk, detail: ack.detail }
 }

@@ -397,13 +397,20 @@ async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize =
 }
 
 /** Localiza mensagem enviada pelo ID (independente do JID — mais confiável para ACK). */
-async function findMessageById(instanceName, messageId, { pageSize = 10 } = {}) {
+async function findMessageById(instanceName, messageId, { pageSize = 10, jids = [] } = {}) {
   const id = String(messageId || "").trim()
   if (!id) return null
   const bodies = [
     { where: { key: { id } }, page: 1, offset: pageSize },
+    { where: { key: { id, fromMe: true } }, page: 1, offset: pageSize },
     { where: { id }, page: 1, offset: pageSize },
+    { where: { messageId: id }, page: 1, offset: pageSize },
   ]
+  for (const jid of jids) {
+    if (!jid) continue
+    bodies.push({ where: { key: { id, remoteJid: jid } }, page: 1, offset: pageSize })
+    bodies.push({ where: { key: { id, remoteJid: jid, fromMe: true } }, page: 1, offset: pageSize })
+  }
   for (const body of bodies) {
     try {
       const payload = await requestFindMessages(instanceName, body)

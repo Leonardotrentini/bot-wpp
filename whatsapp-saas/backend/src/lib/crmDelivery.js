@@ -219,6 +219,7 @@ async function processOneDelivery(deps, delivery) {
       to,
       messageId: providerMessageId,
       mediaType: hasMedia ? mediaType : "none",
+      sendResp: resp,
     })
 
     message = await prisma.crmMessage.update({
