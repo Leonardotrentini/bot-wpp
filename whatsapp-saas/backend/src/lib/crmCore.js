@@ -27,6 +27,29 @@ function isLidJid(jid) {
   return /@lid$/i.test(String(jid || "").trim())
 }
 
+const CRM_FLOW_DISPATCH_RECENT_MS = Number(process.env.CRM_FLOW_DISPATCH_RECENT_MS || 15 * 60 * 1000)
+
+/** Pure helper — decide se webhook deve disparar fluxos/IA nesta inbound. */
+function computeShouldDispatchFlows({
+  source,
+  fromMe,
+  wasNewInbound,
+  isNewConversation,
+  upgradedFromImport,
+  allowFlowDispatch = true,
+  messageTimestamp,
+  now = Date.now(),
+}) {
+  if (allowFlowDispatch === false || source !== "webhook" || fromMe) return false
+  const isRecentInbound =
+    messageTimestamp instanceof Date &&
+    !Number.isNaN(messageTimestamp.getTime()) &&
+    now - messageTimestamp.getTime() < CRM_FLOW_DISPATCH_RECENT_MS
+  return Boolean(
+    wasNewInbound || isNewConversation || (upgradedFromImport && isRecentInbound),
+  )
+}
+
 /** Destino para a Evolution: telefone E.164 quando existir; senão JID @lid completo (nunca tratar LID como telefone). */
 function resolveEvolutionRecipient(conversation) {
   const jid = String(conversation?.remoteJid || "").trim()
@@ -563,9 +586,9 @@ function extractMediaFileName(msg) {
 
 /**
  * Grava uma mensagem 1:1 (webhook ou import) de forma idempotente.
- * Retorna { message, conversation, created, isNewConversation }.
+ * Retorna { message, conversation, created, isNewConversation, shouldDispatchFlows, dispatchNewConversation }.
  */
-async function ingestCrmMessage(deps, { userId, record, source = "webhook", updateUnread = true }) {
+async function ingestCrmMessage(deps, { userId, record, source = "webhook", updateUnread = true, allowFlowDispatch = true }) {
   const { prisma } = deps
   const remoteJid = record?.key?.remoteJid || record?.remoteJid
   if (!remoteJid || !isIndividualJid(remoteJid)) return null
@@ -589,6 +612,10 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   emitUnificationEvents(emitCrmEvent, deps.io, userId, unification)
   const isNewConversation = Boolean(conversation.__isNew)
 
+  const existing = await prisma.crmMessage.findUnique({
+    where: { conversationId_messageId: { conversationId: conversation.id, messageId: mapped.messageId } },
+  })
+
   if (!mapped.fromMe) {
     const ctwaClid = extractCtwaClidFromRecord(record)
     if (ctwaClid) {
@@ -605,7 +632,9 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
           messageBody: mapped.body,
         }).catch(() => contact)) || contact
 
-      if (isNewConversation && !extractVstRefFromText(mapped.body)) {
+      const eligibleForPendingLead =
+        isNewConversation || !existing || existing?.source === "import"
+      if (eligibleForPendingLead && !extractVstRefFromText(mapped.body)) {
         contact =
           (await resolveAndApplyAttributionFromPendingLead(prisma, {
             userId,
@@ -620,10 +649,6 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       }
     }
   }
-
-  const existing = await prisma.crmMessage.findUnique({
-    where: { conversationId_messageId: { conversationId: conversation.id, messageId: mapped.messageId } },
-  })
 
   const rawForWrite = existing
     ? mergeInboundMessageRaw(existing.raw, mapped.raw)
@@ -650,9 +675,22 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
       type: mapped.type,
       raw: rawForWrite,
       mediaMime: extractMediaMime(record) || existing?.mediaMime || null,
+      ...(source === "webhook" && existing?.source === "import" ? { source: "webhook" } : {}),
     },
   })
   let created = !existing
+  const wasNewInbound = created && !mapped.fromMe
+  const upgradedFromImport =
+    source === "webhook" && !mapped.fromMe && existing?.source === "import"
+  let shouldDispatchFlows = computeShouldDispatchFlows({
+    source,
+    fromMe: mapped.fromMe,
+    wasNewInbound,
+    isNewConversation,
+    upgradedFromImport,
+    allowFlowDispatch,
+    messageTimestamp: mapped.timestamp,
+  })
 
   const convData = {}
   if (!conversation.lastMessageAt || mapped.timestamp >= conversation.lastMessageAt) {
@@ -720,8 +758,18 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
         },
       })
       if (keptMsg) {
-        if (keptMsg.id !== message.id) created = false
+        if (keptMsg.id !== message.id) {
+          created = false
+          // Mensagem nova no webhook mas deduplicada pelo merge LID → fluxos ainda devem rodar.
+          if (wasNewInbound || isNewConversation) shouldDispatchFlows = true
+        }
         message = keptMsg
+        if (shouldDispatchFlows && message.source === "import" && source === "webhook") {
+          message = await prisma.crmMessage.update({
+            where: { id: message.id },
+            data: { source: "webhook" },
+          })
+        }
       }
     }
   }
@@ -736,7 +784,27 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
     }).catch(() => {})
   }
 
-  return { message, conversation: updatedConversation, created, isNewConversation }
+  let dispatchNewConversation = false
+  if (shouldDispatchFlows) {
+    const priorInbound = await prisma.crmMessage.count({
+      where: {
+        conversationId: updatedConversation.id,
+        fromMe: false,
+        id: { not: message.id },
+        source: { notIn: ["flow", "ai"] },
+      },
+    })
+    dispatchNewConversation = isNewConversation || priorInbound === 0
+  }
+
+  return {
+    message,
+    conversation: updatedConversation,
+    created,
+    isNewConversation,
+    shouldDispatchFlows,
+    dispatchNewConversation,
+  }
 }
 
 /**
@@ -800,6 +868,8 @@ async function applyCrmMessageAck(prisma, io, { userId, providerMessageId, ackSt
 module.exports = {
   isIndividualJid,
   isLidJid,
+  computeShouldDispatchFlows,
+  CRM_FLOW_DISPATCH_RECENT_MS,
   resolveEvolutionRecipient,
   phoneFromJid,
   previewFromBody,

@@ -180,6 +180,14 @@ async function mergeCrmContacts(tx, { source, target, toUserId }) {
       targetConversationId: targetConvo.id,
       toUserId,
     })
+    await tx.crmDelivery.updateMany({
+      where: { conversationId: sourceConvo.id },
+      data: { conversationId: targetConvo.id, userId: toUserId },
+    })
+    await tx.crmFlowRun.updateMany({
+      where: { conversationId: sourceConvo.id },
+      data: { conversationId: targetConvo.id, userId: toUserId },
+    })
   } else if (sourceConvo && !targetConvo) {
     await tx.crmConversation.update({
       where: { id: sourceConvo.id },

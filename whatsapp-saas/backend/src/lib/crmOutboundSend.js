@@ -3,7 +3,7 @@
  * Híbrido: grava no CRM como pending → poll ACK → sent/delivered/failed.
  */
 
-const { resolveEvolutionRecipient, resolvePhoneDigits } = require("./crmCore")
+const { resolveEvolutionRecipient, resolvePhoneDigits, isLidJid } = require("./crmCore")
 const { validateMediaContentSize } = require("./mediaLimits")
 
 const ACK_OK = new Set(["SERVER_ACK", "DELIVERY_ACK", "READ", "PLAYED", "2", "3", "4", "5"])
@@ -286,10 +286,13 @@ function assertOutboundRecipient(conversation) {
   if (!raw) throw new Error("Destino inválido — contato sem telefone ou JID.")
   if (/@lid$/i.test(raw)) return raw
   const normalized = normalizeEvolutionNumber(raw)
-  if (/@lid$/i.test(String(conversation?.remoteJid || "")) && !/^\d{8,15}$/.test(normalized)) {
-    throw new Error("Contato só com @lid — salve o telefone no CRM antes de enviar.")
-  }
-  return normalized || raw
+  if (normalized && /^\d{8,15}$/.test(normalized)) return normalized
+  const lidFallback =
+    (isLidJid(conversation?.remoteJid) && String(conversation.remoteJid).trim()) ||
+    (isLidJid(conversation?.contact?.lidJid) && String(conversation.contact.lidJid).trim()) ||
+    null
+  if (lidFallback) return lidFallback
+  throw new Error("Destino inválido — contato sem telefone ou JID.")
 }
 
 function validateOutboundMediaPayload({ body, mediaType, mediaBase64, mediaMime, mediaName }) {

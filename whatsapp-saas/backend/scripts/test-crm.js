@@ -3,7 +3,7 @@
  * Uso: node scripts/test-crm.js
  */
 const assert = require("assert")
-const { isIndividualJid, isLidJid, phoneFromJid, previewFromBody, formatContactRow } = require("../src/lib/crmCore")
+const { isIndividualJid, isLidJid, phoneFromJid, previewFromBody, formatContactRow, computeShouldDispatchFlows } = require("../src/lib/crmCore")
 const {
   normalizeTrigger,
   keywordMatches,
@@ -346,6 +346,117 @@ test("deliveryDelayMs sempre com delay mínimo", () => {
     const d = deliveryDelayMs()
     assert.ok(d >= 3000, `delay ${d} < 3000`)
   }
+})
+
+test("computeShouldDispatchFlows: webhook inbound nova dispara fluxos", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "webhook",
+      fromMe: false,
+      wasNewInbound: true,
+      isNewConversation: false,
+      upgradedFromImport: false,
+      messageTimestamp: new Date(now - 1000),
+      now,
+    }),
+    true,
+  )
+})
+
+test("computeShouldDispatchFlows: import antigo via SET não dispara", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "webhook",
+      fromMe: false,
+      wasNewInbound: false,
+      isNewConversation: false,
+      upgradedFromImport: true,
+      allowFlowDispatch: false,
+      messageTimestamp: new Date(now - 1000),
+      now,
+    }),
+    false,
+  )
+})
+
+test("computeShouldDispatchFlows: upgrade import recente dispara", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "webhook",
+      fromMe: false,
+      wasNewInbound: false,
+      isNewConversation: false,
+      upgradedFromImport: true,
+      messageTimestamp: new Date(now - 60_000),
+      now,
+    }),
+    true,
+  )
+})
+
+test("computeShouldDispatchFlows: upgrade import antigo (>15min) não dispara", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "webhook",
+      fromMe: false,
+      wasNewInbound: false,
+      isNewConversation: false,
+      upgradedFromImport: true,
+      messageTimestamp: new Date(now - 20 * 60_000),
+      now,
+    }),
+    false,
+  )
+})
+
+test("onCrmMessage dispara new_conversation com dispatchNewConversation", async () => {
+  const runs = []
+  const flows = [
+    {
+      id: "f-welcome",
+      userId: "u1",
+      enabled: true,
+      trigger: { type: "new_conversation" },
+      conditions: [],
+      actions: [{ type: "send_message", body: "Olá!" }],
+      cooldownPerContactHours: 24,
+      quietHours: null,
+    },
+  ]
+  const conversation = {
+    id: "c1",
+    userId: "u1",
+    contactId: "ct1",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    status: "open",
+    kanbanStageId: null,
+  }
+  const prisma = {
+    crmFlow: {
+      findMany: async ({ where }) => flows.filter((f) => f.userId === where.userId && f.enabled === where.enabled),
+    },
+    crmFlowRun: {
+      create: async ({ data }) => {
+        runs.push(data)
+        return data
+      },
+      count: async () => 0,
+    },
+    crmDelivery: {
+      create: async ({ data }) => data,
+    },
+  }
+  const inbound = { id: "m1", fromMe: false, source: "webhook", body: "mi carta secreta" }
+  await onCrmMessage(
+    { prisma, io: null, sendText: async () => {} },
+    { conversation, message: inbound, isNewConversation: false, dispatchNewConversation: true },
+  )
+  assert.strictEqual(runs.length, 1)
+  assert.ok(String(runs[0].detail).includes("new_conversation"))
 })
 
 // ---------------- crmSync

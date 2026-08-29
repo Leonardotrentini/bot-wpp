@@ -421,16 +421,35 @@ async function runFlow(deps, flow, conversation, reason) {
   await processPendingCrmDeliveries(deps).catch((err) =>
     console.error("[crm-flow] processPendingCrmDeliveries:", err?.message || err),
   )
+
+  const hasSend = detail.some((d) => String(d).startsWith("send_message"))
+  let runStatus = "ok"
+  if (hasSend && flow.id) {
+    const deliveries = await prisma.crmDelivery.findMany({
+      where: {
+        conversationId: conversation.id,
+        sourceId: flow.id,
+        kind: "flow",
+        createdAt: { gte: new Date(Date.now() - 120000) },
+      },
+      select: { status: true },
+    })
+    const sent = deliveries.some((d) => d.status === "sent")
+    const pending = deliveries.some((d) => ["pending", "sending"].includes(d.status))
+    const allFailed = deliveries.length > 0 && deliveries.every((d) => d.status === "failed")
+    if (allFailed && !sent && !pending) runStatus = "failed"
+  }
+
   await prisma.crmFlowRun.create({
     data: {
       userId: conversation.userId,
       flowId: flow.id,
       conversationId: conversation.id,
-      status: "ok",
-      detail: `${reason}: ${detail.join(", ") || "sem ações"}`,
+      status: runStatus,
+      detail: `${reason}: ${detail.join(", ") || "sem ações"}${runStatus === "failed" ? " (envio falhou)" : ""}`,
     },
   })
-  return true
+  return runStatus === "ok"
 }
 
 async function loadEnabledFlows(prisma, userId, triggerType) {
@@ -439,12 +458,12 @@ async function loadEnabledFlows(prisma, userId, triggerType) {
 }
 
 /** Chamado quando chega mensagem do contato (nunca fromMe/flow/ai). */
-async function onCrmMessage(deps, { conversation, message, isNewConversation }) {
+async function onCrmMessage(deps, { conversation, message, isNewConversation, dispatchNewConversation }) {
   if (!conversation || !message) return
-  if (message.fromMe || ["flow", "ai", "import"].includes(message.source)) return
+  if (message.fromMe || ["flow", "ai"].includes(message.source)) return
   const { prisma } = deps
 
-  if (isNewConversation) {
+  if (isNewConversation || dispatchNewConversation) {
     for (const flow of await loadEnabledFlows(prisma, conversation.userId, "new_conversation")) {
       await runFlow(deps, flow, conversation, "new_conversation").catch(() => {})
     }

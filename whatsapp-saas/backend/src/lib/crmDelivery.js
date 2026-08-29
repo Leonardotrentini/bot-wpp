@@ -161,6 +161,17 @@ async function processOneDelivery(deps, delivery, options = {}) {
         orderBy: { createdAt: "desc" },
       })
       if (prev && prev.status !== "sent") {
+        if (["pending", "sending"].includes(prev.status)) {
+          await prisma.crmDelivery.update({
+            where: { id: delivery.id },
+            data: {
+              status: "pending",
+              scheduledAt: new Date(Date.now() + 1500),
+              error: null,
+            },
+          })
+          return
+        }
         await prisma.crmDelivery.update({
           where: { id: delivery.id },
           data: {

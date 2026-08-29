@@ -3941,14 +3941,20 @@ function getCrmDeps() {
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */
-async function handleCrmIncomingRecord(userId, record, instanceName = null) {
-  const result = await ingestCrmMessage(getCrmDeps(), { userId, record, source: "webhook" })
+async function handleCrmIncomingRecord(userId, record, instanceName = null, options = {}) {
+  const allowFlowDispatch = options.webhookEvent !== "MESSAGES_SET"
+  const result = await ingestCrmMessage(getCrmDeps(), {
+    userId,
+    record,
+    source: "webhook",
+    allowFlowDispatch,
+  })
   if (!result) return
 
-  const { conversation, message, created } = result
+  const { conversation, message, created, shouldDispatchFlows } = result
 
   // Emitir ANTES do enriquecimento de perfil — falha de perfil não pode atrasar a inbox.
-  if (created || message.fromMe) {
+  if (created || message.fromMe || shouldDispatchFlows) {
     emitCrmEvent(io, userId, "crm:message", {
       conversationId: conversation.id,
       message: formatCrmMessageRow(message),
@@ -3987,11 +3993,12 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
       }).catch((err) => console.error("[meta] ConversationStarted:", err?.message || err))
     }
 
-    if (created) {
+    if (shouldDispatchFlows) {
       onCrmMessage(getCrmDeps(), {
         conversation,
         message,
         isNewConversation: result.isNewConversation,
+        dispatchNewConversation: result.dispatchNewConversation,
       }).catch((err) => console.error("[crm-flow] onMessage:", err?.message || err))
 
       maybeReplyWithAi(getCrmDeps(), {
@@ -4003,7 +4010,7 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
 }
 
 /** Mensagens novas (a partir da conexão). Só grava em grupos monitorados; sem histórico antigo. */
-async function storeIncomingMessages(instanceName, body) {
+async function storeIncomingMessages(instanceName, body, options = {}) {
   const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
   if (!conn) return 0
 
@@ -4031,7 +4038,9 @@ async function storeIncomingMessages(instanceName, body) {
     if (!String(groupJid).endsWith("@g.us")) {
       // Chats 1:1 (@s.whatsapp.net / @lid) alimentam o CRM em tempo real.
       if (isIndividualJid(groupJid) && !isReactionRecord(record)) {
-        await handleCrmIncomingRecord(conn.userId, record, instanceName)
+        await handleCrmIncomingRecord(conn.userId, record, instanceName, {
+          webhookEvent: options.webhookEvent,
+        })
       }
       continue
     }
@@ -4259,7 +4268,7 @@ app.post("/api/evolution/webhook", async (req, res) => {
     } else if (["GROUPS_UPSERT", "GROUP_UPDATE"].includes(event)) {
       await updateGroupsFromWebhook(instanceName, req.body)
     } else if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
-      await storeIncomingMessages(instanceName, req.body)
+      await storeIncomingMessages(instanceName, req.body, { webhookEvent: event })
     } else if (event === "MESSAGES_UPDATE") {
       await updateOutboundAckFromWebhook(instanceName, req.body)
     }
