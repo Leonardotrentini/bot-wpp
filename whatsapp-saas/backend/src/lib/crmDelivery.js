@@ -129,7 +129,7 @@ async function processOneDelivery(deps, delivery) {
       resp = await sendText(conn.instanceName, to, delivery.body || "")
     }
 
-    const providerMessageId = await confirmEvolutionDelivery(deps, {
+    const { messageId: providerMessageId, crmStatus } = await confirmEvolutionDelivery(deps, {
       instanceName: conn.instanceName,
       conversation,
       to,
@@ -160,7 +160,7 @@ async function processOneDelivery(deps, delivery) {
         type: msgType,
         body: delivery.body || "",
         mediaMime: storedMime,
-        status: "sent",
+        status: crmStatus || "sent",
         source: delivery.kind,
         timestamp: now,
         raw: hasMedia

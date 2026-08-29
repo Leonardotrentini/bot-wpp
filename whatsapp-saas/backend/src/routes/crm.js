@@ -433,7 +433,7 @@ function createCrmRouter({ io }) {
         } else {
           sendResp = await sendText(conn.instanceName, to, content.body)
         }
-        const messageId = await confirmEvolutionDelivery(
+        const { messageId, crmStatus } = await confirmEvolutionDelivery(
           { fetchChatMessages, findMessageById },
           {
             instanceName: conn.instanceName,
@@ -444,7 +444,7 @@ function createCrmRouter({ io }) {
             mediaType: content.mediaType,
           },
         )
-        return { ...sendResp, key: { ...(sendResp?.key || {}), id: messageId } }
+        return { ...sendResp, key: { ...(sendResp?.key || {}), id: messageId }, _crmStatus: crmStatus }
       })
 
       const providerMessageId = resp?.key?.id || extractProviderMessageId(resp)
@@ -475,7 +475,7 @@ function createCrmRouter({ io }) {
           type: content.mediaType === "none" ? "text" : content.mediaType,
           body: content.body || "",
           mediaMime: storedMime,
-          status: "sent",
+          status: resp?._crmStatus || "sent",
           source: "manual",
           timestamp: now,
           raw: messageRaw,

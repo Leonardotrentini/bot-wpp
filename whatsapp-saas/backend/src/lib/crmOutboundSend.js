@@ -1,6 +1,6 @@
 /**
  * Validação comum de envios CRM → Evolution (fluxos, IA, manual).
- * Só considera sucesso após messageId + ACK do WhatsApp (ou registro no chat).
+ * Grava no CRM com messageId da Evolution; ACK atualiza status depois (webhook/poll).
  */
 
 const { resolveEvolutionRecipient, resolvePhoneDigits } = require("./crmCore")
@@ -54,6 +54,14 @@ function isAckOk(status) {
   return Number.isFinite(n) && n >= 2
 }
 
+function mapAckToCrmStatus(ackStatus) {
+  const s = String(ackStatus ?? "").toUpperCase()
+  if (s.includes("READ") || s === "4") return "read"
+  if (s.includes("DELIVERY") || s === "3") return "delivered"
+  if (isAckOk(ackStatus)) return "sent"
+  return "pending"
+}
+
 function mediaPartFromResponse(resp, mediaType) {
   const mt = String(mediaType || "").toLowerCase()
   const msg = resp?.message || {}
@@ -64,14 +72,13 @@ function mediaPartFromResponse(resp, mediaType) {
   return null
 }
 
-/** Evolution às vezes devolve messageId sem subir mídia ao CDN do WhatsApp. */
-function assertMediaUploaded(resp, mediaType, context = "mídia") {
+/** Aviso se a Evolution devolveu messageId sem CDN — não bloqueia gravação no CRM. */
+function warnIfMediaMissingCdn(resp, mediaType, context = "mídia") {
   const mt = String(mediaType || "").toLowerCase()
   if (!["image", "video", "document"].includes(mt)) return
   const part = mediaPartFromResponse(resp, mt)
-  if (!part) return
-  if (part.directPath || part.url) return
-  throw new Error(`${context}: mídia não subiu ao WhatsApp (sem CDN).`)
+  if (!part || part.directPath || part.url) return
+  console.warn(`[crm-outbound] ${context}: messageId ok mas sem CDN imediato (${mt})`)
 }
 
 async function findMessageInChats(fetchChatMessages, instanceName, jids, messageId) {
@@ -103,8 +110,8 @@ async function findOutboundMessage(deps, instanceName, jids, messageId) {
 }
 
 async function waitForOutboundAck(deps, instanceName, jids, messageId, options = {}) {
-  const timeoutMs = Number(options.timeoutMs ?? process.env.CRM_DELIVERY_ACK_TIMEOUT_MS ?? 25000)
-  const intervalMs = Number(options.intervalMs ?? process.env.CRM_DELIVERY_ACK_POLL_MS ?? 2500)
+  const timeoutMs = Number(options.timeoutMs ?? 8000)
+  const intervalMs = Number(options.intervalMs ?? 2000)
   const started = Date.now()
   let last = null
   let lastStatus = null
@@ -145,39 +152,33 @@ function assertEvolutionSendAccepted(resp, context = "envio") {
 }
 
 /**
- * Confirma messageId na Evolution e aguarda ACK do WhatsApp antes de gravar no CRM.
+ * Confirma messageId na Evolution. Poll de ACK é best-effort (não bloqueia inbox).
+ * Retorna { messageId, crmStatus }.
  */
 async function confirmEvolutionDelivery(deps, { instanceName, conversation, to, resp, context, mediaType }) {
   const messageId = assertEvolutionSendAccepted(resp, context)
-  assertMediaUploaded(resp, mediaType, context)
+  warnIfMediaMissingCdn(resp, mediaType, context)
+
   const number = normalizeEvolutionNumber(to)
   const jids = buildRecipientLookupJids(conversation, number)
-  const hasMedia = mediaType && mediaType !== "none"
-  const defaultTimeout = hasMedia ? 45000 : 25000
 
-  if (typeof deps?.fetchChatMessages !== "function" && typeof deps?.findMessageById !== "function") {
-    console.warn("[crm-outbound] findMessageById/fetchChatMessages indisponível — usando só messageId")
-    return messageId
+  let crmStatus = "sent"
+
+  if (typeof deps?.fetchChatMessages === "function" || typeof deps?.findMessageById === "function") {
+    const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, {
+      timeoutMs: Number(process.env.CRM_DELIVERY_ACK_TIMEOUT_MS || 8000),
+    })
+    if (isAckOk(ack.status)) {
+      crmStatus = mapAckToCrmStatus(ack.status)
+    } else if (ack.status && ack.status !== "TIMEOUT") {
+      crmStatus = "pending"
+      console.warn(
+        `[crm-outbound] ACK pendente messageId=${messageId} status=${ack.status} (mensagem gravada no CRM)`,
+      )
+    }
   }
 
-  const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, {
-    timeoutMs: Number(process.env.CRM_DELIVERY_ACK_TIMEOUT_MS || defaultTimeout),
-  })
-
-  if (!isAckOk(ack.status)) {
-    const detail =
-      ack.status === "TIMEOUT"
-        ? "WhatsApp não confirmou a entrega a tempo"
-        : ack.status === "PENDING"
-          ? "mensagem presa em PENDING (não entregue)"
-          : `status ${ack.status || "desconhecido"}`
-    console.warn(
-      `[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} jids=${jids.join(",")} → ${detail}`,
-    )
-    throw new Error(`${detail} (${context}, destino ${number || to}).`)
-  }
-
-  return messageId
+  return { messageId, crmStatus }
 }
 
 function assertOutboundRecipient(conversation) {
@@ -214,5 +215,5 @@ module.exports = {
   buildRecipientLookupJids,
   waitForOutboundAck,
   isAckOk,
-  assertMediaUploaded,
+  mapAckToCrmStatus,
 }
