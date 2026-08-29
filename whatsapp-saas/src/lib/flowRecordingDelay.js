@@ -9,6 +9,7 @@ export function resolveRecordingDelayMs(action) {
   return Math.min(v, MAX_RECORDING_DELAY_SECONDS) * 1000
 }
 
+/** UI: segundos configurados (0 = auto pela duração do áudio no envio). */
 export function getRecordingDelayUi(action) {
   return Math.max(0, Math.min(MAX_RECORDING_DELAY_SECONDS, Number(action?.recordingDelayValue) || 0))
 }

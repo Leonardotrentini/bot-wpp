@@ -1,11 +1,10 @@
 /**
  * Validação comum de envios CRM → Evolution (fluxos, IA, manual).
- * Grava no CRM com messageId da Evolution; ACK atualiza status depois (webhook/poll).
+ * Híbrido: grava no CRM como pending → poll ACK → sent/delivered/failed.
  */
 
 const { resolveEvolutionRecipient, resolvePhoneDigits } = require("./crmCore")
 const { validateMediaContentSize } = require("./mediaLimits")
-const { stripMediaBase64 } = require("./crmMedia")
 
 const ACK_OK = new Set(["SERVER_ACK", "DELIVERY_ACK", "READ", "PLAYED", "2", "3", "4", "5"])
 
@@ -63,12 +62,19 @@ function isAckOk(status) {
   return Number.isFinite(n) && n >= 2
 }
 
+function isDeliveryAck(status) {
+  const s = String(status ?? "").toUpperCase()
+  if (s.includes("DELIVERY") || s === "3") return true
+  if (s.includes("READ") || s === "4" || s === "5") return true
+  return false
+}
+
 function mapAckToCrmStatus(ackStatus) {
   const s = String(ackStatus ?? "").toUpperCase()
-  if (s.includes("READ") || s === "4") return "read"
+  if (s.includes("READ") || s === "4" || s === "5") return "read"
   if (s.includes("DELIVERY") || s === "3") return "delivered"
   if (isAckOk(ackStatus)) return "sent"
-  return "pending"
+  return "failed"
 }
 
 function mediaPartFromResponse(resp, mediaType) {
@@ -81,13 +87,16 @@ function mediaPartFromResponse(resp, mediaType) {
   return null
 }
 
-/** Aviso se a Evolution devolveu messageId sem CDN — não bloqueia gravação no CRM. */
-function warnIfMediaMissingCdn(resp, mediaType, context = "mídia") {
+function assertMediaUploaded(resp, mediaType, context = "mídia") {
   const mt = String(mediaType || "").toLowerCase()
   if (!["image", "video", "document"].includes(mt)) return
   const part = mediaPartFromResponse(resp, mt)
-  if (!part || part.directPath || part.url) return
-  console.warn(`[crm-outbound] ${context}: messageId ok mas sem CDN imediato (${mt})`)
+  if (!part) {
+    throw new Error(`${context}: resposta sem payload de ${mt}.`)
+  }
+  if (!part.directPath && !part.url) {
+    throw new Error(`${context}: mídia não subiu ao WhatsApp (sem CDN).`)
+  }
 }
 
 async function findMessageInChats(fetchChatMessages, instanceName, jids, messageId) {
@@ -119,8 +128,10 @@ async function findOutboundMessage(deps, instanceName, jids, messageId) {
 }
 
 async function waitForOutboundAck(deps, instanceName, jids, messageId, options = {}) {
-  const timeoutMs = Number(options.timeoutMs ?? 8000)
-  const intervalMs = Number(options.intervalMs ?? 2000)
+  const hasMedia = options.hasMedia === true
+  const defaultTimeout = hasMedia ? 30000 : 20000
+  const timeoutMs = Number(options.timeoutMs ?? process.env.CRM_DELIVERY_ACK_TIMEOUT_MS ?? defaultTimeout)
+  const intervalMs = Number(options.intervalMs ?? process.env.CRM_DELIVERY_ACK_POLL_MS ?? 2500)
   const started = Date.now()
   let last = null
   let lastStatus = null
@@ -129,7 +140,7 @@ async function waitForOutboundAck(deps, instanceName, jids, messageId, options =
     last = await findOutboundMessage(deps, instanceName, jids, messageId)
     lastStatus = last?.status ?? last?.message?.status ?? null
     if (last && isAckOk(lastStatus)) {
-      return { record: last, status: lastStatus }
+      return { record: last, status: lastStatus, delivered: isDeliveryAck(lastStatus) }
     }
     await wait(intervalMs)
   }
@@ -137,6 +148,7 @@ async function waitForOutboundAck(deps, instanceName, jids, messageId, options =
   return {
     record: last,
     status: last ? lastStatus || "PENDING" : "TIMEOUT",
+    delivered: false,
   }
 }
 
@@ -160,14 +172,53 @@ function assertEvolutionSendAccepted(resp, context = "envio") {
   return id
 }
 
-/**
- * Confirma messageId na Evolution. ACK é opcional e não bloqueia gravação no CRM.
- * Retorna { messageId, crmStatus }.
- */
-async function confirmEvolutionDelivery(deps, { instanceName, conversation, to, resp, context, mediaType }) {
+function validateOutboundSendResponse(resp, { context, mediaType }) {
   const messageId = assertEvolutionSendAccepted(resp, context)
-  warnIfMediaMissingCdn(resp, mediaType, context)
-  return { messageId, crmStatus: "sent" }
+  assertMediaUploaded(resp, mediaType, context)
+  return messageId
+}
+
+async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, messageId, mediaType }) {
+  const number = normalizeEvolutionNumber(to)
+  const jids = buildRecipientLookupJids(conversation, number)
+  const hasMedia = mediaType && mediaType !== "none"
+
+  if (typeof deps?.fetchChatMessages !== "function" && typeof deps?.findMessageById !== "function") {
+    return { crmStatus: "sent", ackOk: true, detail: "poll indisponível" }
+  }
+
+  const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, { hasMedia })
+  if (!isAckOk(ack.status)) {
+    const detail =
+      ack.status === "TIMEOUT"
+        ? "WhatsApp não confirmou a entrega a tempo"
+        : ack.status === "PENDING"
+          ? "mensagem presa em PENDING"
+          : `status ${ack.status || "desconhecido"}`
+    console.warn(`[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} → ${detail}`)
+    return { crmStatus: "failed", ackOk: false, detail }
+  }
+
+  return {
+    crmStatus: mapAckToCrmStatus(ack.status),
+    ackOk: true,
+    detail: String(ack.status || "ok"),
+  }
+}
+
+async function confirmEvolutionDelivery(deps, params) {
+  const messageId = validateOutboundSendResponse(params.resp, {
+    context: params.context,
+    mediaType: params.mediaType,
+  })
+  const ack = await pollOutboundDeliveryAck(deps, {
+    instanceName: params.instanceName,
+    conversation: params.conversation,
+    to: params.to,
+    messageId,
+    mediaType: params.mediaType,
+  })
+  return { messageId, crmStatus: ack.crmStatus, ackOk: ack.ackOk, detail: ack.detail }
 }
 
 function assertOutboundRecipient(conversation) {
@@ -197,9 +248,12 @@ function validateOutboundMediaPayload({ body, mediaType, mediaBase64, mediaMime,
 module.exports = {
   extractProviderMessageId,
   assertEvolutionSendAccepted,
+  validateOutboundSendResponse,
+  pollOutboundDeliveryAck,
   confirmEvolutionDelivery,
   assertOutboundRecipient,
   validateOutboundMediaPayload,
+  assertMediaUploaded,
   normalizeEvolutionNumber,
   buildRecipientLookupJids,
   waitForOutboundAck,

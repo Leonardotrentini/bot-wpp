@@ -244,6 +244,49 @@ async function prepareWhatsAppVideo({ media, mimetype, fileName } = {}) {
   }
 }
 
+/** Estima duração do áudio (segundos) via ffmpeg — usado para simular “gravando…”. */
+async function probeMediaDurationSeconds({ media, mimetype } = {}) {
+  const rawB64 = stripDataUrl(media)
+  if (!rawB64) return null
+  let buffer
+  try {
+    buffer = Buffer.from(rawB64, "base64")
+  } catch {
+    return null
+  }
+  if (!buffer.length) return null
+
+  const ext = String(mimetype || "").includes("ogg")
+    ? ".ogg"
+    : String(mimetype || "").includes("webm")
+      ? ".webm"
+      : String(mimetype || "").includes("mpeg")
+        ? ".mp3"
+        : ".bin"
+  const tmpIn = path.join(os.tmpdir(), `vesto-probe-${Date.now()}${ext}`)
+  await fs.promises.writeFile(tmpIn, buffer)
+  const bin = resolveFfmpegPath()
+
+  try {
+    return await new Promise((resolve) => {
+      const child = spawn(bin, ["-i", tmpIn, "-f", "null", "-"], { windowsHide: true })
+      let stderr = ""
+      child.stderr.on("data", (c) => {
+        stderr += String(c)
+      })
+      child.on("error", () => resolve(null))
+      child.on("close", () => {
+        const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
+        if (!m) return resolve(null)
+        const sec = Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
+        resolve(Number.isFinite(sec) && sec > 0 ? sec : null)
+      })
+    })
+  } finally {
+    await fs.promises.unlink(tmpIn).catch(() => {})
+  }
+}
+
 /** Garante que a Evolution não devolveu webm “aceito” mas inutilizável no WhatsApp. */
 function assertWhatsAppAudioAccepted(resp) {
   const am = resp?.message?.audioMessage || resp?.message?.pttMessage || null
@@ -267,6 +310,7 @@ module.exports = {
   prepareWhatsAppPttAudio,
   prepareWhatsAppVideo,
   assertWhatsAppAudioAccepted,
+  probeMediaDurationSeconds,
   looksLikeOggOpus,
   mimeNeedsConversion,
   stripDataUrl,

@@ -67,7 +67,11 @@ const { trackMetaForContactTag } = require("../lib/metaConversions")
 const { reassignContactToSeller } = require("../lib/crmReassign")
 const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("../lib/crmContactMerge")
 const { deleteScopedContact, deleteScopedContacts, emitContactDeleted } = require("../lib/crmContactDelete")
-const { confirmEvolutionDelivery, assertOutboundRecipient, extractProviderMessageId } = require("../lib/crmOutboundSend")
+const {
+  confirmEvolutionDelivery,
+  assertOutboundRecipient,
+  extractProviderMessageId,
+} = require("../lib/crmOutboundSend")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -453,7 +457,7 @@ function createCrmRouter({ io }) {
         } else {
           sendResp = await sendText(conn.instanceName, to, content.body)
         }
-        const { messageId, crmStatus } = await confirmEvolutionDelivery(
+        const { messageId, crmStatus, ackOk, detail } = await confirmEvolutionDelivery(
           { fetchChatMessages, findMessageById },
           {
             instanceName: conn.instanceName,
@@ -464,7 +468,13 @@ function createCrmRouter({ io }) {
             mediaType: content.mediaType,
           },
         )
-        return { ...sendResp, key: { ...(sendResp?.key || {}), id: messageId }, _crmStatus: crmStatus }
+        return {
+          ...sendResp,
+          key: { ...(sendResp?.key || {}), id: messageId },
+          _crmStatus: crmStatus,
+          _ackOk: ackOk,
+          _ackDetail: detail,
+        }
       })
 
       const providerMessageId = resp?.key?.id || extractProviderMessageId(resp)
@@ -530,6 +540,22 @@ function createCrmRouter({ io }) {
         message: formatMessageRow(message),
         conversation: formatConversationRow(updated),
       })
+
+      emitCrmEvent(io, userId, "crm:message_status", {
+        conversationId: convo.id,
+        messageId: providerMessageId,
+        status: message.status,
+        message: formatMessageRow(message),
+      })
+
+      if (resp?._ackOk === false) {
+        return res.status(502).json({
+          error: "DELIVERY_NOT_CONFIRMED",
+          message: resp?._ackDetail || "WhatsApp não confirmou a entrega.",
+          crmMessage: formatMessageRow(message),
+          conversation: formatConversationRow(updated),
+        })
+      }
 
       return res.json({ message: formatMessageRow(message), conversation: formatConversationRow(updated) })
     } catch (err) {

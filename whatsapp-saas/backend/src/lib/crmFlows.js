@@ -216,7 +216,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
 
         const presenceDelayMs = resolveRecordingDelayMs(action)
 
-        // Nota de voz não aceita legenda — fila áudio primeiro, texto depois (ordem por createdAt).
+        // Nota de voz: áudio primeiro, texto depois. Imagem/vídeo + link: mídia sem legenda, texto separado.
         if (hasMedia && mediaType === "audio" && body) {
           await queueMessageDelivery(
             {
@@ -231,6 +231,29 @@ async function executeActions(deps, flow, conversation, options = {}) {
           )
           await queueMessageDelivery({ body, mediaType: "none" }, offsetMs)
           detail.push("send_message:audio+text")
+          return
+        }
+
+        const splitImageText =
+          hasMedia &&
+          (mediaType === "image" || mediaType === "video") &&
+          body &&
+          (body.length > 80 || /https?:\/\//i.test(body))
+
+        if (splitImageText) {
+          await queueMessageDelivery(
+            {
+              body: null,
+              mediaType,
+              mediaBase64: action.mediaBase64,
+              mediaMime: action.mediaMime,
+              mediaName: action.mediaName,
+              presenceDelayMs: 0,
+            },
+            offsetMs,
+          )
+          await queueMessageDelivery({ body, mediaType: "none" }, offsetMs)
+          detail.push(`send_message:${mediaType}+text`)
           return
         }
 

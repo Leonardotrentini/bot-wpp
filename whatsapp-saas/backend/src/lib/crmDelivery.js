@@ -6,8 +6,11 @@
 const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, CONVERSATION_INCLUDE } = require("./crmCore")
 const { buildOutboundMessageRaw, stripMediaBase64 } = require("./crmMedia")
 const { ensureWhatsAppConnected } = require("./whatsappConnection")
+const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
+const { probeMediaDurationSeconds } = require("./whatsappAudio")
 const {
-  confirmEvolutionDelivery,
+  validateOutboundSendResponse,
+  pollOutboundDeliveryAck,
   assertOutboundRecipient,
   validateOutboundMediaPayload,
 } = require("./crmOutboundSend")
@@ -19,9 +22,8 @@ const CRM_DELIVERY_STALE_MS = Number(process.env.CRM_DELIVERY_STALE_MS || 5 * 60
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 let busy = false
 
-/** WhatsApp renova presença a cada ~20s; chunks menores para renovar antes de expirar. */
-const PRESENCE_CHUNK_MS = 18000
-const PRESENCE_CHUNK_GAP_MS = 400
+/** WhatsApp só mantém “gravando…” ~3s por pacote — renovar a cada pulso. */
+const PRESENCE_PULSE_MS = Number(process.env.CRM_PRESENCE_PULSE_MS || 2500)
 
 async function playRecordingPresence(deps, instanceName, to, totalMs) {
   if (!totalMs || totalMs <= 0) return
@@ -31,25 +33,36 @@ async function playRecordingPresence(deps, instanceName, to, totalMs) {
     return
   }
 
-  let remaining = totalMs
-  while (remaining > 0) {
-    const chunk = Math.min(remaining, PRESENCE_CHUNK_MS)
+  const started = Date.now()
+  while (Date.now() - started < totalMs) {
+    const elapsed = Date.now() - started
+    const remaining = totalMs - elapsed
+    const pulse = Math.max(500, Math.min(remaining, PRESENCE_PULSE_MS))
     try {
-      await deps.sendPresence(instanceName, to, { presence: "recording", delayMs: chunk })
+      await deps.sendPresence(instanceName, to, { presence: "recording", delayMs: pulse })
     } catch (err) {
-      console.warn(
-        `[crm-delivery] presence recording falhou (${chunk}ms → ${to}):`,
-        err?.message || err,
-      )
-      await wait(chunk)
-      remaining -= chunk
-      continue
+      console.warn(`[crm-delivery] presence recording falhou (${pulse}ms → ${to}):`, err?.message || err)
     }
-
-    await wait(chunk)
-    remaining -= chunk
-    if (remaining > 0) await wait(PRESENCE_CHUNK_GAP_MS)
+    await wait(pulse)
   }
+}
+
+async function resolveAudioPresenceMs(delivery, mediaBase64, mediaMime) {
+  const configured = Number(delivery.presenceDelayMs) || 0
+  let audioSec = null
+  try {
+    audioSec = await probeMediaDurationSeconds({ media: mediaBase64, mimetype: mediaMime })
+  } catch {
+    /* segue com configured */
+  }
+  const fromAction = resolveRecordingDelayMs(
+    {
+      mediaType: "audio",
+      recordingDelayValue: configured > 0 ? Math.round(configured / 1000) : 0,
+    },
+    { audioDurationSec: audioSec },
+  )
+  return fromAction > 0 ? fromAction : configured
 }
 
 async function recoverStaleSendingDeliveries(prisma) {
@@ -91,6 +104,7 @@ async function processOneDelivery(deps, delivery) {
     const to = assertOutboundRecipient(conversation)
     const mediaType = delivery.mediaType && delivery.mediaType !== "none" ? delivery.mediaType : "none"
     const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
+    const sendContext = hasMedia ? `mídia (${mediaType})` : "texto"
 
     validateOutboundMediaPayload({
       body: delivery.body,
@@ -104,7 +118,7 @@ async function processOneDelivery(deps, delivery) {
     if (hasMedia) {
       const media = stripMediaBase64(delivery.mediaBase64)
       if (mediaType === "audio") {
-        const presenceMs = Number(delivery.presenceDelayMs) || 0
+        const presenceMs = await resolveAudioPresenceMs(delivery, media, delivery.mediaMime)
         if (presenceMs > 0) {
           await playRecordingPresence(deps, conn.instanceName, to, presenceMs)
         }
@@ -129,14 +143,11 @@ async function processOneDelivery(deps, delivery) {
       resp = await sendText(conn.instanceName, to, delivery.body || "")
     }
 
-    const { messageId: providerMessageId, crmStatus } = await confirmEvolutionDelivery(deps, {
-      instanceName: conn.instanceName,
-      conversation,
-      to,
-      resp,
-      context: hasMedia ? `mídia (${mediaType})` : "texto",
+    const providerMessageId = validateOutboundSendResponse(resp, {
+      context: sendContext,
       mediaType: hasMedia ? mediaType : "none",
     })
+
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
     const mediaB64 = hasMedia ? stripMediaBase64(delivery.mediaBase64) : null
@@ -145,13 +156,18 @@ async function processOneDelivery(deps, delivery) {
         ? resp?._vestoAudio?.mimetype || delivery.mediaMime || "audio/ogg; codecs=opus"
         : delivery.mediaMime || null
       : null
+    const messageRaw = hasMedia
+      ? buildOutboundMessageRaw({
+          providerMessageId,
+          remoteJid: delivery.remoteJid,
+          evolutionResp: resp,
+          mediaBase64: mediaB64,
+          mediaMime: storedMime,
+          mediaName: delivery.mediaName,
+        })
+      : null
 
-    await prisma.crmDelivery.update({
-      where: { id: delivery.id },
-      data: { status: "sent", sentAt: now, providerMessageId },
-    })
-
-    const message = await prisma.crmMessage.upsert({
+    let message = await prisma.crmMessage.upsert({
       where: {
         conversationId_messageId: {
           conversationId: conversation.id,
@@ -166,40 +182,22 @@ async function processOneDelivery(deps, delivery) {
         type: msgType,
         body: delivery.body || "",
         mediaMime: storedMime,
-        status: crmStatus || "sent",
+        status: "pending",
         source: delivery.kind,
         timestamp: now,
-        raw: hasMedia
-          ? buildOutboundMessageRaw({
-              providerMessageId,
-              remoteJid: delivery.remoteJid,
-              evolutionResp: resp,
-              mediaBase64: mediaB64,
-              mediaMime: storedMime,
-              mediaName: delivery.mediaName,
-            })
-          : null,
+        raw: messageRaw,
       },
       update: {
         body: delivery.body || "",
         type: msgType,
         mediaMime: storedMime,
-        status: crmStatus || "sent",
+        status: "pending",
         source: delivery.kind,
-        raw: hasMedia
-          ? buildOutboundMessageRaw({
-              providerMessageId,
-              remoteJid: delivery.remoteJid,
-              evolutionResp: resp,
-              mediaBase64: mediaB64,
-              mediaMime: storedMime,
-              mediaName: delivery.mediaName,
-            })
-          : undefined,
+        raw: messageRaw ?? undefined,
       },
     })
 
-    const updatedConversation = await prisma.crmConversation.update({
+    let updatedConversation = await prisma.crmConversation.update({
       where: { id: conversation.id },
       data: {
         lastMessageAt: now,
@@ -213,6 +211,48 @@ async function processOneDelivery(deps, delivery) {
       conversationId: conversation.id,
       message: formatMessageRow(message),
       conversation: formatConversationRow(updatedConversation),
+    })
+
+    const ack = await pollOutboundDeliveryAck(deps, {
+      instanceName: conn.instanceName,
+      conversation,
+      to,
+      messageId: providerMessageId,
+      mediaType: hasMedia ? mediaType : "none",
+    })
+
+    message = await prisma.crmMessage.update({
+      where: { id: message.id },
+      data: { status: ack.crmStatus },
+    })
+
+    if (ack.ackOk) {
+      await prisma.crmDelivery.update({
+        where: { id: delivery.id },
+        data: { status: "sent", sentAt: now, providerMessageId, error: null },
+      })
+    } else {
+      await prisma.crmDelivery.update({
+        where: { id: delivery.id },
+        data: {
+          status: "failed",
+          providerMessageId,
+          error: String(ack.detail || "WhatsApp não confirmou entrega.").slice(0, 500),
+        },
+      })
+      emitCrmEvent(io, delivery.userId, "crm:delivery_failed", {
+        conversationId: delivery.conversationId,
+        deliveryId: delivery.id,
+        kind: delivery.kind,
+        error: ack.detail || "WhatsApp não confirmou a entrega.",
+      })
+    }
+
+    emitCrmEvent(io, delivery.userId, "crm:message_status", {
+      conversationId: conversation.id,
+      messageId: providerMessageId,
+      status: ack.crmStatus,
+      message: formatMessageRow(message),
     })
   } catch (err) {
     const errMsg = String(err?.message || "Falha no envio.")
@@ -273,4 +313,4 @@ async function processPendingCrmDeliveries(deps) {
   }
 }
 
-module.exports = { processPendingCrmDeliveries }
+module.exports = { processPendingCrmDeliveries, playRecordingPresence }
