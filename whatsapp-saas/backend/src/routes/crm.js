@@ -1671,12 +1671,6 @@ function createCrmRouter({ io }) {
   })
 
   router.post("/packs/import", async (req, res) => {
-    if (req.user?.role !== "ADMIN") {
-      return res.status(403).json({
-        error: "FORBIDDEN",
-        message: "Somente administradores podem importar pack.",
-      })
-    }
     try {
       const result = await importCrmPack(prisma, req.user.sub, req.body)
       return res.status(201).json(result)

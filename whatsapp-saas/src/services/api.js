@@ -1222,8 +1222,13 @@ export async function updateCrmFlow(id, payload) {
   return mockResponse({ flow: { id, ...payload } })
 }
 
-export async function toggleCrmFlow(id, enabled) {
-  if (resolveUseRealApi()) return apiClient.patch(`/crm/flows/${encodeURIComponent(id)}`, { enabled })
+export async function toggleCrmFlow(id, enabled, flowPayload) {
+  if (resolveUseRealApi()) {
+    if (flowPayload) {
+      return apiClient.put(`/crm/flows/${encodeURIComponent(id)}`, { ...flowPayload, enabled }, { timeout: 120000 })
+    }
+    return apiClient.patch(`/crm/flows/${encodeURIComponent(id)}`, { enabled })
+  }
   mockCrmFlows = mockCrmFlows.map((f) => (f.id === id ? { ...f, enabled } : f))
   return mockResponse({ flow: mockCrmFlows.find((f) => f.id === id) || { id, enabled } })
 }

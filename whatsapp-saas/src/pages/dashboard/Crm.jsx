@@ -1715,7 +1715,8 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
 export function Crm() {
   const toast = useToast()
   const navigate = useNavigate()
-  const { user, isOrgOwner, isAdmin } = useAuth()
+  const { user, isOrgOwner, isAdmin, isImpersonating } = useAuth()
+  const canImportPack = isAdmin || isImpersonating
   const [sellerFilter, setSellerFilter] = useState('')
   const [orgMembers, setOrgMembers] = useState([])
   const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '' })
@@ -1738,6 +1739,8 @@ export function Crm() {
   const conversationsRef = useRef(conversations)
   const flowsLoadedRef = useRef(false)
   const agentsLoadedRef = useRef(initial.agents.length > 0)
+  const sessionUserIdRef = useRef(user?.id)
+  const [flowToggleId, setFlowToggleId] = useState(null)
   const kanbanLoadSeq = useRef(0)
 
   useEffect(() => {
@@ -1884,7 +1887,7 @@ export function Crm() {
 
   const handleImportPackFile = useCallback(
     async (file) => {
-      if (!isAdmin) {
+      if (!canImportPack) {
         toast.error('Somente administradores podem importar pack.')
         return
       }
@@ -1920,7 +1923,7 @@ export function Crm() {
         if (packFileRef.current) packFileRef.current.value = ''
       }
     },
-    [toast, reloadFlowsForce, isAdmin],
+    [toast, reloadFlowsForce, canImportPack],
   )
 
   const loadAgents = useCallback(async () => {
@@ -1949,6 +1952,18 @@ export function Crm() {
     if (tab === 'flows') loadFlows()
     if (tab === 'agents') loadAgents()
   }, [tab, loadFlows, loadAgents])
+
+  /** Ao trocar de conta (login / impersonação), recarrega fluxos e agentes do usuário correto. */
+  useEffect(() => {
+    if (sessionUserIdRef.current === user?.id) return
+    sessionUserIdRef.current = user?.id
+    flowsLoadedRef.current = false
+    agentsLoadedRef.current = false
+    setFlows([])
+    setAgents([])
+    if (tab === 'flows') loadFlows()
+    if (tab === 'agents') loadAgents()
+  }, [user?.id, tab, loadFlows, loadAgents])
 
   useEffect(() => {
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
@@ -2142,7 +2157,7 @@ export function Crm() {
   if (loading) {
     return (
       <div className="space-y-4">
-        {isAdmin ? (
+        {canImportPack ? (
           <input
             ref={packFileRef}
             type="file"
@@ -2160,7 +2175,7 @@ export function Crm() {
           onOpenSettings={setSettingsPanel}
           onImportPack={() => packFileRef.current?.click()}
           packImporting={packImporting}
-          showImportPack={isAdmin}
+          showImportPack={canImportPack}
         />
         <div className="flex justify-center py-20">
           <Spinner />
@@ -2171,7 +2186,7 @@ export function Crm() {
 
   return (
     <div className="space-y-4">
-      {isAdmin ? (
+      {canImportPack ? (
         <input
           ref={packFileRef}
           type="file"
@@ -2190,7 +2205,7 @@ export function Crm() {
         refreshing={refreshing}
         onImportPack={() => packFileRef.current?.click()}
         packImporting={packImporting}
-        showImportPack={isAdmin}
+        showImportPack={canImportPack}
         showSellerFilter={tab === 'kanban' && isOrgOwner && orgMembers.length > 0}
         sellerFilter={sellerFilter}
         onSellerFilterChange={setSellerFilter}
@@ -2353,12 +2368,16 @@ export function Crm() {
                     </div>
                     <Toggle
                       checked={flow.enabled}
+                      disabled={flowToggleId === flow.id}
                       onChange={async (v) => {
+                        setFlowToggleId(flow.id)
                         try {
                           const { data } = await toggleCrmFlow(flow.id, v)
                           setFlows((prev) => prev.map((f) => (f.id === flow.id ? data.flow : f)))
-                        } catch {
-                          toast.error('Falha ao alterar o fluxo.')
+                        } catch (err) {
+                          toast.error(err?.response?.data?.message || 'Falha ao alterar o fluxo.')
+                        } finally {
+                          setFlowToggleId(null)
                         }
                       }}
                     />
@@ -2468,8 +2487,8 @@ export function Crm() {
                             replyDelayMaxSec: agent.replyDelayMaxSec,
                           })
                           setAgents((prev) => prev.map((a) => (a.id === agent.id ? data.agent : a)))
-                        } catch {
-                          toast.error('Falha ao alterar o agente.')
+                        } catch (err) {
+                          toast.error(err?.response?.data?.message || 'Falha ao alterar o agente.')
                         }
                       }}
                     />
