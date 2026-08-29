@@ -16,6 +16,7 @@ const {
   findChats,
   findContacts,
   fetchChatMessages,
+  findMessageById,
   fetchProfile,
   fetchProfilePictureUrl,
   saveContact,
@@ -433,13 +434,14 @@ function createCrmRouter({ io }) {
           sendResp = await sendText(conn.instanceName, to, content.body)
         }
         const messageId = await confirmEvolutionDelivery(
-          { fetchChatMessages },
+          { fetchChatMessages, findMessageById },
           {
             instanceName: conn.instanceName,
             conversation: convo,
             to,
             resp: sendResp,
             context: content.mediaType !== "none" ? `mídia (${content.mediaType})` : "texto",
+            mediaType: content.mediaType,
           },
         )
         return { ...sendResp, key: { ...(sendResp?.key || {}), id: messageId } }
@@ -1715,7 +1717,7 @@ function createCrmRouter({ io }) {
     })
   })
 
-  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, fetchChatMessages }
+  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, fetchChatMessages, findMessageById }
 
   router.post("/flows/:id/test", async (req, res) => {
     const conversationId = String(req.body?.conversationId || "").trim()

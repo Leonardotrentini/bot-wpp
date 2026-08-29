@@ -917,6 +917,10 @@ export function Chat() {
         return next
       })
     })
+    const offDeliveryFailed = onSocketEvent('crm:delivery_failed', ({ conversationId, error }) => {
+      if (conversationId !== activeIdRef.current) return
+      toastRef.current.error(error || 'Fluxo/automação não conseguiu enviar a mensagem.')
+    })
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
       if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
       setConversations((prev) => {
@@ -960,6 +964,7 @@ export function Chat() {
     return () => {
       offMessage()
       offStatus()
+      offDeliveryFailed()
       offConvo()
       offSync()
       offHandoff()

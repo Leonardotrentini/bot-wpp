@@ -40,6 +40,7 @@ const {
   fetchGroupMessages,
   findChats,
   fetchChatMessages,
+  findMessageById,
   sendText,
   sendMedia,
   sendWhatsAppAudio,
@@ -3936,7 +3937,7 @@ async function updateGroupsFromWebhook(instanceName, body) {
 
 /** Deps compartilhadas dos motores do CRM (fluxos, IA, fila de envio). */
 function getCrmDeps() {
-  return { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, findChats, fetchChatMessages }
+  return { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, findChats, fetchChatMessages, findMessageById }
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */

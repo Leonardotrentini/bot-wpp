@@ -396,6 +396,27 @@ async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize =
   return fetchGroupMessages(instanceName, remoteJid, { page, pageSize, cutoffMs })
 }
 
+/** Localiza mensagem enviada pelo ID (independente do JID — mais confiável para ACK). */
+async function findMessageById(instanceName, messageId, { pageSize = 10 } = {}) {
+  const id = String(messageId || "").trim()
+  if (!id) return null
+  const bodies = [
+    { where: { key: { id } }, page: 1, offset: pageSize },
+    { where: { id }, page: 1, offset: pageSize },
+  ]
+  for (const body of bodies) {
+    try {
+      const payload = await requestFindMessages(instanceName, body)
+      const records = normalizeEvolutionMessages(payload)
+      const hit = (records || []).find((r) => r?.key?.id === id)
+      if (hit) return hit
+    } catch {
+      /* tenta próximo formato */
+    }
+  }
+  return null
+}
+
 /** presence: "composing" | "recording" — delay em ms (máx ~20s por chamada no WhatsApp). */
 async function sendPresence(instanceName, number, { presence = "recording", delayMs = 3000 } = {}) {
   const delay = Math.max(500, Math.min(Number(delayMs) || 3000, 20000))
@@ -591,6 +612,7 @@ module.exports = {
   fetchGroupMessages,
   findChats,
   fetchChatMessages,
+  findMessageById,
   sendText,
   sendPresence,
   sendMedia,

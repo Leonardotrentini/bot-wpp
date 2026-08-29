@@ -135,6 +135,7 @@ async function processOneDelivery(deps, delivery) {
       to,
       resp,
       context: hasMedia ? `mídia (${mediaType})` : "texto",
+      mediaType: hasMedia ? mediaType : "none",
     })
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
@@ -191,10 +192,17 @@ async function processOneDelivery(deps, delivery) {
       conversation: formatConversationRow(updatedConversation),
     })
   } catch (err) {
-    console.error(`[crm-delivery] envio falhou (${delivery.id}):`, err?.message || err)
+    const errMsg = String(err?.message || "Falha no envio.")
+    console.error(`[crm-delivery] envio falhou (${delivery.id}):`, errMsg)
     await prisma.crmDelivery.update({
       where: { id: delivery.id },
-      data: { status: "failed", error: String(err?.message || "Falha no envio.") },
+      data: { status: "failed", error: errMsg.slice(0, 500) },
+    })
+    emitCrmEvent(io, delivery.userId, "crm:delivery_failed", {
+      conversationId: delivery.conversationId,
+      deliveryId: delivery.id,
+      kind: delivery.kind,
+      error: errMsg,
     })
   }
 }

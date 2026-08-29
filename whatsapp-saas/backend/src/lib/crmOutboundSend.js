@@ -21,6 +21,7 @@ function normalizeEvolutionNumber(raw) {
   if (/@s\.whatsapp\.net$/i.test(s) || /@lid$/i.test(s)) {
     const digits = s.split("@")[0].replace(/\D/g, "")
     if (digits.length >= 8 && digits.length <= 15) return digits
+    return s
   }
   if (/^\d{8,15}$/.test(s.replace(/\s/g, ""))) return s.replace(/\D/g, "")
   return s
@@ -34,16 +35,43 @@ function buildRecipientLookupJids(conversation, normalizedNumber) {
   if (contact?.lidJid) out.add(String(contact.lidJid).trim())
   const phone = normalizedNumber || resolvePhoneDigits(contact)
   if (phone) {
-    out.add(phone)
-    out.add(`${phone}@s.whatsapp.net`)
-    out.add(`${phone}@lid`)
+    const digits = String(phone).replace(/\D/g, "")
+    if (digits) {
+      out.add(digits)
+      out.add(`${digits}@s.whatsapp.net`)
+      out.add(`${digits}@lid`)
+    }
   }
   return [...out].filter(Boolean)
 }
 
 function isAckOk(status) {
-  if (status == null || status === "") return false
-  return ACK_OK.has(String(status).toUpperCase())
+  const s = String(status ?? "").toUpperCase()
+  if (!s || s === "PENDING" || s === "ERROR" || s === "0") return false
+  if (ACK_OK.has(s)) return true
+  if (s.includes("ACK") || s.includes("READ") || s.includes("PLAY")) return true
+  const n = Number(status)
+  return Number.isFinite(n) && n >= 2
+}
+
+function mediaPartFromResponse(resp, mediaType) {
+  const mt = String(mediaType || "").toLowerCase()
+  const msg = resp?.message || {}
+  if (mt === "image") return msg.imageMessage
+  if (mt === "video") return msg.videoMessage
+  if (mt === "audio") return msg.audioMessage
+  if (mt === "document") return msg.documentMessage
+  return null
+}
+
+/** Evolution às vezes devolve messageId sem subir mídia ao CDN do WhatsApp. */
+function assertMediaUploaded(resp, mediaType, context = "mídia") {
+  const mt = String(mediaType || "").toLowerCase()
+  if (!["image", "video", "document"].includes(mt)) return
+  const part = mediaPartFromResponse(resp, mt)
+  if (!part) return
+  if (part.directPath || part.url) return
+  throw new Error(`${context}: mídia não subiu ao WhatsApp (sem CDN).`)
 }
 
 async function findMessageInChats(fetchChatMessages, instanceName, jids, messageId) {
@@ -59,7 +87,22 @@ async function findMessageInChats(fetchChatMessages, instanceName, jids, message
   return null
 }
 
-async function waitForOutboundAck(fetchChatMessages, instanceName, jids, messageId, options = {}) {
+async function findOutboundMessage(deps, instanceName, jids, messageId) {
+  if (typeof deps?.findMessageById === "function") {
+    try {
+      const hit = await deps.findMessageById(instanceName, messageId)
+      if (hit) return hit
+    } catch {
+      /* fallback por JID */
+    }
+  }
+  if (typeof deps?.fetchChatMessages === "function") {
+    return findMessageInChats(deps.fetchChatMessages, instanceName, jids, messageId)
+  }
+  return null
+}
+
+async function waitForOutboundAck(deps, instanceName, jids, messageId, options = {}) {
   const timeoutMs = Number(options.timeoutMs ?? process.env.CRM_DELIVERY_ACK_TIMEOUT_MS ?? 25000)
   const intervalMs = Number(options.intervalMs ?? process.env.CRM_DELIVERY_ACK_POLL_MS ?? 2500)
   const started = Date.now()
@@ -67,7 +110,7 @@ async function waitForOutboundAck(fetchChatMessages, instanceName, jids, message
   let lastStatus = null
 
   while (Date.now() - started < timeoutMs) {
-    last = await findMessageInChats(fetchChatMessages, instanceName, jids, messageId)
+    last = await findOutboundMessage(deps, instanceName, jids, messageId)
     lastStatus = last?.status ?? last?.message?.status ?? null
     if (last && isAckOk(lastStatus)) {
       return { record: last, status: lastStatus }
@@ -104,22 +147,33 @@ function assertEvolutionSendAccepted(resp, context = "envio") {
 /**
  * Confirma messageId na Evolution e aguarda ACK do WhatsApp antes de gravar no CRM.
  */
-async function confirmEvolutionDelivery(deps, { instanceName, conversation, to, resp, context }) {
+async function confirmEvolutionDelivery(deps, { instanceName, conversation, to, resp, context, mediaType }) {
   const messageId = assertEvolutionSendAccepted(resp, context)
+  assertMediaUploaded(resp, mediaType, context)
   const number = normalizeEvolutionNumber(to)
   const jids = buildRecipientLookupJids(conversation, number)
+  const hasMedia = mediaType && mediaType !== "none"
+  const defaultTimeout = hasMedia ? 45000 : 25000
 
-  if (typeof deps?.fetchChatMessages !== "function") {
-    console.warn("[crm-outbound] fetchChatMessages indisponível — usando só messageId")
+  if (typeof deps?.fetchChatMessages !== "function" && typeof deps?.findMessageById !== "function") {
+    console.warn("[crm-outbound] findMessageById/fetchChatMessages indisponível — usando só messageId")
     return messageId
   }
 
-  const ack = await waitForOutboundAck(deps.fetchChatMessages, instanceName, jids, messageId)
+  const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, {
+    timeoutMs: Number(process.env.CRM_DELIVERY_ACK_TIMEOUT_MS || defaultTimeout),
+  })
+
   if (!isAckOk(ack.status)) {
     const detail =
       ack.status === "TIMEOUT"
         ? "WhatsApp não confirmou a entrega a tempo"
-        : `status ${ack.status || "desconhecido"}`
+        : ack.status === "PENDING"
+          ? "mensagem presa em PENDING (não entregue)"
+          : `status ${ack.status || "desconhecido"}`
+    console.warn(
+      `[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} jids=${jids.join(",")} → ${detail}`,
+    )
     throw new Error(`${detail} (${context}, destino ${number || to}).`)
   }
 
@@ -130,8 +184,9 @@ function assertOutboundRecipient(conversation) {
   const to = resolveEvolutionRecipient(conversation)
   const raw = String(to || "").trim()
   if (!raw) throw new Error("Destino inválido — contato sem telefone ou JID.")
+  if (/@lid$/i.test(raw)) return raw
   const normalized = normalizeEvolutionNumber(raw)
-  if (/@lid$/i.test(raw) && !/^\d{8,15}$/.test(normalized)) {
+  if (/@lid$/i.test(String(conversation?.remoteJid || "")) && !/^\d{8,15}$/.test(normalized)) {
     throw new Error("Contato só com @lid — salve o telefone no CRM antes de enviar.")
   }
   return normalized || raw
@@ -159,4 +214,5 @@ module.exports = {
   buildRecipientLookupJids,
   waitForOutboundAck,
   isAckOk,
+  assertMediaUploaded,
 }
