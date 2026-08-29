@@ -66,6 +66,7 @@ const { trackMetaForContactTag } = require("../lib/metaConversions")
 const { reassignContactToSeller } = require("../lib/crmReassign")
 const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("../lib/crmContactMerge")
 const { deleteScopedContact, deleteScopedContacts, emitContactDeleted } = require("../lib/crmContactDelete")
+const { assertEvolutionSendAccepted, assertOutboundRecipient } = require("../lib/crmOutboundSend")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -409,7 +410,7 @@ function createCrmRouter({ io }) {
 
     try {
       const resp = await enqueueUserSend(userId, async () => {
-        const to = resolveEvolutionRecipient(convo)
+        const to = assertOutboundRecipient(convo)
         if (content.mediaType === "audio") {
           const media = stripMediaBase64(content.mediaBase64)
           const mimetype = content.mediaMime || "audio/ogg; codecs=opus"
@@ -432,7 +433,10 @@ function createCrmRouter({ io }) {
         return sendText(conn.instanceName, to, content.body)
       })
 
-      const providerMessageId = resp?.key?.id || resp?.messageId || resp?.id || null
+      const providerMessageId = assertEvolutionSendAccepted(
+        resp,
+        content.mediaType !== "none" ? `mídia (${content.mediaType})` : "texto",
+      )
       const now = new Date()
       const hasMedia = content.mediaType !== "none"
       const mediaB64 = hasMedia ? stripMediaBase64(content.mediaBase64) : null
@@ -455,7 +459,7 @@ function createCrmRouter({ io }) {
         data: {
           userId,
           conversationId: convo.id,
-          messageId: providerMessageId || `manual-${Date.now()}`,
+          messageId: providerMessageId,
           fromMe: true,
           type: content.mediaType === "none" ? "text" : content.mediaType,
           body: content.body || "",

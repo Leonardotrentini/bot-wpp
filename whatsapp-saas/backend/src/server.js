@@ -116,6 +116,7 @@ const {
   isIndividualJid,
   ingestCrmMessage,
   emitCrmEvent,
+  applyCrmMessageAck,
   normalizeMessageMediaKind,
   formatMessageRow: formatCrmMessageRow,
   formatConversationRow: formatCrmConversationRow,
@@ -4222,9 +4223,18 @@ async function updateOutboundAckFromWebhook(instanceName, body) {
       where: { userId: conn.userId, providerMessageId: messageId },
       select: { id: true, status: true },
     })
-    if (!current) continue
-    if ((rank[status] || 0) <= (rank[current.status] || 0) && status !== "falhou") continue
-    await prisma.outboundMessage.update({ where: { id: current.id }, data: { status } }).catch(() => {})
+    if (current) {
+      if ((rank[status] || 0) <= (rank[current.status] || 0) && status !== "falhou") {
+        /* mantém outboundMessage */
+      } else {
+        await prisma.outboundMessage.update({ where: { id: current.id }, data: { status } }).catch(() => {})
+      }
+    }
+    await applyCrmMessageAck(prisma, io, {
+      userId: conn.userId,
+      providerMessageId: messageId,
+      ackStatus: statusRaw,
+    }).catch((err) => console.warn("[crm-ack]", err?.message || err))
   }
 }
 

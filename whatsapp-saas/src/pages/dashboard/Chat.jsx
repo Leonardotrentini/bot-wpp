@@ -5,7 +5,6 @@ import {
   Paperclip,
   X,
   Bot,
-  CheckCheck,
   Tag as TagIcon,
   StickyNote,
   Zap,
@@ -41,6 +40,7 @@ import { ChatOnboardingModal } from '../../components/dashboard/ChatOnboardingMo
 import { ChatSyncBar } from '../../components/dashboard/ChatSyncBar.jsx'
 import { ChatConversationFilters } from '../../components/dashboard/ChatConversationFilters.jsx'
 import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
+import { MessageDeliveryIcon } from '../../components/crm/MessageDeliveryIcon.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
 import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
@@ -203,7 +203,7 @@ const ConversationListItem = memo(function ConversationListItem({
           <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>{subtitle}</p>
         )}
         <div className="mt-0.5 flex items-center gap-1.5">
-          {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0 text-stone-500" />}
+          {c.lastMessageFromMe && <MessageDeliveryIcon status="sent" className="shrink-0" />}
           <p className="truncate text-xs text-stone-400">{c.lastMessagePreview || '—'}</p>
           {unidentified && (
             <span className="ml-auto shrink-0 rounded px-1 py-px text-[9px] font-semibold text-amber-200 bg-amber-500/20">
@@ -895,12 +895,27 @@ export function Chat() {
         }
         scrollToEndRef.current = true
         setMessages((prev) => {
-          if (prev.some((m) => m.id === message.id)) return prev
+          const idx = prev.findIndex((m) => m.id === message.id)
+          if (idx !== -1) {
+            const next = [...prev]
+            next[idx] = { ...next[idx], ...message }
+            return next
+          }
           appendCachedMessage(conversationId, message)
           return [...prev, message]
         })
         markReadDebounced(conversationId)
       }
+    })
+    const offStatus = onSocketEvent('crm:message_status', ({ conversationId, message }) => {
+      if (!message || conversationId !== activeIdRef.current) return
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === message.id || m.messageId === message.messageId)
+        if (idx === -1) return prev
+        const next = [...prev]
+        next[idx] = { ...next[idx], ...message }
+        return next
+      })
     })
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
       if (!conversation || !isConversationInScope(conversation, scopeRef.current)) return
@@ -944,6 +959,7 @@ export function Chat() {
     })
     return () => {
       offMessage()
+      offStatus()
       offConvo()
       offSync()
       offHandoff()
@@ -1693,7 +1709,7 @@ export function Chat() {
                           {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
                           {item.msg.source === 'flow' && <Zap className="h-3 w-3 text-amber-400" />}
                           <span className="text-[10px] text-stone-500">{formatMsgTime(item.msg.timestamp)}</span>
-                          {item.msg.fromMe && <CheckCheck className="h-3 w-3 text-stone-500" />}
+                          {item.msg.fromMe && <MessageDeliveryIcon status={item.msg.status} />}
                         </div>
                       </div>
                     </div>

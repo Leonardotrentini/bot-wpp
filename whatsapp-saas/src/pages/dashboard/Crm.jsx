@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Bot,
-  CheckCheck,
   ChevronLeft,
   ChevronRight,
   GripVertical,
@@ -20,6 +19,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
+import { MessageDeliveryIcon } from '../../components/crm/MessageDeliveryIcon.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Card } from '../../components/common/Card.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -333,7 +333,7 @@ function KanbanCard({
           {c.aiEnabled && <Bot className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" title="IA ativa" />}
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-xs text-stone-400">
-          {c.lastMessageFromMe && <CheckCheck className="h-3 w-3 shrink-0 text-stone-500" />}
+          {c.lastMessageFromMe && <MessageDeliveryIcon status="sent" className="shrink-0" />}
           <p className="line-clamp-2 min-w-0 flex-1 leading-snug">{c.lastMessagePreview || '—'}</p>
         </div>
         {(c.contact?.tags || []).length > 0 && (

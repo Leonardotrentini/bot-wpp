@@ -3,11 +3,18 @@
  * Processada pelo tick do scheduler — envia 1 por vez com pequenas pausas.
  */
 
-const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, CONVERSATION_INCLUDE, resolveEvolutionRecipient } = require("./crmCore")
+const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, CONVERSATION_INCLUDE } = require("./crmCore")
 const { buildOutboundMessageRaw, stripMediaBase64 } = require("./crmMedia")
+const { ensureWhatsAppConnected } = require("./whatsappConnection")
+const {
+  assertEvolutionSendAccepted,
+  assertOutboundRecipient,
+  validateOutboundMediaPayload,
+} = require("./crmOutboundSend")
 
 const CRM_DELIVERY_BATCH = Number(process.env.CRM_DELIVERY_BATCH || 5)
 const CRM_DELIVERY_GAP_MS = Number(process.env.CRM_DELIVERY_GAP_MS || 2000)
+const CRM_DELIVERY_STALE_MS = Number(process.env.CRM_DELIVERY_STALE_MS || 5 * 60 * 1000)
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 let busy = false
@@ -39,15 +46,19 @@ async function playRecordingPresence(deps, instanceName, to, totalMs) {
       continue
     }
 
-    // Evolution responde rápido; a espera real precisa ser local.
     await wait(chunk)
     remaining -= chunk
     if (remaining > 0) await wait(PRESENCE_CHUNK_GAP_MS)
   }
 }
 
-function extractProviderMessageId(resp) {
-  return resp?.key?.id || resp?.messageId || resp?.id || null
+async function recoverStaleSendingDeliveries(prisma) {
+  const cutoff = new Date(Date.now() - CRM_DELIVERY_STALE_MS)
+  const { count } = await prisma.crmDelivery.updateMany({
+    where: { status: "sending", updatedAt: { lt: cutoff } },
+    data: { status: "pending", error: null },
+  })
+  if (count > 0) console.warn(`[crm-delivery] ${count} envio(s) preso(s) em "sending" — reenfileirados.`)
 }
 
 async function processOneDelivery(deps, delivery) {
@@ -65,8 +76,8 @@ async function processOneDelivery(deps, delivery) {
     return
   }
 
-  const conn = await prisma.whatsAppConnection.findUnique({ where: { userId: delivery.userId } })
-  if (!conn || !conn.connected) {
+  const conn = await ensureWhatsAppConnected(prisma, delivery.userId)
+  if (!conn) {
     await prisma.crmDelivery.update({
       where: { id: delivery.id },
       data: { status: "failed", error: "WhatsApp desconectado." },
@@ -77,11 +88,20 @@ async function processOneDelivery(deps, delivery) {
   await prisma.crmDelivery.update({ where: { id: delivery.id }, data: { status: "sending" } })
 
   try {
+    const to = assertOutboundRecipient(conversation)
     const mediaType = delivery.mediaType && delivery.mediaType !== "none" ? delivery.mediaType : "none"
     const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
+
+    validateOutboundMediaPayload({
+      body: delivery.body,
+      mediaType,
+      mediaBase64: delivery.mediaBase64,
+      mediaMime: delivery.mediaMime,
+      mediaName: delivery.mediaName,
+    })
+
     let resp
     if (hasMedia) {
-      const to = resolveEvolutionRecipient(conversation)
       const media = stripMediaBase64(delivery.mediaBase64)
       if (mediaType === "audio") {
         const presenceMs = Number(delivery.presenceDelayMs) || 0
@@ -106,9 +126,10 @@ async function processOneDelivery(deps, delivery) {
         })
       }
     } else {
-      resp = await sendText(conn.instanceName, resolveEvolutionRecipient(conversation), delivery.body || "")
+      resp = await sendText(conn.instanceName, to, delivery.body || "")
     }
-    const providerMessageId = extractProviderMessageId(resp)
+
+    const providerMessageId = assertEvolutionSendAccepted(resp, hasMedia ? `mídia (${mediaType})` : "texto")
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
     const mediaB64 = hasMedia ? stripMediaBase64(delivery.mediaBase64) : null
@@ -127,13 +148,13 @@ async function processOneDelivery(deps, delivery) {
       data: {
         userId: delivery.userId,
         conversationId: conversation.id,
-        messageId: providerMessageId || `crm-${delivery.id}`,
+        messageId: providerMessageId,
         fromMe: true,
         type: msgType,
         body: delivery.body || "",
         mediaMime: storedMime,
         status: "sent",
-        source: delivery.kind, // flow | ai
+        source: delivery.kind,
         timestamp: now,
         raw: hasMedia
           ? buildOutboundMessageRaw({
@@ -148,8 +169,6 @@ async function processOneDelivery(deps, delivery) {
       },
     })
 
-    // Atualiza preview/listagem, mas NÃO toca noReplySinceAt —
-    // follow-up de fluxo/IA não reinicia o gatilho "sem resposta".
     const updatedConversation = await prisma.crmConversation.update({
       where: { id: conversation.id },
       data: {
@@ -205,6 +224,7 @@ async function processPendingCrmDeliveries(deps) {
   if (busy) return 0
   busy = true
   try {
+    await recoverStaleSendingDeliveries(deps.prisma)
     const pending = await pickEligibleDeliveries(deps.prisma, CRM_DELIVERY_BATCH)
     for (let i = 0; i < pending.length; i += 1) {
       await processOneDelivery(deps, pending[i])

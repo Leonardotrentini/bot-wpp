@@ -751,6 +751,47 @@ function emitCrmEvent(io, userId, event, payload) {
     .catch(() => {})
 }
 
+const CRM_MSG_STATUS_RANK = { failed: 0, sent: 1, delivered: 2, read: 3 }
+
+/** Mapeia ACK do webhook Evolution → status do CrmMessage. */
+function mapEvolutionAckToCrmStatus(statusRaw) {
+  const s = String(statusRaw || "").toUpperCase()
+  if (s.includes("READ") || s === "4") return "read"
+  if (s.includes("DELIVERY") || s === "3") return "delivered"
+  if (s.includes("ERROR") || s.includes("FAIL")) return "failed"
+  if (s.includes("SERVER") || s === "2") return "sent"
+  return null
+}
+
+/** Atualiza status de entrega de CrmMessage e emite evento em tempo real. */
+async function applyCrmMessageAck(prisma, io, { userId, providerMessageId, ackStatus }) {
+  const nextStatus = mapEvolutionAckToCrmStatus(ackStatus)
+  if (!nextStatus || !providerMessageId) return null
+
+  const row = await prisma.crmMessage.findFirst({
+    where: { userId, messageId: providerMessageId, fromMe: true },
+  })
+  if (!row) return null
+
+  const current = String(row.status || "sent")
+  const curRank = CRM_MSG_STATUS_RANK[current] ?? 1
+  const nextRank = CRM_MSG_STATUS_RANK[nextStatus] ?? 1
+  if (nextStatus !== "failed" && nextRank <= curRank) return null
+
+  const updated = await prisma.crmMessage.update({
+    where: { id: row.id },
+    data: { status: nextStatus },
+  })
+
+  emitCrmEvent(io, userId, "crm:message_status", {
+    conversationId: updated.conversationId,
+    messageId: updated.messageId,
+    status: nextStatus,
+    message: formatMessageRow(updated),
+  })
+  return updated
+}
+
 module.exports = {
   isIndividualJid,
   isLidJid,
@@ -777,6 +818,8 @@ module.exports = {
   ensureContactAndConversation,
   ingestCrmMessage,
   emitCrmEvent,
+  applyCrmMessageAck,
+  mapEvolutionAckToCrmStatus,
   propagateSavedNameToPhoneSiblings,
   CONVERSATION_INCLUDE,
 }
