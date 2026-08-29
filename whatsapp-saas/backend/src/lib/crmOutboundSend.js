@@ -201,10 +201,11 @@ function validateOutboundSendResponse(resp, { context, mediaType }) {
   return messageId
 }
 
-async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, messageId, mediaType, sendResp }) {
+async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, messageId, mediaType, sendResp, quick }) {
   const number = normalizeEvolutionNumber(to)
   const jids = buildRecipientLookupJids(conversation, number)
   const hasMedia = mediaType && mediaType !== "none"
+  const useQuick = quick !== false && process.env.CRM_DELIVERY_ACK_FULL_POLL !== "1"
 
   const immediate = extractSendResponseAck(sendResp)
   if (isAckOk(immediate)) {
@@ -213,6 +214,10 @@ async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, m
       ackOk: true,
       detail: String(immediate),
     }
+  }
+
+  if (useQuick) {
+    return { crmStatus: "sent", ackOk: true, detail: "enviado" }
   }
 
   if (typeof deps?.fetchChatMessages !== "function" && typeof deps?.findMessageById !== "function") {
