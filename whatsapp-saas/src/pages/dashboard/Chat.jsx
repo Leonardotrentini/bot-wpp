@@ -756,6 +756,7 @@ export function Chat() {
           id,
           (convId, params) => fetchMessagesPage(convId, params),
           {
+            force: true,
             onUpdated: (entry) => {
               if (activeIdRef.current !== id) return
               setMessages(entry.messages)
@@ -878,8 +879,7 @@ export function Chat() {
 
   useEffect(() => {
     const offMessage = onSocketEvent('crm:message', ({ conversationId, message, conversation }) => {
-      if (conversation && !isConversationInScope(conversation, scopeRef.current)) return
-      if (conversation) {
+      if (conversation && isConversationInScope(conversation, scopeRef.current)) {
         setConversations((prev) => {
           const current = prev.find((c) => c.id === conversation.id)
           const merged = mergeIncomingConversation(current, conversation)
@@ -888,14 +888,11 @@ export function Chat() {
         })
       }
       if (conversationId === activeIdRef.current && message) {
-        // Sem conversation no payload: só aplica se o chat ativo já está na lista do usuário.
-        if (!conversation) {
-          const activeKnown = conversationsRef.current.some((c) => c.id === conversationId)
-          if (!activeKnown) return
-        }
         scrollToEndRef.current = true
         setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.id === message.id)
+          const idx = prev.findIndex(
+            (m) => m.id === message.id || (message.messageId && m.messageId === message.messageId),
+          )
           if (idx !== -1) {
             const next = [...prev]
             next[idx] = { ...next[idx], ...message }

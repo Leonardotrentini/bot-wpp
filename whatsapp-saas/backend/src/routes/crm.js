@@ -310,7 +310,27 @@ function createCrmRouter({ io }) {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || "50", 10) || 50))
     const before = req.query.before ? new Date(String(req.query.before)) : null
 
-    const where = { conversationId: convo.id }
+    const phoneDigits = String(convo.contact?.phone || "").replace(/\D/g, "")
+    let conversationIds = [convo.id]
+    if (phoneDigits.length >= 8) {
+      const siblings = await prisma.crmContact.findMany({
+        where: {
+          userId: convo.userId,
+          phone: phoneDigits,
+          id: { not: convo.contactId },
+        },
+        select: { id: true },
+      })
+      if (siblings.length) {
+        const extraConvos = await prisma.crmConversation.findMany({
+          where: { contactId: { in: siblings.map((s) => s.id) } },
+          select: { id: true },
+        })
+        conversationIds = [...new Set([convo.id, ...extraConvos.map((c) => c.id)])]
+      }
+    }
+
+    const where = { conversationId: { in: conversationIds } }
     if (before && !Number.isNaN(before.getTime())) where.timestamp = { lt: before }
 
     const rows = await prisma.crmMessage.findMany({
@@ -466,8 +486,11 @@ function createCrmRouter({ io }) {
           })
         : null
 
-      const message = await prisma.crmMessage.create({
-        data: {
+      const message = await prisma.crmMessage.upsert({
+        where: {
+          conversationId_messageId: { conversationId: convo.id, messageId: providerMessageId },
+        },
+        create: {
           userId,
           conversationId: convo.id,
           messageId: providerMessageId,
@@ -479,6 +502,14 @@ function createCrmRouter({ io }) {
           source: "manual",
           timestamp: now,
           raw: messageRaw,
+        },
+        update: {
+          body: content.body || "",
+          type: content.mediaType === "none" ? "text" : content.mediaType,
+          mediaMime: storedMime,
+          status: resp?._crmStatus || "sent",
+          source: "manual",
+          raw: messageRaw ?? undefined,
         },
       })
 

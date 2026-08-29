@@ -151,8 +151,14 @@ async function processOneDelivery(deps, delivery) {
       data: { status: "sent", sentAt: now, providerMessageId },
     })
 
-    const message = await prisma.crmMessage.create({
-      data: {
+    const message = await prisma.crmMessage.upsert({
+      where: {
+        conversationId_messageId: {
+          conversationId: conversation.id,
+          messageId: providerMessageId,
+        },
+      },
+      create: {
         userId: delivery.userId,
         conversationId: conversation.id,
         messageId: providerMessageId,
@@ -173,6 +179,23 @@ async function processOneDelivery(deps, delivery) {
               mediaName: delivery.mediaName,
             })
           : null,
+      },
+      update: {
+        body: delivery.body || "",
+        type: msgType,
+        mediaMime: storedMime,
+        status: crmStatus || "sent",
+        source: delivery.kind,
+        raw: hasMedia
+          ? buildOutboundMessageRaw({
+              providerMessageId,
+              remoteJid: delivery.remoteJid,
+              evolutionResp: resp,
+              mediaBase64: mediaB64,
+              mediaMime: storedMime,
+              mediaName: delivery.mediaName,
+            })
+          : undefined,
       },
     })
 

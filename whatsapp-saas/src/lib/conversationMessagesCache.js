@@ -40,8 +40,14 @@ export function patchCachedConversationMessages(conversationId, patchFn) {
 
 export function appendCachedMessage(conversationId, message) {
   if (!conversationId || !message) return
+  if (!cache.has(conversationId)) {
+    setCachedConversationMessages(conversationId, { messages: [message], hasMore: false })
+    return
+  }
   patchCachedConversationMessages(conversationId, (entry) => {
-    if (entry.messages.some((m) => m.id === message.id)) return entry
+    if (entry.messages.some((m) => m.id === message.id || (message.messageId && m.messageId === message.messageId))) {
+      return entry
+    }
     return { messages: [...entry.messages, message] }
   })
 }

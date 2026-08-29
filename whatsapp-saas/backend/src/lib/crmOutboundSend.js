@@ -12,7 +12,16 @@ const ACK_OK = new Set(["SERVER_ACK", "DELIVERY_ACK", "READ", "PLAYED", "2", "3"
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function extractProviderMessageId(resp) {
-  return resp?.key?.id || resp?.message?.key?.id || resp?.messageId || null
+  if (!resp || typeof resp !== "object") return null
+  return (
+    resp?.key?.id ||
+    resp?.message?.key?.id ||
+    resp?.data?.key?.id ||
+    resp?.response?.key?.id ||
+    resp?.messageId ||
+    resp?.id ||
+    null
+  )
 }
 
 function normalizeEvolutionNumber(raw) {
@@ -152,33 +161,13 @@ function assertEvolutionSendAccepted(resp, context = "envio") {
 }
 
 /**
- * Confirma messageId na Evolution. Poll de ACK é best-effort (não bloqueia inbox).
+ * Confirma messageId na Evolution. ACK é opcional e não bloqueia gravação no CRM.
  * Retorna { messageId, crmStatus }.
  */
 async function confirmEvolutionDelivery(deps, { instanceName, conversation, to, resp, context, mediaType }) {
   const messageId = assertEvolutionSendAccepted(resp, context)
   warnIfMediaMissingCdn(resp, mediaType, context)
-
-  const number = normalizeEvolutionNumber(to)
-  const jids = buildRecipientLookupJids(conversation, number)
-
-  let crmStatus = "sent"
-
-  if (typeof deps?.fetchChatMessages === "function" || typeof deps?.findMessageById === "function") {
-    const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, {
-      timeoutMs: Number(process.env.CRM_DELIVERY_ACK_TIMEOUT_MS || 8000),
-    })
-    if (isAckOk(ack.status)) {
-      crmStatus = mapAckToCrmStatus(ack.status)
-    } else if (ack.status && ack.status !== "TIMEOUT") {
-      crmStatus = "pending"
-      console.warn(
-        `[crm-outbound] ACK pendente messageId=${messageId} status=${ack.status} (mensagem gravada no CRM)`,
-      )
-    }
-  }
-
-  return { messageId, crmStatus }
+  return { messageId, crmStatus: "sent" }
 }
 
 function assertOutboundRecipient(conversation) {

@@ -3948,7 +3948,7 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null) {
   const { conversation, message, created } = result
 
   // Emitir ANTES do enriquecimento de perfil — falha de perfil não pode atrasar a inbox.
-  if (created) {
+  if (created || message.fromMe) {
     emitCrmEvent(io, userId, "crm:message", {
       conversationId: conversation.id,
       message: formatCrmMessageRow(message),

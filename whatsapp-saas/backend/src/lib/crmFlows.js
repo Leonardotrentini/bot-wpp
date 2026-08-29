@@ -17,6 +17,7 @@
 
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
+const { processPendingCrmDeliveries } = require("./crmDelivery")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
 const { resolveActionDelayMs } = require("./flowActionDelay")
@@ -395,6 +396,9 @@ async function runFlow(deps, flow, conversation, reason) {
   if (!(await conditionsPass(prisma, flow, conversation))) return false
 
   const detail = await executeActions(deps, flow, conversation)
+  await processPendingCrmDeliveries(deps).catch((err) =>
+    console.error("[crm-flow] processPendingCrmDeliveries:", err?.message || err),
+  )
   await prisma.crmFlowRun.create({
     data: {
       userId: conversation.userId,
