@@ -71,6 +71,11 @@ function extractSendResponseAck(resp) {
   return resp.status ?? resp.message?.status ?? resp.key?.status ?? null
 }
 
+function isAckFailure(status) {
+  const s = String(status ?? "").toUpperCase()
+  return s.includes("ERROR") || s.includes("FAIL")
+}
+
 function isAckOk(status) {
   const s = String(status ?? "").toUpperCase()
   if (!s || s === "PENDING" || s === "ERROR" || s === "0") return false
@@ -215,6 +220,11 @@ async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, m
   }
 
   const ack = await waitForOutboundAck(deps, instanceName, jids, messageId, { hasMedia })
+  if (isAckFailure(ack.status)) {
+    const detail = `status ${ack.status}`
+    console.warn(`[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} → ${detail}`)
+    return { crmStatus: "failed", ackOk: false, detail }
+  }
   if (isAckOk(ack.status)) {
     return {
       crmStatus: mapAckToCrmStatus(ack.status),
@@ -231,14 +241,11 @@ async function pollOutboundDeliveryAck(deps, { instanceName, conversation, to, m
     return { crmStatus: "sent", ackOk: true, detail: "confirmada no histórico" }
   }
 
-  const detail =
-    ack.status === "TIMEOUT"
-      ? "WhatsApp não confirmou a entrega a tempo"
-      : ack.status === "PENDING"
-        ? "mensagem presa em PENDING"
-        : `status ${ack.status || "desconhecido"}`
-  console.warn(`[crm-outbound] ACK falhou messageId=${messageId} dest=${number || to} → ${detail}`)
-  return { crmStatus: "failed", ackOk: false, detail }
+  // Evolution devolveu messageId válido — envio aceito; poll não achou ACK a tempo.
+  console.warn(
+    `[crm-outbound] ACK pendente messageId=${messageId} dest=${number || to} — marcando sent (webhook atualiza)`,
+  )
+  return { crmStatus: "sent", ackOk: true, detail: "ack pendente" }
 }
 
 async function confirmEvolutionDelivery(deps, params) {

@@ -4217,18 +4217,20 @@ async function updateOutboundAckFromWebhook(instanceName, body) {
     if (statusRaw.includes("READ") || statusRaw === "4") status = "lido"
     else if (statusRaw.includes("DELIVERY") || statusRaw === "3") status = "entregue"
     else if (statusRaw.includes("ERROR") || statusRaw.includes("FAIL")) status = "falhou"
-    if (!status) continue
-    // Não rebaixa um status já mais avançado (lido > entregue > enviado)
-    const rank = { enviado: 1, entregue: 2, lido: 3, falhou: 1 }
-    const current = await prisma.outboundMessage.findFirst({
-      where: { userId: conn.userId, providerMessageId: messageId },
-      select: { id: true, status: true },
-    })
-    if (current) {
-      if ((rank[status] || 0) <= (rank[current.status] || 0) && status !== "falhou") {
-        /* mantém outboundMessage */
-      } else {
-        await prisma.outboundMessage.update({ where: { id: current.id }, data: { status } }).catch(() => {})
+    else if (statusRaw.includes("SERVER") || statusRaw === "2") status = "enviado"
+    if (status) {
+      // Não rebaixa um status já mais avançado (lido > entregue > enviado)
+      const rank = { enviado: 1, entregue: 2, lido: 3, falhou: 1 }
+      const current = await prisma.outboundMessage.findFirst({
+        where: { userId: conn.userId, providerMessageId: messageId },
+        select: { id: true, status: true },
+      })
+      if (current) {
+        if ((rank[status] || 0) <= (rank[current.status] || 0) && status !== "falhou") {
+          /* mantém outboundMessage */
+        } else {
+          await prisma.outboundMessage.update({ where: { id: current.id }, data: { status } }).catch(() => {})
+        }
       }
     }
     await applyCrmMessageAck(prisma, io, {
