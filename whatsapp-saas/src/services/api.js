@@ -961,8 +961,28 @@ export async function deleteCrmContact(id) {
 }
 
 export async function bulkDeleteCrmContacts(contactIds) {
-  if (resolveUseRealApi()) return apiClient.post('/crm/contacts/bulk-delete', { contactIds })
-  return mockResponse({ ok: true, deleted: contactIds.length, deletedIds: contactIds, notFound: [], forbidden: [] })
+  const ids = [...new Set((contactIds || []).map(String).filter(Boolean))]
+  if (!ids.length) {
+    return { data: { ok: true, deleted: 0, deletedIds: [], notFound: [], forbidden: [] } }
+  }
+  if (!resolveUseRealApi()) {
+    return mockResponse({ ok: true, deleted: ids.length, deletedIds: ids, notFound: [], forbidden: [] })
+  }
+
+  const CHUNK = 500
+  const aggregated = { ok: true, deleted: 0, deletedIds: [], notFound: [], forbidden: [] }
+
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK)
+    const res = await apiClient.post('/crm/contacts/bulk-delete', { contactIds: chunk })
+    const data = res.data || {}
+    aggregated.deleted += data.deleted ?? 0
+    aggregated.deletedIds.push(...(data.deletedIds || []))
+    aggregated.notFound.push(...(data.notFound || []))
+    aggregated.forbidden.push(...(data.forbidden || []))
+  }
+
+  return { data: aggregated }
 }
 
 export async function addCrmContactTag(contactId, tagId) {

@@ -648,11 +648,11 @@ function createCrmRouter({ io }) {
 
   router.post("/contacts/bulk-delete", async (req, res) => {
     const schema = z.object({
-      contactIds: z.array(z.string().min(1)).min(1).max(100),
+      contactIds: z.array(z.string().min(1)).min(1).max(500),
     })
     const parsed = schema.safeParse(req.body || {})
     if (!parsed.success) {
-      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe entre 1 e 100 leads." })
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe entre 1 e 500 leads por requisição." })
     }
 
     const scoped = []
