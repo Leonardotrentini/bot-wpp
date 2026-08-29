@@ -7,7 +7,7 @@ const { emitCrmEvent, formatMessageRow, formatConversationRow, previewFromBody, 
 const { buildOutboundMessageRaw, stripMediaBase64 } = require("./crmMedia")
 const { ensureWhatsAppConnected } = require("./whatsappConnection")
 const {
-  assertEvolutionSendAccepted,
+  confirmEvolutionDelivery,
   assertOutboundRecipient,
   validateOutboundMediaPayload,
 } = require("./crmOutboundSend")
@@ -129,7 +129,13 @@ async function processOneDelivery(deps, delivery) {
       resp = await sendText(conn.instanceName, to, delivery.body || "")
     }
 
-    const providerMessageId = assertEvolutionSendAccepted(resp, hasMedia ? `mídia (${mediaType})` : "texto")
+    const providerMessageId = await confirmEvolutionDelivery(deps, {
+      instanceName: conn.instanceName,
+      conversation,
+      to,
+      resp,
+      context: hasMedia ? `mídia (${mediaType})` : "texto",
+    })
     const now = new Date()
     const msgType = hasMedia ? mediaType : "text"
     const mediaB64 = hasMedia ? stripMediaBase64(delivery.mediaBase64) : null

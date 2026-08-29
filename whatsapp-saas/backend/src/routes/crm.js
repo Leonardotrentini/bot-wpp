@@ -66,7 +66,7 @@ const { trackMetaForContactTag } = require("../lib/metaConversions")
 const { reassignContactToSeller } = require("../lib/crmReassign")
 const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("../lib/crmContactMerge")
 const { deleteScopedContact, deleteScopedContacts, emitContactDeleted } = require("../lib/crmContactDelete")
-const { assertEvolutionSendAccepted, assertOutboundRecipient } = require("../lib/crmOutboundSend")
+const { confirmEvolutionDelivery, assertOutboundRecipient, extractProviderMessageId } = require("../lib/crmOutboundSend")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -411,32 +411,41 @@ function createCrmRouter({ io }) {
     try {
       const resp = await enqueueUserSend(userId, async () => {
         const to = assertOutboundRecipient(convo)
+        let sendResp
         if (content.mediaType === "audio") {
           const media = stripMediaBase64(content.mediaBase64)
           const mimetype = content.mediaMime || "audio/ogg; codecs=opus"
-          return sendWhatsAppAudio(conn.instanceName, to, {
+          sendResp = await sendWhatsAppAudio(conn.instanceName, to, {
             audio: media,
             mimetype,
             encoding: true,
           })
-        }
-        if (content.mediaType !== "none") {
+        } else if (content.mediaType !== "none") {
           const media = stripMediaBase64(content.mediaBase64)
-          return sendMedia(conn.instanceName, to, {
+          sendResp = await sendMedia(conn.instanceName, to, {
             mediatype: content.mediaType,
             media,
             mimetype: content.mediaMime || undefined,
             caption: content.body || undefined,
             fileName: content.mediaName || undefined,
           })
+        } else {
+          sendResp = await sendText(conn.instanceName, to, content.body)
         }
-        return sendText(conn.instanceName, to, content.body)
+        const messageId = await confirmEvolutionDelivery(
+          { fetchChatMessages },
+          {
+            instanceName: conn.instanceName,
+            conversation: convo,
+            to,
+            resp: sendResp,
+            context: content.mediaType !== "none" ? `mídia (${content.mediaType})` : "texto",
+          },
+        )
+        return { ...sendResp, key: { ...(sendResp?.key || {}), id: messageId } }
       })
 
-      const providerMessageId = assertEvolutionSendAccepted(
-        resp,
-        content.mediaType !== "none" ? `mídia (${content.mediaType})` : "texto",
-      )
+      const providerMessageId = resp?.key?.id || extractProviderMessageId(resp)
       const now = new Date()
       const hasMedia = content.mediaType !== "none"
       const mediaB64 = hasMedia ? stripMediaBase64(content.mediaBase64) : null
@@ -1706,7 +1715,7 @@ function createCrmRouter({ io }) {
     })
   })
 
-  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence }
+  const flowTestDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, fetchChatMessages }
 
   router.post("/flows/:id/test", async (req, res) => {
     const conversationId = String(req.body?.conversationId || "").trim()

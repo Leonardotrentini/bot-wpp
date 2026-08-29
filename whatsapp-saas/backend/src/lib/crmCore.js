@@ -27,12 +27,16 @@ function isLidJid(jid) {
   return /@lid$/i.test(String(jid || "").trim())
 }
 
-/** Destino para a Evolution: @lid sem telefone falha em mídia; preferir o número do contato. */
+/** Destino para a Evolution: preferir telefone E.164; @lid sem número falha em mídia. */
 function resolveEvolutionRecipient(conversation) {
   const jid = String(conversation?.remoteJid || "").trim()
+  const phone = resolvePhoneDigits(conversation?.contact) || phoneDigitsFromValue(conversation?.contact?.phone)
+  if (phone && String(phone).replace(/\D/g, "").length >= 8) {
+    return String(phone).replace(/\D/g, "")
+  }
   if (isLidJid(jid)) {
-    const phone = resolvePhoneDigits(conversation?.contact) || phoneDigitsFromValue(conversation?.contact?.phone)
-    if (phone) return phone
+    const fromLid = jid.split("@")[0].replace(/\D/g, "")
+    if (fromLid.length >= 8) return fromLid
   }
   return jid
 }
