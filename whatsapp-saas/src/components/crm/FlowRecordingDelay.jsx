@@ -26,8 +26,8 @@ export function FlowRecordingDelay({ action, onChange }) {
       </div>
       <p className="mt-1.5 text-[11px] leading-relaxed text-stone-500">
         {seconds > 0
-          ? `O contato verá “gravando áudio…” por ~${seconds}s (renovado a cada 2–3s). Se o áudio for mais longo, estendemos até a duração real (máx. 45s).`
-          : 'Deixe 0 para calcular automaticamente pela duração do áudio (3–45s).'}
+          ? `O contato verá “gravando áudio…” por ~${seconds}s (renovado a cada 2–3s). Valor fixo — não estendemos pela duração do áudio.`
+          : 'Deixe 0 para calcular automaticamente pela duração do áudio (3–20s).'}
       </p>
     </div>
   )

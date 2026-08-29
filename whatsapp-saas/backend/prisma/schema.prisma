@@ -583,6 +583,8 @@ model CrmDelivery {
   error             String?
   /// Tempo de "gravando áudio…" (ms) antes do envio de nota de voz.
   presenceDelayMs   Int       @default(0)
+  /// Aguardar N ms após a entrega anterior na mesma conversa (fila do fluxo).
+  delayAfterPreviousMs Int    @default(0)
   scheduledAt       DateTime  @default(now())
   sentAt            DateTime?
   providerMessageId String?

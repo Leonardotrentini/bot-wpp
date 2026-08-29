@@ -65,6 +65,23 @@ async function resolveAudioPresenceMs(delivery, mediaBase64, mediaMime) {
   return fromAction > 0 ? fromAction : configured
 }
 
+async function activateNextDelivery(prisma, completedRow) {
+  const next = await prisma.crmDelivery.findFirst({
+    where: {
+      conversationId: completedRow.conversationId,
+      status: "pending",
+      createdAt: { gt: completedRow.createdAt },
+    },
+    orderBy: { createdAt: "asc" },
+  })
+  if (!next) return
+  const delayMs = Number(next.delayAfterPreviousMs) || 0
+  await prisma.crmDelivery.update({
+    where: { id: next.id },
+    data: { scheduledAt: new Date(Date.now() + delayMs) },
+  })
+}
+
 async function recoverStaleSendingDeliveries(prisma) {
   const cutoff = new Date(Date.now() - CRM_DELIVERY_STALE_MS)
   const { count } = await prisma.crmDelivery.updateMany({
@@ -255,6 +272,8 @@ async function processOneDelivery(deps, delivery) {
       status: ack.crmStatus,
       message: formatMessageRow(message),
     })
+
+    await activateNextDelivery(prisma, delivery)
   } catch (err) {
     const errMsg = String(err?.message || "Falha no envio.")
     console.error(`[crm-delivery] envio falhou (${delivery.id}):`, errMsg)
@@ -268,6 +287,7 @@ async function processOneDelivery(deps, delivery) {
       kind: delivery.kind,
       error: errMsg,
     })
+    await activateNextDelivery(prisma, delivery)
   }
 }
 
@@ -291,6 +311,15 @@ async function pickEligibleDeliveries(prisma, limit) {
   for (const row of candidates) {
     if (blocked.has(row.conversationId)) continue
     if (pickedConversations.has(row.conversationId)) continue
+    const olderPending = await prisma.crmDelivery.findFirst({
+      where: {
+        conversationId: row.conversationId,
+        status: "pending",
+        createdAt: { lt: row.createdAt },
+      },
+      select: { id: true },
+    })
+    if (olderPending) continue
     picked.push(row)
     pickedConversations.add(row.conversationId)
     if (picked.length >= limit) break

@@ -2,7 +2,7 @@
 
 const MAX_RECORDING_DELAY_SECONDS = 120
 const AUTO_RECORDING_MIN_SEC = 3
-const AUTO_RECORDING_MAX_SEC = 45
+const AUTO_RECORDING_MAX_SEC = 20
 
 function resolveRecordingDelayMs(action, options = {}) {
   if (!action || action.mediaType !== "audio") return 0
@@ -15,9 +15,6 @@ function resolveRecordingDelayMs(action, options = {}) {
     } else {
       return 0
     }
-  } else if (Number.isFinite(audioSec) && audioSec > v) {
-    // Credibilidade: gravando pelo menos até perto da duração real (teto 45s).
-    v = Math.min(MAX_RECORDING_DELAY_SECONDS, Math.max(v, Math.min(Math.ceil(audioSec), AUTO_RECORDING_MAX_SEC)))
   }
 
   return Math.min(v, MAX_RECORDING_DELAY_SECONDS) * 1000

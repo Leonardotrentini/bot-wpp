@@ -20,6 +20,8 @@ const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require(".
 const { processPendingCrmDeliveries } = require("./crmDelivery")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
+/** Pausa entre nota de voz e texto de continuação na mesma ação. */
+const TEXT_AFTER_AUDIO_MS = Number(process.env.CRM_TEXT_AFTER_AUDIO_MS || 2000)
 const { resolveActionDelayMs } = require("./flowActionDelay")
 const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
 
@@ -179,13 +181,19 @@ async function executeActions(deps, flow, conversation, options = {}) {
   const newlyAddedTagIds = []
   let tagsMutated = false
   let cumulativeDelayMs = 0
+  let deliveryQueued = false
 
-  async function queueMessageDelivery({ body, mediaType, mediaBase64, mediaMime, mediaName, presenceDelayMs }, offsetMs) {
+  async function queueMessageDelivery(
+    { body, mediaType, mediaBase64, mediaMime, mediaName, presenceDelayMs },
+    { delayAfterPreviousMs = 0 } = {},
+  ) {
     const mt = mediaType && mediaType !== "none" ? String(mediaType) : "none"
     const hasMedia = ["image", "video", "audio", "document"].includes(mt)
     const text = String(body || "").trim()
     if (!text && !hasMedia) return
 
+    const chainDelayMs = deliveryQueued ? Math.max(0, Number(delayAfterPreviousMs) || 0) : 0
+    deliveryQueued = true
     const jitter = immediate ? 0 : deliveryDelayMs()
     await prisma.crmDelivery.create({
       data: {
@@ -200,12 +208,13 @@ async function executeActions(deps, flow, conversation, options = {}) {
         mediaMime: hasMedia ? mediaMime || null : null,
         mediaName: hasMedia ? mediaName || null : null,
         presenceDelayMs: mt === "audio" ? Number(presenceDelayMs) || 0 : 0,
-        scheduledAt: new Date(Date.now() + offsetMs + jitter),
+        delayAfterPreviousMs: chainDelayMs,
+        scheduledAt: new Date(Date.now() + (chainDelayMs > 0 ? 86400000 : jitter)),
       },
     })
   }
 
-  async function runOneAction(action, offsetMs) {
+  async function runOneAction(action, stepDelayMs) {
     const type = String(action?.type || "")
     try {
       if (type === "send_message") {
@@ -227,9 +236,9 @@ async function executeActions(deps, flow, conversation, options = {}) {
               mediaName: action.mediaName,
               presenceDelayMs,
             },
-            offsetMs,
+            { delayAfterPreviousMs: stepDelayMs },
           )
-          await queueMessageDelivery({ body, mediaType: "none" }, offsetMs)
+          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: TEXT_AFTER_AUDIO_MS })
           detail.push("send_message:audio+text")
           return
         }
@@ -250,9 +259,9 @@ async function executeActions(deps, flow, conversation, options = {}) {
               mediaName: action.mediaName,
               presenceDelayMs: 0,
             },
-            offsetMs,
+            { delayAfterPreviousMs: stepDelayMs },
           )
-          await queueMessageDelivery({ body, mediaType: "none" }, offsetMs)
+          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: 1500 })
           detail.push(`send_message:${mediaType}+text`)
           return
         }
@@ -266,7 +275,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
             mediaName: action.mediaName,
             presenceDelayMs,
           },
-          offsetMs,
+          { delayAfterPreviousMs: stepDelayMs },
         )
         detail.push(hasMedia ? `send_message:${mediaType}` : "send_message")
       } else if (type === "add_tag" && action.tagId) {
@@ -343,7 +352,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
       continue
     }
 
-    await runOneAction(action, cumulativeDelayMs)
+    await runOneAction(action, stepDelayMs)
   }
 
   if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
