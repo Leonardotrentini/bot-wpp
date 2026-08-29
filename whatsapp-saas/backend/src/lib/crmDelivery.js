@@ -22,9 +22,22 @@ const CRM_DELIVERY_STALE_MS = Number(process.env.CRM_DELIVERY_STALE_MS || 5 * 60
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 let busy = false
 
-/** WhatsApp só mantém “gravando…” ~3s por pacote — renovar a cada pulso. */
-const PRESENCE_PULSE_MS = Number(process.env.CRM_PRESENCE_PULSE_MS || 2500)
+/** WhatsApp expira “gravando…” ~3s — renovar antes (1,8s). */
+const PRESENCE_PULSE_MS = Number(process.env.CRM_PRESENCE_PULSE_MS || 1800)
+const PRESENCE_PULSE_DELAY_MS = Number(process.env.CRM_PRESENCE_PULSE_DELAY_MS || 2200)
 
+async function sendRecordingPulse(deps, instanceName, to, delayMs = PRESENCE_PULSE_DELAY_MS) {
+  if (typeof deps.sendPresence !== "function") return false
+  try {
+    await deps.sendPresence(instanceName, to, { presence: "recording", delayMs })
+    return true
+  } catch (err) {
+    console.warn(`[crm-delivery] presence recording falhou (${delayMs}ms → ${to}):`, err?.message || err)
+    return false
+  }
+}
+
+/** Renova “gravando…” sem gap entre pulsos. */
 async function playRecordingPresence(deps, instanceName, to, totalMs) {
   if (!totalMs || totalMs <= 0) return
   if (typeof deps.sendPresence !== "function") {
@@ -34,16 +47,42 @@ async function playRecordingPresence(deps, instanceName, to, totalMs) {
   }
 
   const started = Date.now()
+  await sendRecordingPulse(deps, instanceName, to)
   while (Date.now() - started < totalMs) {
-    const elapsed = Date.now() - started
-    const remaining = totalMs - elapsed
-    const pulse = Math.max(500, Math.min(remaining, PRESENCE_PULSE_MS))
-    try {
-      await deps.sendPresence(instanceName, to, { presence: "recording", delayMs: pulse })
-    } catch (err) {
-      console.warn(`[crm-delivery] presence recording falhou (${pulse}ms → ${to}):`, err?.message || err)
+    const remaining = totalMs - (Date.now() - started)
+    const sleepMs = Math.min(PRESENCE_PULSE_MS, remaining)
+    if (sleepMs <= 0) break
+    await wait(sleepMs)
+    if (Date.now() - started >= totalMs) break
+    await sendRecordingPulse(deps, instanceName, to, Math.min(PRESENCE_PULSE_DELAY_MS, totalMs - (Date.now() - started)))
+  }
+}
+
+/** Mantém “gravando…” durante trabalho assíncrono (ex.: ffmpeg + envio). */
+async function withRecordingPresence(deps, instanceName, to, minPresenceMs, workFn) {
+  const minMs = Math.max(0, Number(minPresenceMs) || 0)
+  if (minMs <= 0) return workFn()
+
+  let active = true
+  const started = Date.now()
+
+  const loop = (async () => {
+    while (active) {
+      await sendRecordingPulse(deps, instanceName, to)
+      await wait(PRESENCE_PULSE_MS)
     }
-    await wait(pulse)
+  })()
+
+  try {
+    const result = await workFn()
+    const elapsed = Date.now() - started
+    if (elapsed < minMs) {
+      await wait(minMs - elapsed)
+    }
+    return result
+  } finally {
+    active = false
+    await loop.catch(() => {})
   }
 }
 
@@ -63,6 +102,29 @@ async function resolveAudioPresenceMs(delivery, mediaBase64, mediaMime) {
     { audioDurationSec: audioSec },
   )
   return fromAction > 0 ? fromAction : configured
+}
+
+async function drainReadyDeliveriesForConversation(deps, conversationId) {
+  const maxChain = Number(process.env.CRM_DELIVERY_CHAIN_MAX || 12)
+  for (let i = 0; i < maxChain; i += 1) {
+    const sending = await deps.prisma.crmDelivery.findFirst({
+      where: { conversationId, status: "sending" },
+      select: { id: true },
+    })
+    if (sending) break
+
+    const next = await deps.prisma.crmDelivery.findFirst({
+      where: { conversationId, status: "pending" },
+      orderBy: { createdAt: "asc" },
+    })
+    if (!next) break
+
+    const waitMs = next.scheduledAt.getTime() - Date.now()
+    if (waitMs > 5000) break
+    if (waitMs > 0) await wait(waitMs)
+
+    await processOneDelivery(deps, next, { chain: false })
+  }
 }
 
 async function activateNextDelivery(prisma, completedRow) {
@@ -91,7 +153,7 @@ async function recoverStaleSendingDeliveries(prisma) {
   if (count > 0) console.warn(`[crm-delivery] ${count} envio(s) preso(s) em "sending" — reenfileirados.`)
 }
 
-async function processOneDelivery(deps, delivery) {
+async function processOneDelivery(deps, delivery, options = {}) {
   const { prisma, sendText, sendMedia, sendWhatsAppAudio, sendPresence, io } = deps
 
   const conversation = await prisma.crmConversation.findUnique({
@@ -157,17 +219,24 @@ async function processOneDelivery(deps, delivery) {
       const media = stripMediaBase64(delivery.mediaBase64)
       if (mediaType === "audio") {
         const presenceMs = await resolveAudioPresenceMs(delivery, media, delivery.mediaMime)
-        if (presenceMs > 0) {
-          await playRecordingPresence(deps, conn.instanceName, to, presenceMs)
+        const sendAudio = async () => {
+          if (typeof sendWhatsAppAudio !== "function") {
+            return sendMedia(conn.instanceName, to, {
+              mediatype: "audio",
+              media,
+              mimetype: delivery.mediaMime || "audio/ogg; codecs=opus",
+            })
+          }
+          return sendWhatsAppAudio(conn.instanceName, to, {
+            audio: media,
+            mimetype: delivery.mediaMime || "audio/ogg; codecs=opus",
+            encoding: true,
+          })
         }
-      }
-      if (mediaType === "audio" && typeof sendWhatsAppAudio === "function") {
-        const mimetype = delivery.mediaMime || "audio/ogg; codecs=opus"
-        resp = await sendWhatsAppAudio(conn.instanceName, to, {
-          audio: media,
-          mimetype,
-          encoding: true,
-        })
+        resp =
+          presenceMs > 0
+            ? await withRecordingPresence(deps, conn.instanceName, to, presenceMs, sendAudio)
+            : await sendAudio()
       } else {
         resp = await sendMedia(conn.instanceName, to, {
           mediatype: mediaType,
@@ -295,6 +364,9 @@ async function processOneDelivery(deps, delivery) {
     })
 
     await activateNextDelivery(prisma, delivery)
+    if (options.chain !== false) {
+      await drainReadyDeliveriesForConversation(deps, delivery.conversationId)
+    }
   } catch (err) {
     const errMsg = String(err?.message || "Falha no envio.")
     console.error(`[crm-delivery] envio falhou (${delivery.id}):`, errMsg)
@@ -309,6 +381,9 @@ async function processOneDelivery(deps, delivery) {
       error: errMsg,
     })
     await activateNextDelivery(prisma, delivery)
+    if (options.chain !== false) {
+      await drainReadyDeliveriesForConversation(deps, delivery.conversationId)
+    }
   }
 }
 
@@ -364,4 +439,4 @@ async function processPendingCrmDeliveries(deps) {
   }
 }
 
-module.exports = { processPendingCrmDeliveries, playRecordingPresence }
+module.exports = { processPendingCrmDeliveries, playRecordingPresence, withRecordingPresence }

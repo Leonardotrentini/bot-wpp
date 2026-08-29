@@ -2,7 +2,7 @@
 
 const MAX_RECORDING_DELAY_SECONDS = 120
 const AUTO_RECORDING_MIN_SEC = 3
-const AUTO_RECORDING_MAX_SEC = 20
+const AUTO_RECORDING_MAX_SEC = 45
 
 function resolveRecordingDelayMs(action, options = {}) {
   if (!action || action.mediaType !== "audio") return 0

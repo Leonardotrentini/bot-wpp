@@ -23,7 +23,7 @@ const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200
 /** Pausa entre nota de voz e texto de continuação na mesma ação. */
 const TEXT_AFTER_AUDIO_MS = Number(process.env.CRM_TEXT_AFTER_AUDIO_MS || 2000)
 /** Pausa entre imagem e texto com link na mesma ação. */
-const TEXT_AFTER_IMAGE_MS = Number(process.env.CRM_TEXT_AFTER_IMAGE_MS || 800)
+const TEXT_AFTER_IMAGE_MS = Number(process.env.CRM_TEXT_AFTER_IMAGE_MS || 400)
 const { resolveActionDelayMs } = require("./flowActionDelay")
 const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
 
