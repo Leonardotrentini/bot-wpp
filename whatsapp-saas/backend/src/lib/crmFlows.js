@@ -22,8 +22,6 @@ const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS |
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200)
 /** Pausa entre nota de voz e texto de continuação na mesma ação. */
 const TEXT_AFTER_AUDIO_MS = Number(process.env.CRM_TEXT_AFTER_AUDIO_MS || 2000)
-/** Pausa entre imagem e texto com link na mesma ação. */
-const TEXT_AFTER_IMAGE_MS = Number(process.env.CRM_TEXT_AFTER_IMAGE_MS || 400)
 const { resolveActionDelayMs } = require("./flowActionDelay")
 const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
 
@@ -232,7 +230,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
 
         const presenceDelayMs = resolveRecordingDelayMs(action)
 
-        // Nota de voz: áudio primeiro, texto depois. Imagem/vídeo + link: mídia sem legenda, texto separado.
+        // Nota de voz: áudio primeiro, texto depois (WhatsApp não aceita legenda em PTT).
         if (hasMedia && mediaType === "audio" && body) {
           await queueMessageDelivery(
             {
@@ -247,29 +245,6 @@ async function executeActions(deps, flow, conversation, options = {}) {
           )
           await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: TEXT_AFTER_AUDIO_MS, requiresPreviousSent: true })
           detail.push("send_message:audio+text")
-          return
-        }
-
-        const splitImageText =
-          hasMedia &&
-          (mediaType === "image" || mediaType === "video") &&
-          body &&
-          (body.length > 80 || /https?:\/\//i.test(body))
-
-        if (splitImageText) {
-          await queueMessageDelivery(
-            {
-              body: null,
-              mediaType,
-              mediaBase64: action.mediaBase64,
-              mediaMime: action.mediaMime,
-              mediaName: action.mediaName,
-              presenceDelayMs: 0,
-            },
-            { delayAfterPreviousMs: stepDelayMs },
-          )
-          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: TEXT_AFTER_IMAGE_MS, requiresPreviousSent: true })
-          detail.push(`send_message:${mediaType}+text`)
           return
         }
 
