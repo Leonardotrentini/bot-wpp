@@ -58,50 +58,22 @@ async function playRecordingPresence(deps, instanceName, to, totalMs) {
   }
 }
 
-/** Mantém “gravando…” durante trabalho assíncrono (ex.: ffmpeg + envio). */
-async function withRecordingPresence(deps, instanceName, to, minPresenceMs, workFn) {
-  const minMs = Math.max(0, Number(minPresenceMs) || 0)
-  if (minMs <= 0) return workFn()
-
-  let active = true
-  const started = Date.now()
-
-  const loop = (async () => {
-    while (active) {
-      await sendRecordingPulse(deps, instanceName, to)
-      await wait(PRESENCE_PULSE_MS)
-    }
-  })()
-
-  try {
-    const result = await workFn()
-    const elapsed = Date.now() - started
-    if (elapsed < minMs) {
-      await wait(minMs - elapsed)
-    }
-    return result
-  } finally {
-    active = false
-    await loop.catch(() => {})
-  }
-}
-
 async function resolveAudioPresenceMs(delivery, mediaBase64, mediaMime) {
-  const configured = Number(delivery.presenceDelayMs) || 0
+  let storedMs = Number(delivery.presenceDelayMs) || 0
+  // Compat: valores antigos gravados em segundos (ex.: 43 em vez de 43000).
+  if (storedMs > 0 && storedMs < 1000) storedMs *= 1000
+
+  if (storedMs > 0) {
+    return storedMs
+  }
+
   let audioSec = null
   try {
     audioSec = await probeMediaDurationSeconds({ media: mediaBase64, mimetype: mediaMime })
   } catch {
-    /* segue com configured */
+    /* auto */
   }
-  const fromAction = resolveRecordingDelayMs(
-    {
-      mediaType: "audio",
-      recordingDelayValue: configured > 0 ? Math.round(configured / 1000) : 0,
-    },
-    { audioDurationSec: audioSec },
-  )
-  return fromAction > 0 ? fromAction : configured
+  return resolveRecordingDelayMs({ mediaType: "audio", recordingDelayValue: 0 }, { audioDurationSec: audioSec })
 }
 
 async function drainReadyDeliveriesForConversation(deps, conversationId) {
@@ -219,24 +191,23 @@ async function processOneDelivery(deps, delivery, options = {}) {
       const media = stripMediaBase64(delivery.mediaBase64)
       if (mediaType === "audio") {
         const presenceMs = await resolveAudioPresenceMs(delivery, media, delivery.mediaMime)
-        const sendAudio = async () => {
-          if (typeof sendWhatsAppAudio !== "function") {
-            return sendMedia(conn.instanceName, to, {
-              mediatype: "audio",
-              media,
-              mimetype: delivery.mediaMime || "audio/ogg; codecs=opus",
-            })
-          }
-          return sendWhatsAppAudio(conn.instanceName, to, {
+        if (presenceMs > 0) {
+          console.log(`[crm-delivery] gravando ${Math.round(presenceMs / 1000)}s antes do áudio (${delivery.id})`)
+          await playRecordingPresence(deps, conn.instanceName, to, presenceMs)
+        }
+        if (typeof sendWhatsAppAudio === "function") {
+          resp = await sendWhatsAppAudio(conn.instanceName, to, {
             audio: media,
             mimetype: delivery.mediaMime || "audio/ogg; codecs=opus",
             encoding: true,
           })
+        } else {
+          resp = await sendMedia(conn.instanceName, to, {
+            mediatype: "audio",
+            media,
+            mimetype: delivery.mediaMime || "audio/ogg; codecs=opus",
+          })
         }
-        resp =
-          presenceMs > 0
-            ? await withRecordingPresence(deps, conn.instanceName, to, presenceMs, sendAudio)
-            : await sendAudio()
       } else {
         resp = await sendMedia(conn.instanceName, to, {
           mediatype: mediaType,
@@ -439,4 +410,4 @@ async function processPendingCrmDeliveries(deps) {
   }
 }
 
-module.exports = { processPendingCrmDeliveries, playRecordingPresence, withRecordingPresence }
+module.exports = { processPendingCrmDeliveries, playRecordingPresence }

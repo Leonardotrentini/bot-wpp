@@ -23,7 +23,7 @@ const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200
 /** Pausa entre nota de voz e texto de continuação na mesma ação. */
 const TEXT_AFTER_AUDIO_MS = Number(process.env.CRM_TEXT_AFTER_AUDIO_MS || 2000)
 const { resolveActionDelayMs } = require("./flowActionDelay")
-const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
+const { resolveRecordingDelayMs, MAX_RECORDING_DELAY_SECONDS } = require("./flowRecordingDelay")
 
 function resolveNoReplyMinutes(trigger) {
   if (!trigger) return 24 * 60
@@ -172,6 +172,14 @@ function deliveryDelayMs() {
   return CRM_DELIVERY_MIN_DELAY_MS + Math.floor(Math.random() * CRM_DELIVERY_JITTER_MS)
 }
 
+function recordingDelayMsForAction(action) {
+  const sec = Number(action.recordingDelayValue)
+  if (Number.isFinite(sec) && sec > 0) {
+    return Math.min(sec, MAX_RECORDING_DELAY_SECONDS) * 1000
+  }
+  return resolveRecordingDelayMs(action)
+}
+
 async function executeActions(deps, flow, conversation, options = {}) {
   const { prisma, io, sendText } = deps
   const immediate = options.immediate === true
@@ -228,7 +236,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
         const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
         if (!body && !hasMedia) return
 
-        const presenceDelayMs = resolveRecordingDelayMs(action)
+        const presenceDelayMs = recordingDelayMsForAction(action)
 
         // Nota de voz: áudio primeiro, texto depois (WhatsApp não aceita legenda em PTT).
         if (hasMedia && mediaType === "audio" && body) {
