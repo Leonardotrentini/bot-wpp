@@ -118,6 +118,27 @@ async function processOneDelivery(deps, delivery) {
   await prisma.crmDelivery.update({ where: { id: delivery.id }, data: { status: "sending" } })
 
   try {
+    if (delivery.requiresPreviousSent) {
+      const prev = await prisma.crmDelivery.findFirst({
+        where: {
+          conversationId: delivery.conversationId,
+          createdAt: { lt: delivery.createdAt },
+        },
+        orderBy: { createdAt: "desc" },
+      })
+      if (prev && prev.status !== "sent") {
+        await prisma.crmDelivery.update({
+          where: { id: delivery.id },
+          data: {
+            status: "cancelled",
+            error: prev.status === "failed" ? "Mídia anterior falhou." : "Aguardando mídia anterior.",
+          },
+        })
+        if (prev.status === "failed") await activateNextDelivery(prisma, delivery)
+        return
+      }
+    }
+
     const to = assertOutboundRecipient(conversation)
     const mediaType = delivery.mediaType && delivery.mediaType !== "none" ? delivery.mediaType : "none"
     const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)

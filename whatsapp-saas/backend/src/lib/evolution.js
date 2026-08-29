@@ -484,6 +484,12 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
     mediaPayload = prepared.base64
     mime = prepared.mimetype || WHATSAPP_VIDEO_MIME
     name = prepared.fileName
+  } else if (mediatype === "image") {
+    const { prepareWhatsAppImage, WHATSAPP_IMAGE_MIME } = require("./whatsappAudio")
+    const prepared = prepareWhatsAppImage({ media, mimetype, fileName })
+    mediaPayload = prepared.base64
+    mime = prepared.mimetype || WHATSAPP_IMAGE_MIME
+    name = prepared.fileName
   }
   const body = { number, mediatype, media: mediaPayload, ...rest }
   if (mime) body.mimetype = mime

@@ -102,22 +102,33 @@ function mapAckToCrmStatus(ackStatus) {
 
 function mediaPartFromResponse(resp, mediaType) {
   const mt = String(mediaType || "").toLowerCase()
-  const msg = resp?.message || {}
-  if (mt === "image") return msg.imageMessage
-  if (mt === "video") return msg.videoMessage
-  if (mt === "audio") return msg.audioMessage
-  if (mt === "document") return msg.documentMessage
+  const messages = [resp?.message, resp?.message?.message, resp?.data?.message].filter(Boolean)
+  for (const msg of messages) {
+    if (mt === "image") return msg.imageMessage || null
+    if (mt === "video") return msg.videoMessage || null
+    if (mt === "audio") return msg.audioMessage || msg.pttMessage || null
+    if (mt === "document") return msg.documentMessage || null
+  }
   return null
 }
 
 function assertMediaUploaded(resp, mediaType, context = "mídia") {
   const mt = String(mediaType || "").toLowerCase()
   if (!["image", "video", "document"].includes(mt)) return
-  const part = mediaPartFromResponse(resp, mt)
+  const part = mediaPartFromResponse(resp, mediaType)
+  const messageId = extractProviderMessageId(resp)
   if (!part) {
+    if (mt === "image" && messageId) {
+      console.warn(`[crm-outbound] ${context}: imageMessage ausente — confiando no messageId ${messageId}`)
+      return
+    }
     throw new Error(`${context}: resposta sem payload de ${mt}.`)
   }
-  if (!part.directPath && !part.url) {
+  if (!part.directPath && !part.url && !part.mediaKey) {
+    if (mt === "image" && messageId) {
+      console.warn(`[crm-outbound] ${context}: imagem sem CDN na resposta — confiando no messageId ${messageId}`)
+      return
+    }
     throw new Error(`${context}: mídia não subiu ao WhatsApp (sem CDN).`)
   }
 }

@@ -18,10 +18,12 @@
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
 const { processPendingCrmDeliveries } = require("./crmDelivery")
-const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 3000)
-const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 5000)
+const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 800)
+const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200)
 /** Pausa entre nota de voz e texto de continuação na mesma ação. */
 const TEXT_AFTER_AUDIO_MS = Number(process.env.CRM_TEXT_AFTER_AUDIO_MS || 2000)
+/** Pausa entre imagem e texto com link na mesma ação. */
+const TEXT_AFTER_IMAGE_MS = Number(process.env.CRM_TEXT_AFTER_IMAGE_MS || 800)
 const { resolveActionDelayMs } = require("./flowActionDelay")
 const { resolveRecordingDelayMs } = require("./flowRecordingDelay")
 
@@ -185,12 +187,16 @@ async function executeActions(deps, flow, conversation, options = {}) {
 
   async function queueMessageDelivery(
     { body, mediaType, mediaBase64, mediaMime, mediaName, presenceDelayMs },
-    { delayAfterPreviousMs = 0 } = {},
+    { delayAfterPreviousMs = 0, requiresPreviousSent = false } = {},
   ) {
     const mt = mediaType && mediaType !== "none" ? String(mediaType) : "none"
     const hasMedia = ["image", "video", "audio", "document"].includes(mt)
     const text = String(body || "").trim()
     if (!text && !hasMedia) return
+    if (hasMedia && !String(mediaBase64 || "").trim()) {
+      console.error(`[crm-flow] mídia ausente (${mt}) no fluxo ${flow.id || "?"} — ação ignorada`)
+      return
+    }
 
     const chainDelayMs = deliveryQueued ? Math.max(0, Number(delayAfterPreviousMs) || 0) : 0
     deliveryQueued = true
@@ -209,6 +215,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
         mediaName: hasMedia ? mediaName || null : null,
         presenceDelayMs: mt === "audio" ? Number(presenceDelayMs) || 0 : 0,
         delayAfterPreviousMs: chainDelayMs,
+        requiresPreviousSent: Boolean(requiresPreviousSent),
         scheduledAt: new Date(Date.now() + (chainDelayMs > 0 ? 86400000 : jitter)),
       },
     })
@@ -238,7 +245,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
             },
             { delayAfterPreviousMs: stepDelayMs },
           )
-          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: TEXT_AFTER_AUDIO_MS })
+          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: TEXT_AFTER_AUDIO_MS, requiresPreviousSent: true })
           detail.push("send_message:audio+text")
           return
         }
@@ -261,7 +268,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
             },
             { delayAfterPreviousMs: stepDelayMs },
           )
-          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: 1500 })
+          await queueMessageDelivery({ body, mediaType: "none" }, { delayAfterPreviousMs: TEXT_AFTER_IMAGE_MS, requiresPreviousSent: true })
           detail.push(`send_message:${mediaType}+text`)
           return
         }

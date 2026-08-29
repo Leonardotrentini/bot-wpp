@@ -105,6 +105,9 @@ export async function attachQuickReplyMediaFromFile(file) {
   let mime = file.type || 'application/octet-stream'
   if (kind === 'video') mime = 'video/mp4'
   if (kind === 'document') mime = 'application/pdf'
+  if (kind === 'image' && (/\.jfif$/i.test(file.name || '') || mime.includes('jfif'))) {
+    mime = 'image/jpeg'
+  }
 
   return {
     patch: {

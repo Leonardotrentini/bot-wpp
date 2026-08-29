@@ -585,6 +585,8 @@ model CrmDelivery {
   presenceDelayMs   Int       @default(0)
   /// Aguardar N ms após a entrega anterior na mesma conversa (fila do fluxo).
   delayAfterPreviousMs Int    @default(0)
+  /// Só envia se a entrega imediatamente anterior foi concluída com sucesso.
+  requiresPreviousSent Boolean @default(false)
   scheduledAt       DateTime  @default(now())
   sentAt            DateTime?
   providerMessageId String?

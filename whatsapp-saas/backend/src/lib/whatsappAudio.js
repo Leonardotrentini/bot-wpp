@@ -10,6 +10,7 @@ const { spawn } = require("child_process")
 
 const WHATSAPP_PTT_MIME = "audio/ogg; codecs=opus"
 const WHATSAPP_VIDEO_MIME = "video/mp4"
+const WHATSAPP_IMAGE_MIME = "image/jpeg"
 const VIDEO_TRANSCODE_MAX_BYTES = Number(process.env.WHATSAPP_VIDEO_TRANSCODE_MAX_BYTES || 40 * 1024 * 1024)
 
 function resolveFfmpegPath() {
@@ -244,6 +245,30 @@ async function prepareWhatsAppVideo({ media, mimetype, fileName } = {}) {
   }
 }
 
+/**
+ * Normaliza JPEG/JFIF para mime/nome aceitos pelo WhatsApp.
+ */
+function prepareWhatsAppImage({ media, mimetype, fileName } = {}) {
+  const rawB64 = stripDataUrl(media)
+  if (!rawB64) {
+    const err = new Error("Imagem vazia.")
+    err.code = "IMAGE_EMPTY"
+    throw err
+  }
+  const mime = String(mimetype || "").toLowerCase()
+  const name = String(fileName || "")
+  const isJpeg =
+    mime.includes("jpeg") ||
+    mime.includes("jpg") ||
+    mime.includes("jfif") ||
+    mime.includes("pjpeg") ||
+    /\.(jpe?g|jfif)$/i.test(name)
+  const outMime = isJpeg ? WHATSAPP_IMAGE_MIME : mimetype || WHATSAPP_IMAGE_MIME
+  const base = name.replace(/\.[^.]+$/, "") || "image"
+  const outName = isJpeg || !/\.[a-z0-9]+$/i.test(name) ? `${base}.jpg` : name
+  return { base64: rawB64, mimetype: outMime, fileName: outName }
+}
+
 /** Estima duração do áudio (segundos) via ffmpeg — usado para simular “gravando…”. */
 async function probeMediaDurationSeconds({ media, mimetype } = {}) {
   const rawB64 = stripDataUrl(media)
@@ -307,8 +332,10 @@ function assertWhatsAppAudioAccepted(resp) {
 module.exports = {
   WHATSAPP_PTT_MIME,
   WHATSAPP_VIDEO_MIME,
+  WHATSAPP_IMAGE_MIME,
   prepareWhatsAppPttAudio,
   prepareWhatsAppVideo,
+  prepareWhatsAppImage,
   assertWhatsAppAudioAccepted,
   probeMediaDurationSeconds,
   looksLikeOggOpus,
