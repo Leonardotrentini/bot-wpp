@@ -421,4 +421,39 @@ async function processPendingCrmDeliveries(deps) {
   }
 }
 
-module.exports = { processPendingCrmDeliveries, playRecordingPresence }
+/** Aguarda e processa entregas pendentes (teste manual / retry). */
+async function flushCrmDeliveries(deps, { conversationId, maxMs = 120000 } = {}) {
+  const deadline = Date.now() + maxMs
+  while (Date.now() < deadline) {
+    if (conversationId) {
+      const open = await deps.prisma.crmDelivery.count({
+        where: { conversationId, status: { in: ["pending", "sending"] } },
+      })
+      if (open === 0) return { flushed: true }
+    }
+
+    while (busy) {
+      await wait(250)
+      if (Date.now() >= deadline) return { flushed: false, reason: "timeout_busy" }
+    }
+
+    const processed = await processPendingCrmDeliveries(deps)
+    if (!conversationId && processed === 0) return { flushed: true }
+
+    if (conversationId) {
+      const open = await deps.prisma.crmDelivery.count({
+        where: { conversationId, status: { in: ["pending", "sending"] } },
+      })
+      if (open === 0) return { flushed: true }
+      const failed = await deps.prisma.crmDelivery.count({
+        where: { conversationId, status: "failed", createdAt: { gte: new Date(Date.now() - 60000) } },
+      })
+      if (failed > 0) return { flushed: false, reason: "delivery_failed" }
+    }
+
+    await wait(400)
+  }
+  return { flushed: false, reason: "timeout" }
+}
+
+module.exports = { processPendingCrmDeliveries, flushCrmDeliveries, playRecordingPresence }

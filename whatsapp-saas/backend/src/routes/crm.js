@@ -41,7 +41,7 @@ const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw, stripMediaBase64 } = require("../lib/crmMedia")
 const { onStageChange, notifyTagAddedForContact, testFlowOnConversation } = require("../lib/crmFlows")
 const { importCrmPack } = require("../lib/crmPackImport")
-const { processPendingCrmDeliveries } = require("../lib/crmDelivery")
+const { processPendingCrmDeliveries, flushCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
@@ -1797,7 +1797,15 @@ function createCrmRouter({ io }) {
         conversationId,
         userId: req.user.sub,
       })
-      await processPendingCrmDeliveries(flowTestDeps)
+      const flush = await flushCrmDeliveries(flowTestDeps, { conversationId, maxMs: 90000 })
+      if (!flush.flushed) {
+        return res.status(502).json({
+          error: "DELIVERY_PENDING",
+          message: "Fluxo enfileirado mas o envio não concluiu a tempo. Tente de novo em instantes.",
+          detail: result.detail,
+          flush,
+        })
+      }
       return res.json({
         ok: true,
         detail: result.detail,
@@ -1841,7 +1849,18 @@ function createCrmRouter({ io }) {
         conversationId: parsed.data.conversationId,
         userId: req.user.sub,
       })
-      await processPendingCrmDeliveries(flowTestDeps)
+      const flush = await flushCrmDeliveries(flowTestDeps, {
+        conversationId: parsed.data.conversationId,
+        maxMs: 90000,
+      })
+      if (!flush.flushed) {
+        return res.status(502).json({
+          error: "DELIVERY_PENDING",
+          message: "Fluxo enfileirado mas o envio não concluiu a tempo.",
+          detail: result.detail,
+          flush,
+        })
+      }
       return res.json({
         ok: true,
         detail: result.detail,
