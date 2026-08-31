@@ -129,8 +129,7 @@ const {
 } = require("./lib/crmMedia")
 const { ensureWhatsAppConnected } = require("./lib/whatsappConnection")
 const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } = require("./lib/crmProfile")
-const { onCrmMessage, processNoReplyFlows } = require("./lib/crmFlows")
-const { maybeReplyWithAi } = require("./lib/crmAiAgent")
+const { onCrmMessage, processNoReplyFlows, dispatchCrmMessageFlows } = require("./lib/crmFlows")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
 const { processDueContactReminders } = require("./lib/crmContactReminders")
 const { trackConversationStartedEvent } = require("./lib/metaConversions")
@@ -3994,17 +3993,7 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null, opti
     }
 
     if (shouldDispatchFlows) {
-      onCrmMessage(getCrmDeps(), {
-        conversation,
-        message,
-        isNewConversation: result.isNewConversation,
-        dispatchNewConversation: result.dispatchNewConversation,
-      }).catch((err) => console.error("[crm-flow] onMessage:", err?.message || err))
-
-      maybeReplyWithAi(getCrmDeps(), {
-        conversation,
-        message,
-      }).catch((err) => console.error("[crm-ai] reply:", err?.message || err))
+      dispatchCrmMessageFlows(getCrmDeps(), result, { includeAi: true })
     }
   }
 }

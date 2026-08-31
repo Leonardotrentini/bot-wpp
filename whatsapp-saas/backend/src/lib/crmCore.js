@@ -29,7 +29,7 @@ function isLidJid(jid) {
 
 const CRM_FLOW_DISPATCH_RECENT_MS = Number(process.env.CRM_FLOW_DISPATCH_RECENT_MS || 15 * 60 * 1000)
 
-/** Pure helper — decide se webhook deve disparar fluxos/IA nesta inbound. */
+/** Pure helper — decide se webhook/sync deve disparar fluxos/IA nesta inbound. */
 function computeShouldDispatchFlows({
   source,
   fromMe,
@@ -40,11 +40,24 @@ function computeShouldDispatchFlows({
   messageTimestamp,
   now = Date.now(),
 }) {
-  if (allowFlowDispatch === false || source !== "webhook" || fromMe) return false
+  if (fromMe) return false
+  if (source !== "webhook" && source !== "import") return false
+
   const isRecentInbound =
     messageTimestamp instanceof Date &&
     !Number.isNaN(messageTimestamp.getTime()) &&
     now - messageTimestamp.getTime() < CRM_FLOW_DISPATCH_RECENT_MS
+
+  // Sync/import paginado: só inbound nova e recente (evita histórico em massa).
+  if (source === "import") {
+    return Boolean(wasNewInbound && isRecentInbound)
+  }
+
+  // MESSAGES_SET (reconexão Evolution): histórico em massa — só inbound nova e recente.
+  if (allowFlowDispatch === false) {
+    return Boolean(wasNewInbound && isRecentInbound)
+  }
+
   return Boolean(
     wasNewInbound || isNewConversation || (upgradedFromImport && isRecentInbound),
   )
@@ -785,6 +798,20 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   }
 
   let dispatchNewConversation = false
+  if (shouldDispatchFlows) {
+    // Evita duplicar fluxo quando import/sync recente já disparou e webhook só confirma a mesma msg.
+    if (upgradedFromImport) {
+      const recentRun = await prisma.crmFlowRun.count({
+        where: {
+          conversationId: updatedConversation.id,
+          status: "ok",
+          createdAt: { gte: new Date(Date.now() - 3 * 60 * 1000) },
+        },
+      })
+      if (recentRun > 0) shouldDispatchFlows = false
+    }
+  }
+
   if (shouldDispatchFlows) {
     const priorInbound = await prisma.crmMessage.count({
       where: {

@@ -426,6 +426,56 @@ test("computeShouldDispatchFlows: import antigo via SET não dispara", () => {
   )
 })
 
+test("computeShouldDispatchFlows: MESSAGES_SET inbound nova e recente dispara", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "webhook",
+      fromMe: false,
+      wasNewInbound: true,
+      isNewConversation: false,
+      upgradedFromImport: false,
+      allowFlowDispatch: false,
+      messageTimestamp: new Date(now - 60_000),
+      now,
+    }),
+    true,
+  )
+})
+
+test("computeShouldDispatchFlows: MESSAGES_SET inbound antiga (>15min) não dispara", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "webhook",
+      fromMe: false,
+      wasNewInbound: true,
+      isNewConversation: false,
+      upgradedFromImport: false,
+      allowFlowDispatch: false,
+      messageTimestamp: new Date(now - 20 * 60_000),
+      now,
+    }),
+    false,
+  )
+})
+
+test("computeShouldDispatchFlows: sync import inbound nova e recente dispara", () => {
+  const now = Date.now()
+  assert.strictEqual(
+    computeShouldDispatchFlows({
+      source: "import",
+      fromMe: false,
+      wasNewInbound: true,
+      isNewConversation: false,
+      upgradedFromImport: false,
+      messageTimestamp: new Date(now - 30_000),
+      now,
+    }),
+    true,
+  )
+})
+
 test("computeShouldDispatchFlows: upgrade import recente dispara", () => {
   const now = Date.now()
   assert.strictEqual(

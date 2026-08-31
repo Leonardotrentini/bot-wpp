@@ -639,8 +639,28 @@ async function processNoReplyFlows(deps) {
   }
 }
 
+/** Dispara fluxos (e opcionalmente IA) após ingestCrmMessage quando shouldDispatchFlows. */
+async function dispatchCrmMessageFlows(deps, result, { includeAi = false } = {}) {
+  if (!result?.shouldDispatchFlows || !result.message || result.message.fromMe) return
+  const { conversation, message, isNewConversation, dispatchNewConversation } = result
+  await onCrmMessage(deps, {
+    conversation,
+    message,
+    isNewConversation,
+    dispatchNewConversation,
+  }).catch((err) => console.error("[crm-flow] dispatch:", err?.message || err))
+
+  if (includeAi) {
+    const { maybeReplyWithAi } = require("./crmAiAgent")
+    await maybeReplyWithAi(deps, { conversation, message }).catch((err) =>
+      console.error("[crm-ai] dispatch:", err?.message || err),
+    )
+  }
+}
+
 module.exports = {
   onCrmMessage,
+  dispatchCrmMessageFlows,
   onStageChange,
   onTagAdded,
   notifyTagAddedForContact,

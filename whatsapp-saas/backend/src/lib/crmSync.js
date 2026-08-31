@@ -8,6 +8,7 @@
 
 const { normalizeEvolutionMessages, filterMessagesForGroup, toIsoFromEvolutionTimestamp } = require("./evolutionMessages")
 const { isIndividualJid, ingestCrmMessage, emitCrmEvent, formatConversationRow, phoneFromChatItem } = require("./crmCore")
+const { dispatchCrmMessageFlows } = require("./crmFlows")
 const { syncContactProfiles, lookupDirectoryInfo, enqueueAvatarFetches } = require("./crmProfile")
 
 const CRM_SYNC_PAGE_SIZE = Number(process.env.CRM_SYNC_PAGE_SIZE || 50)
@@ -130,6 +131,9 @@ async function syncSingleChat(deps, { userId, instanceName, remoteJid, cutoffMs 
       for (const record of batch) {
         const result = await ingestCrmMessage(deps, { userId, record, source: "import", updateUnread: false })
         if (result?.created) imported += 1
+        if (result?.shouldDispatchFlows) {
+          await dispatchCrmMessageFlows(deps, result, { includeAi: false })
+        }
         const tsIso = toIsoFromEvolutionTimestamp(
           record?.messageTimestamp || record?.key?.messageTimestamp || record?.timestamp,
         )
