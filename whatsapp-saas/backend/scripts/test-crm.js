@@ -364,6 +364,26 @@ test("conditionsPass exige has_tag quando configurado", async () => {
   )
 })
 
+test("conditionsPass no_reply_minutes exige silêncio do contato", async () => {
+  const prisma = { crmContactTag: { count: async () => 0 } }
+  const old = new Date(Date.now() - 5 * 3600 * 1000)
+  const conversation = {
+    contactId: "c1",
+    id: "conv1",
+    kanbanStageId: null,
+    status: "open",
+    lastMessageFromMe: true,
+    noReplySinceAt: old,
+    lastMessageAt: new Date(),
+  }
+  const flow = { conditions: [{ type: "no_reply_minutes", value: "240" }] }
+  assert.strictEqual(await conditionsPass(prisma, flow, conversation), true)
+  assert.strictEqual(
+    await conditionsPass(prisma, flow, { ...conversation, lastMessageFromMe: false }),
+    false,
+  )
+})
+
 test("computeShouldDispatchFlows: webhook inbound nova dispara fluxos", () => {
   const now = Date.now()
   assert.strictEqual(

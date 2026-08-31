@@ -52,13 +52,13 @@ import {
   normalizeFlowCooldown,
   DEFAULT_FLOW_COOLDOWN_HOURS,
 } from '../../lib/flowMedia.js'
+import { FlowExtraTriggerRow } from '../../components/crm/FlowExtraTriggerRow.jsx'
 import {
-  PRIMARY_TRIGGER_LABELS,
-  EXTRA_TRIGGER_TYPES,
   hydrateFlowForEditor,
   emptyExtraTrigger,
   formatFlowTriggerSummary,
   flowExtraTriggersValid,
+  PRIMARY_TRIGGER_LABELS,
 } from '../../lib/flowTriggers.js'
 import { onSocketEvent } from '../../services/socket.js'
 import { useAuth } from '../../contexts/AuthContext.jsx'
@@ -873,8 +873,14 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
     setExtraTriggers((prev) => [...(prev || []), emptyExtraTrigger('has_tag')])
   }
 
-  const updateExtraTrigger = (index, patch) => {
-    setExtraTriggers((prev) => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)))
+  const updateExtraTrigger = (index, data) => {
+    setExtraTriggers((prev) =>
+      prev.map((t, i) => {
+        if (i !== index) return t
+        if (data.type && data.type !== t.type) return { ...data }
+        return { ...t, ...data }
+      }),
+    )
   }
 
   const removeExtraTrigger = (index) => {
@@ -1073,48 +1079,17 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           ) : (
             <div className="space-y-2">
               {(flow.extraTriggers || []).map((extra, index) => (
-                <div
+                <FlowExtraTriggerRow
                   key={`extra-${index}`}
-                  className="flex flex-wrap items-end gap-2 rounded-lg border border-brand-800/60 bg-brand-900/30 p-2"
-                >
-                  <div className="min-w-[160px] flex-1">
-                    <p className="mb-1 text-xs font-medium text-stone-400">Tipo</p>
-                    <Select
-                      value={extra.type || 'has_tag'}
-                      onChange={(e) => updateExtraTrigger(index, { type: e.target.value })}
-                    >
-                      {EXTRA_TRIGGER_TYPES.map((t) => (
-                        <option key={t.type} value={t.type}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div className="min-w-[160px] flex-[2]">
-                    <p className="mb-1 text-xs font-medium text-stone-400">Tag</p>
-                    <Select
-                      value={extra.tagId || ''}
-                      onChange={(e) => updateExtraTrigger(index, { tagId: e.target.value || '' })}
-                    >
-                      <option value="">Selecione a tag…</option>
-                      {tags.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    className="text-stone-400 hover:text-red-300"
-                    aria-label="Remover gatilho adicional"
-                    onClick={() => removeExtraTrigger(index)}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
+                  extra={extra}
+                  index={index}
+                  primaryType={flow.trigger.type}
+                  tags={tags}
+                  stages={stages}
+                  KeywordChipsInput={KeywordChipsInput}
+                  onChange={updateExtraTrigger}
+                  onRemove={removeExtraTrigger}
+                />
               ))}
             </div>
           )}
@@ -1161,7 +1136,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           <div className="rounded-xl border border-brand-700/60 bg-brand-950/50 px-3 py-2.5">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Resumo do gatilho</p>
             <p className="mt-1 text-sm leading-snug text-stone-200">
-              {formatFlowTriggerSummary(flow, tags, { formatNoReplyDelay })}
+              {formatFlowTriggerSummary(flow, tags, stages, { formatNoReplyDelay })}
             </p>
           </div>
           <FlowPreview flow={flow} tags={tags} stages={stages} agents={agents} />
@@ -2423,7 +2398,7 @@ export function Crm() {
                       <p className="mt-0.5 text-xs text-stone-500">
                         Quando:{' '}
                         <span className="text-stone-300">
-                          {formatFlowTriggerSummary(flow, tags, { formatNoReplyDelay })}
+                          {formatFlowTriggerSummary(flow, tags, stages, { formatNoReplyDelay })}
                         </span>
                       </p>
                       <p className="mt-0.5 text-xs text-stone-500">

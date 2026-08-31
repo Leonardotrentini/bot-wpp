@@ -133,7 +133,8 @@ async function conditionsPass(prisma, flow, conversation) {
   for (const cond of conditions) {
     const type = String(cond?.type || "")
     if (type === "stage_is") {
-      if (conversation.kanbanStageId !== cond.value) return false
+      const want = cond.value === "__none__" ? null : cond.value
+      if ((conversation.kanbanStageId || null) !== want) return false
     } else if (type === "status_is") {
       if (conversation.status !== cond.value) return false
     } else if (type === "has_tag" || type === "not_has_tag") {
@@ -142,6 +143,37 @@ async function conditionsPass(prisma, flow, conversation) {
       })
       if (type === "has_tag" && count === 0) return false
       if (type === "not_has_tag" && count > 0) return false
+    } else if (type === "has_any_tag") {
+      let tagIds = []
+      try {
+        tagIds = JSON.parse(String(cond.value || "[]"))
+      } catch {
+        tagIds = []
+      }
+      if (!(await contactHasAnyTag(prisma, conversation.contactId, tagIds))) return false
+    } else if (type === "keyword_in_last") {
+      let parsed = { keywords: [], matchMode: "contains" }
+      try {
+        parsed = JSON.parse(String(cond.value || "{}"))
+      } catch {
+        parsed = { keywords: [], matchMode: "contains" }
+      }
+      const last = await prisma.crmMessage.findFirst({
+        where: {
+          conversationId: conversation.id,
+          fromMe: false,
+          source: { notIn: ["flow", "ai"] },
+        },
+        orderBy: { timestamp: "desc" },
+        select: { body: true },
+      })
+      if (!keywordMatches(parsed, last?.body)) return false
+    } else if (type === "no_reply_minutes") {
+      const minutes = Math.max(1, Number(cond.value) || 1)
+      const threshold = new Date(Date.now() - minutes * 60 * 1000)
+      if (!conversation.lastMessageFromMe) return false
+      const anchor = conversation.noReplySinceAt || conversation.lastMessageAt
+      if (!anchor || new Date(anchor) >= threshold) return false
     }
   }
   return true

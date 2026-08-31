@@ -1645,7 +1645,15 @@ function createCrmRouter({ io }) {
     conditions: z
       .array(
         z.object({
-          type: z.enum(["has_tag", "not_has_tag", "stage_is", "status_is"]),
+          type: z.enum([
+            "has_tag",
+            "not_has_tag",
+            "stage_is",
+            "status_is",
+            "keyword_in_last",
+            "has_any_tag",
+            "no_reply_minutes",
+          ]),
           value: z.string(),
         }),
       )
