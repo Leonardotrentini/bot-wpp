@@ -52,6 +52,14 @@ import {
   normalizeFlowCooldown,
   DEFAULT_FLOW_COOLDOWN_HOURS,
 } from '../../lib/flowMedia.js'
+import {
+  PRIMARY_TRIGGER_LABELS,
+  EXTRA_TRIGGER_TYPES,
+  hydrateFlowForEditor,
+  emptyExtraTrigger,
+  formatFlowTriggerSummary,
+  flowExtraTriggersValid,
+} from '../../lib/flowTriggers.js'
 import { onSocketEvent } from '../../services/socket.js'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { isConversationInScope } from '../../lib/crmConversationScope.js'
@@ -720,14 +728,7 @@ function KanbanBoard({
 
 // ============================================================ FLUXOS
 
-const TRIGGER_LABELS = {
-  new_conversation: 'Nova conversa',
-  keyword: 'Palavra-chave',
-  no_reply: 'Sem resposta',
-  stage_change: 'Mudança de estágio',
-  tag_added: 'Tag adicionada',
-  contact_reply: 'Contato responde',
-}
+const TRIGGER_LABELS = PRIMARY_TRIGGER_LABELS
 
 const ACTION_LABELS = {
   send_message: 'Enviar mensagem',
@@ -742,6 +743,8 @@ const EMPTY_FLOW = {
   name: '',
   enabled: false,
   trigger: { type: 'new_conversation' },
+  conditions: [],
+  extraTriggers: [],
   actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
   cooldownPerContactHours: DEFAULT_FLOW_COOLDOWN_HOURS,
 }
@@ -850,7 +853,7 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
       setFlow(
         initial
           ? {
-              ...JSON.parse(JSON.stringify(initial)),
+              ...hydrateFlowForEditor(initial),
               cooldownPerContactHours: normalizeFlowCooldown(initial.cooldownPerContactHours),
             }
           : { ...EMPTY_FLOW, actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }] },
@@ -860,12 +863,31 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
 
   const setTrigger = (patch) => setFlow((f) => ({ ...f, trigger: { ...f.trigger, ...patch } }))
 
+  const setExtraTriggers = (next) =>
+    setFlow((f) => ({
+      ...f,
+      extraTriggers: typeof next === 'function' ? next(f.extraTriggers || []) : next,
+    }))
+
+  const addExtraTrigger = () => {
+    setExtraTriggers((prev) => [...(prev || []), emptyExtraTrigger('has_tag')])
+  }
+
+  const updateExtraTrigger = (index, patch) => {
+    setExtraTriggers((prev) => prev.map((t, i) => (i === index ? { ...t, ...patch } : t)))
+  }
+
+  const removeExtraTrigger = (index) => {
+    setExtraTriggers((prev) => prev.filter((_, i) => i !== index))
+  }
+
   const valid =
     flow.name.trim() &&
     flow.actions.length > 0 &&
     (flow.trigger.type !== 'keyword' || (flow.trigger.keywords || []).length > 0) &&
     (flow.trigger.type !== 'tag_added' || Boolean(flow.trigger.tagId)) &&
     (flow.trigger.type !== 'contact_reply' || (flow.trigger.tagIds || []).length > 0) &&
+    flowExtraTriggersValid(flow.extraTriggers || []) &&
     flow.actions.every((a) => {
       if (a.type === 'send_message') return flowMessageHasContent(a)
       if (a.type === 'add_tag' || a.type === 'remove_tag') return a.tagId
@@ -1032,6 +1054,72 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           )}
         </div>
 
+        <div className="rounded-xl border border-brand-800/80 bg-brand-950/30 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-medium text-stone-300">Gatilhos adicionais</p>
+              <p className="text-[11px] text-stone-500">Combine com o gatilho principal (todos devem ser verdadeiros).</p>
+            </div>
+            <Button type="button" size="sm" variant="ghost" onClick={addExtraTrigger}>
+              <Plus className="h-3.5 w-3.5" />
+              Adicionar
+            </Button>
+          </div>
+          {(flow.extraTriggers || []).length === 0 ? (
+            <p className="text-xs text-stone-500">
+              Ex.: <span className="text-stone-400">Sem resposta há 4h</span> +{' '}
+              <span className="text-stone-400">Contém a tag RECEBEU LINK</span>
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {(flow.extraTriggers || []).map((extra, index) => (
+                <div
+                  key={`extra-${index}`}
+                  className="flex flex-wrap items-end gap-2 rounded-lg border border-brand-800/60 bg-brand-900/30 p-2"
+                >
+                  <div className="min-w-[160px] flex-1">
+                    <p className="mb-1 text-xs font-medium text-stone-400">Tipo</p>
+                    <Select
+                      value={extra.type || 'has_tag'}
+                      onChange={(e) => updateExtraTrigger(index, { type: e.target.value })}
+                    >
+                      {EXTRA_TRIGGER_TYPES.map((t) => (
+                        <option key={t.type} value={t.type}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="min-w-[160px] flex-[2]">
+                    <p className="mb-1 text-xs font-medium text-stone-400">Tag</p>
+                    <Select
+                      value={extra.tagId || ''}
+                      onChange={(e) => updateExtraTrigger(index, { tagId: e.target.value || '' })}
+                    >
+                      <option value="">Selecione a tag…</option>
+                      {tags.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="text-stone-400 hover:text-red-300"
+                    aria-label="Remover gatilho adicional"
+                    onClick={() => removeExtraTrigger(index)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <FlowActionsEditor
           actions={flow.actions}
           tags={tags}
@@ -1070,6 +1158,12 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
         </div>
 
         <div className="space-y-4 lg:sticky lg:top-0 lg:self-start">
+          <div className="rounded-xl border border-brand-700/60 bg-brand-950/50 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Resumo do gatilho</p>
+            <p className="mt-1 text-sm leading-snug text-stone-200">
+              {formatFlowTriggerSummary(flow, tags, { formatNoReplyDelay })}
+            </p>
+          </div>
           <FlowPreview flow={flow} tags={tags} stages={stages} agents={agents} />
           <FlowTester
             flow={flow}
@@ -2327,29 +2421,10 @@ export function Crm() {
                     <div className="min-w-0">
                       <p className="truncate font-medium text-stone-100">{flow.name}</p>
                       <p className="mt-0.5 text-xs text-stone-500">
-                        Quando: <span className="text-stone-300">{TRIGGER_LABELS[flow.trigger?.type] || '—'}</span>
-                        {flow.trigger?.type === 'keyword' && flow.trigger.keywords?.length > 0 && (
-                          <span className="text-stone-400"> ({flow.trigger.keywords.join(', ')})</span>
-                        )}
-                        {flow.trigger?.type === 'no_reply' && (
-                          <span className="text-stone-400"> ({formatNoReplyDelay(flow.trigger)})</span>
-                        )}
-                        {flow.trigger?.type === 'tag_added' && flow.trigger.tagId && (
-                          <span className="text-stone-400">
-                            {' '}
-                            ({tags.find((t) => t.id === flow.trigger.tagId)?.name || 'tag'})
-                          </span>
-                        )}
-                        {flow.trigger?.type === 'contact_reply' && (flow.trigger.tagIds || []).length > 0 && (
-                          <span className="text-stone-400">
-                            {' '}
-                            (
-                            {(flow.trigger.tagIds || [])
-                              .map((id) => tags.find((t) => t.id === id)?.name || 'tag')
-                              .join(', ')}
-                            )
-                          </span>
-                        )}
+                        Quando:{' '}
+                        <span className="text-stone-300">
+                          {formatFlowTriggerSummary(flow, tags, { formatNoReplyDelay })}
+                        </span>
                       </p>
                       <p className="mt-0.5 text-xs text-stone-500">
                         Ações:{' '}

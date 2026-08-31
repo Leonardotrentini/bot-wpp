@@ -2,7 +2,7 @@
  * FlowEngine — automações de conversa do CRM.
  *
  * Gatilhos: new_conversation | keyword | no_reply | stage_change | tag_added | contact_reply
- * Condições: has_tag | not_has_tag | stage_is | status_is
+ * Gatilhos adicionais (AND): has_tag | not_has_tag via flow.conditions
  * Ações: send_message | add_tag | remove_tag | move_stage | assign_ai | set_status
  *
  * Guard-rails anti-loop/anti-ban:
@@ -576,6 +576,7 @@ module.exports = {
   testFlowOnConversation,
   normalizeTrigger,
   keywordMatches,
+  conditionsPass,
   isWithinQuietHours,
   normalizeQuietHours,
   deliveryDelayMs,

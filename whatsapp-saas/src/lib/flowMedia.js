@@ -6,6 +6,7 @@ import {
   emptyQuickReplyMedia,
 } from './quickReplyMedia.js'
 import { buildNoReplyTriggerPatch, getNoReplyDelayUi } from './flowNoReplyDelay.js'
+import { buildFlowConditions } from './flowTriggers.js'
 import { resolveActionDelayMs } from './flowActionDelay.js'
 import { resolveRecordingDelayMs } from './flowRecordingDelay.js'
 
@@ -103,7 +104,7 @@ export function buildFlowApiPayload(flow) {
     name: String(flow?.name || '').trim() || 'Fluxo',
     enabled: Boolean(flow?.enabled),
     trigger: cleanFlowTrigger(flow?.trigger),
-    conditions: Array.isArray(flow?.conditions) ? flow.conditions : [],
+    conditions: buildFlowConditions(flow),
     actions: (flow?.actions || []).map(stripFlowActionForSave),
     cooldownPerContactHours: normalizeFlowCooldown(flow?.cooldownPerContactHours),
   }

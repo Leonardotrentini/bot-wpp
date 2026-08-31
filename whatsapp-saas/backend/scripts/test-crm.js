@@ -13,6 +13,7 @@ const {
   onTagAdded,
   onCrmMessage,
   noReplyCandidateWhere,
+  conditionsPass,
 } = require("../src/lib/crmFlows")
 const { extractIndividualChats } = require("../src/lib/crmSync")
 const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, pickAvatarFromPicturePayload, contactNeedsProfile, contactNeedsAvatar, lookupDirectoryInfo } = require("../src/lib/crmProfile")
@@ -346,6 +347,21 @@ test("deliveryDelayMs sempre com delay mínimo", () => {
     const d = deliveryDelayMs()
     assert.ok(d >= 3000, `delay ${d} < 3000`)
   }
+})
+
+test("conditionsPass exige has_tag quando configurado", async () => {
+  const prisma = {
+    crmContactTag: {
+      count: async ({ where }) => (where.tagId === "tag-link" ? 1 : 0),
+    },
+  }
+  const flow = { conditions: [{ type: "has_tag", value: "tag-link" }] }
+  const conversation = { contactId: "c1", kanbanStageId: null, status: "open" }
+  assert.strictEqual(await conditionsPass(prisma, flow, conversation), true)
+  assert.strictEqual(
+    await conditionsPass(prisma, { conditions: [{ type: "has_tag", value: "outra" }] }, conversation),
+    false,
+  )
 })
 
 test("computeShouldDispatchFlows: webhook inbound nova dispara fluxos", () => {
