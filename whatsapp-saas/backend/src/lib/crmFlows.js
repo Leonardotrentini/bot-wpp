@@ -79,7 +79,7 @@ function normalizeTrigger(trigger) {
   const out = { type }
   if (type === "keyword") {
     const keywords = Array.isArray(trigger.keywords)
-      ? trigger.keywords.map((k) => String(k).trim().toLowerCase()).filter(Boolean)
+      ? trigger.keywords.map((k) => normalizeKeywordText(k)).filter(Boolean)
       : []
     if (!keywords.length) return null
     out.keywords = keywords
@@ -119,11 +119,21 @@ async function contactHasAnyTag(prisma, contactId, tagIds) {
   return count > 0
 }
 
+function normalizeKeywordText(text) {
+  return String(text || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+}
+
 function keywordMatches(trigger, body) {
-  const text = String(body || "").trim().toLowerCase()
+  const text = normalizeKeywordText(body)
   if (!text) return false
   for (const kw of trigger.keywords) {
-    if (trigger.matchMode === "exact" ? text === kw : text.includes(kw)) return true
+    const normalizedKw = normalizeKeywordText(kw)
+    if (!normalizedKw) continue
+    if (trigger.matchMode === "exact" ? text === normalizedKw : text.includes(normalizedKw)) return true
   }
   return false
 }
@@ -608,6 +618,7 @@ module.exports = {
   testFlowOnConversation,
   normalizeTrigger,
   keywordMatches,
+  normalizeKeywordText,
   conditionsPass,
   isWithinQuietHours,
   normalizeQuietHours,

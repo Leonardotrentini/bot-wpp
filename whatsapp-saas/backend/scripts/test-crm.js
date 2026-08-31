@@ -295,6 +295,15 @@ test("normalizeTrigger no_reply aceita horas e minutos", () => {
   assert.strictEqual(normalizeTrigger({ type: "no_reply", delayUnit: "minutes", delayValue: 45 }).minutes, 45)
 })
 
+test("keywordMatches ignora acentos (Sí → si)", () => {
+  const exact = normalizeTrigger({ type: "keyword", keywords: ["si"], matchMode: "exact" })
+  assert.strictEqual(keywordMatches(exact, "Sí"), true)
+  assert.strictEqual(keywordMatches(exact, "SI"), true)
+  assert.strictEqual(keywordMatches(exact, "sí"), true)
+  const contains = normalizeTrigger({ type: "keyword", keywords: ["si"], matchMode: "contains" })
+  assert.strictEqual(keywordMatches(contains, "Si claro"), true)
+})
+
 test("keywordMatches contains e exact", () => {
   const contains = normalizeTrigger({ type: "keyword", keywords: ["preço"] })
   assert.strictEqual(keywordMatches(contains, "Qual o PREÇO do produto?"), true)
