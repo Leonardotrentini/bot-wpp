@@ -1663,7 +1663,7 @@ function createCrmRouter({ io }) {
     actions: z
       .array(
         z.object({
-          type: z.enum(["send_message", "add_tag", "remove_tag", "move_stage", "assign_ai", "set_status"]),
+          type: z.enum(["send_message", "add_tag", "remove_tag", "move_stage", "assign_ai", "set_status", "stop_flows"]),
           body: z.string().max(4096).optional(),
           mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional(),
           mediaBase64: z.string().optional().nullable(),

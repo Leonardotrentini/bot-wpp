@@ -24,6 +24,7 @@ const ACTION_TYPES = new Set([
   "move_stage",
   "assign_ai",
   "set_status",
+  "stop_flows",
 ])
 
 function slugKey(raw, fallback) {

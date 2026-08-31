@@ -361,6 +361,8 @@ model CrmContact {
   quoteEventSentAt               DateTime?
   contactEventSentAt             DateTime?
   purchaseEventSentAt            DateTime?
+  /// Quando preenchido, nenhum fluxo automático dispara para este contato (ação STOP).
+  flowsStoppedAt                 DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   tags         CrmContactTag[]

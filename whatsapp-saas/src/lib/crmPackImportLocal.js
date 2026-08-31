@@ -69,6 +69,7 @@ function compileActions(actions, tagByKey, stageByKey, flowName) {
     }
     if (type === 'set_status') return { type, value: String(action.value || 'open') }
     if (type === 'assign_ai') return { type }
+    if (type === 'stop_flows') return { type }
     throw new Error(`Fluxo "${flowName}" ação[${i}]: type inválido.`)
   })
 }

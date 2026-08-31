@@ -3,7 +3,7 @@
  *
  * Gatilhos: new_conversation | keyword | no_reply | stage_change | tag_added | contact_reply
  * Gatilhos adicionais (AND): has_tag | not_has_tag via flow.conditions
- * Ações: send_message | add_tag | remove_tag | move_stage | assign_ai | set_status
+ * Ações: send_message | add_tag | remove_tag | move_stage | assign_ai | set_status | stop_flows
  *
  * Guard-rails anti-loop/anti-ban:
  * - Nunca reage a mensagens fromMe nem a mensagens geradas por fluxo/IA.
@@ -18,6 +18,7 @@
 const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
 const { processPendingCrmDeliveries } = require("./crmDelivery")
+const { isFlowsStopped, isFlowsStoppedForContact, stopFlowsForContact } = require("./crmFlowStop")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 800)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200)
 /** Pausa entre nota de voz e texto de continuação na mesma ação. */
@@ -232,6 +233,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
   let tagsMutated = false
   let cumulativeDelayMs = 0
   let deliveryQueued = false
+  let flowsStopped = false
 
   async function queueMessageDelivery(
     { body, mediaType, mediaBase64, mediaMime, mediaName, presenceDelayMs },
@@ -270,13 +272,19 @@ async function executeActions(deps, flow, conversation, options = {}) {
   }
 
   async function runOneAction(action, stepDelayMs) {
+    if (flowsStopped) return true
+    if (await isFlowsStoppedForContact(prisma, conversation.contactId, conversation.contact)) {
+      flowsStopped = true
+      return true
+    }
+
     const type = String(action?.type || "")
     try {
       if (type === "send_message") {
         const body = String(action.body || "").trim()
         const mediaType = action.mediaType && action.mediaType !== "none" ? String(action.mediaType) : "none"
         const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
-        if (!body && !hasMedia) return
+        if (!body && !hasMedia) return false
 
         const presenceDelayMs = recordingDelayMsForAction(action)
 
@@ -353,13 +361,26 @@ async function executeActions(deps, flow, conversation, options = {}) {
           data: { status: String(action.value) },
         })
         detail.push("set_status")
+      } else if (type === "stop_flows") {
+        await stopFlowsForContact(prisma, {
+          contactId: conversation.contactId,
+          conversationId: conversation.id,
+          userId: conversation.userId,
+          reason: `flow:${flow.id || "test"}`,
+        })
+        flowsStopped = true
+        if (conversation.contact) conversation.contact.flowsStoppedAt = new Date()
+        detail.push("stop_flows")
+        return true
       }
     } catch (err) {
       console.error(`[crm-flow] ação ${type} falhou (flow ${flow.id}):`, err?.message || err)
     }
+    return false
   }
 
   for (const action of actions) {
+    if (flowsStopped) break
     const stepDelayMs = immediate ? 0 : resolveActionDelayMs(action)
     cumulativeDelayMs += stepDelayMs
     const type = String(action?.type || "")
@@ -367,7 +388,8 @@ async function executeActions(deps, flow, conversation, options = {}) {
     if (!immediate && cumulativeDelayMs > 0 && type !== "send_message") {
       const offset = cumulativeDelayMs
       setTimeout(() => {
-        runOneAction(action, 0).then(async () => {
+        runOneAction(action, 0).then(async (stopped) => {
+          if (stopped) flowsStopped = true
           if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
             const updated = await prisma.crmConversation.findUnique({
               where: { id: conversation.id },
@@ -384,7 +406,8 @@ async function executeActions(deps, flow, conversation, options = {}) {
       continue
     }
 
-    await runOneAction(action, stepDelayMs)
+    const stopped = await runOneAction(action, stepDelayMs)
+    if (stopped) break
   }
 
   if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
@@ -455,6 +478,8 @@ async function testFlowOnConversation(deps, { flow, conversationId, userId }) {
 
 async function runFlow(deps, flow, conversation, reason) {
   const { prisma } = deps
+  if (isFlowsStopped(conversation?.contact)) return false
+  if (await isFlowsStoppedForContact(prisma, conversation?.contactId, conversation?.contact)) return false
   if (isWithinQuietHours(flow.quietHours)) return false
   if (await isFlowOnCooldown(prisma, flow, conversation.id)) return false
   if (!(await conditionsPass(prisma, flow, conversation))) return false
@@ -503,6 +528,8 @@ async function loadEnabledFlows(prisma, userId, triggerType) {
 async function onCrmMessage(deps, { conversation, message, isNewConversation, dispatchNewConversation }) {
   if (!conversation || !message) return
   if (message.fromMe || ["flow", "ai"].includes(message.source)) return
+  if (isFlowsStopped(conversation.contact)) return
+  if (await isFlowsStoppedForContact(deps.prisma, conversation.contactId, conversation.contact)) return
   const { prisma } = deps
 
   if (isNewConversation || dispatchNewConversation) {
@@ -534,6 +561,8 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation, di
 /** Chamado quando um card muda de estágio no Kanban. */
 async function onStageChange(deps, { conversation, stageId }) {
   const { prisma } = deps
+  if (isFlowsStopped(conversation?.contact)) return
+  if (await isFlowsStoppedForContact(prisma, conversation?.contactId, conversation?.contact)) return
   // Coluna virtual "Sem estágio" no board = kanbanStageId null → chave __none__ no trigger.
   const targetKey = stageId == null || stageId === "" ? "__none__" : String(stageId)
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "stage_change")) {
@@ -549,6 +578,8 @@ async function onStageChange(deps, { conversation, stageId }) {
 async function onTagAdded(deps, { conversation, tagId }) {
   if (!conversation || !tagId) return
   const { prisma } = deps
+  if (isFlowsStopped(conversation.contact)) return
+  if (await isFlowsStoppedForContact(prisma, conversation.contactId, conversation.contact)) return
   const wanted = String(tagId)
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "tag_added")) {
     const trigger = normalizeTrigger(flow.trigger)
@@ -600,6 +631,7 @@ async function processNoReplyFlows(deps) {
     const candidates = await prisma.crmConversation.findMany({
       where: noReplyCandidateWhere(flow.userId, threshold),
       take: 20,
+      include: CONVERSATION_INCLUDE,
     })
     for (const conversation of candidates) {
       await runFlow(deps, flow, conversation, "no_reply").catch(() => {})

@@ -1,4 +1,4 @@
-import { Bot, Clock, FileText, Film, ImageIcon, Kanban, Mic, Tag as TagIcon, Zap } from 'lucide-react'
+import { Bot, Clock, FileText, Film, ImageIcon, Kanban, Mic, Octagon, Tag as TagIcon, Zap } from 'lucide-react'
 import { ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
 import { FLOW_MEDIA_LABELS, flowMessageHasContent } from '../../lib/flowMedia.js'
 import { formatActionDelay } from '../../lib/flowActionDelay.js'
@@ -29,6 +29,7 @@ const ACTION_ICONS = {
   move_stage: Kanban,
   assign_ai: Bot,
   set_status: Zap,
+  stop_flows: Octagon,
 }
 
 function actionSummary(action, { tags, stages, agents }) {
@@ -51,6 +52,9 @@ function actionSummary(action, { tags, stages, agents }) {
   if (action.type === 'set_status') {
     const labels = { open: 'Aberta', pending: 'Pendente', resolved: 'Resolvida', archived: 'Arquivada' }
     return `Status → ${labels[action.value] || action.value || '—'}`
+  }
+  if (action.type === 'stop_flows') {
+    return 'Parar automações (STOP)'
   }
   return action.type
 }

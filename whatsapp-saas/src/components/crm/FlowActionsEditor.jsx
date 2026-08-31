@@ -112,6 +112,7 @@ export function FlowActionsEditor({ actions, tags, stages, agents, onChange, onE
                   <option value="move_stage">Mover no Kanban</option>
                   <option value="assign_ai">Ativar agente de IA</option>
                   <option value="set_status">Mudar status da conversa</option>
+                  <option value="stop_flows">Parar automações (STOP)</option>
                 </Select>
               </div>
               {actions.length > 1 && (
@@ -190,6 +191,12 @@ export function FlowActionsEditor({ actions, tags, stages, agents, onChange, onE
                   <option value="resolved">Resolvida</option>
                   <option value="archived">Arquivada</option>
                 </Select>
+              )}
+              {action.type === 'stop_flows' && (
+                <p className="text-xs leading-relaxed text-stone-500">
+                  Interrompe <span className="text-stone-300">todos os fluxos</span> para este contato: cancela mensagens
+                  na fila e impede novos disparos (follow-ups, palavra-chave, sem resposta, etc.).
+                </p>
               )}
             </div>
           </div>

@@ -737,6 +737,7 @@ const ACTION_LABELS = {
   move_stage: 'Mover no Kanban',
   assign_ai: 'Ativar IA',
   set_status: 'Mudar status',
+  stop_flows: 'STOP — parar automações',
 }
 
 const EMPTY_FLOW = {
@@ -2410,6 +2411,7 @@ export function Crm() {
                                 const label = FLOW_MEDIA_LABELS[a.mediaType] || a.mediaType
                                 return `${ACTION_LABELS[a.type]} (${label.toLowerCase()})`
                               }
+                              if (a.type === 'stop_flows') return ACTION_LABELS.stop_flows
                               return ACTION_LABELS[a.type] || a.type
                             })
                             .join(' → ')}

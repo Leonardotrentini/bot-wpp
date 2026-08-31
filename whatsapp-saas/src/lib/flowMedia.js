@@ -63,6 +63,9 @@ export function stripFlowActionForSave(action) {
   if (action.type === 'set_status') {
     return appendActionDelayFields({ type: 'set_status', value: String(action.value || '') }, action)
   }
+  if (action.type === 'stop_flows') {
+    return appendActionDelayFields({ type: 'stop_flows' }, action)
+  }
   return { type: action.type }
 }
 
