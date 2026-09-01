@@ -45,6 +45,7 @@ const { processPendingCrmDeliveries, flushCrmDeliveries } = require("../lib/crmD
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
 const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
+const { registerCrmAnalysisRoutes } = require("./crmAnalysis")
 const {
   logContactActivity,
   getContactActivityTimeline,
@@ -2106,6 +2107,8 @@ function createCrmRouter({ io }) {
   })
 
   // ------------------------- Visão geral (contadores) -------------------------
+
+  registerCrmAnalysisRoutes(router)
 
   router.get("/overview", async (req, res) => {
     const uf = readUserFilter(req.dataScope)

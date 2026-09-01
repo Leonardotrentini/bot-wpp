@@ -13,6 +13,7 @@ import {
   Kanban,
   Plug,
   Receipt,
+  Brain,
 } from 'lucide-react'
 import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
@@ -46,6 +47,7 @@ const navSections = [
       { to: '/dashboard/chat', label: 'Conversas', icon: MessageSquare },
       { to: '/dashboard/crm', label: 'CRM', icon: Kanban },
       { to: '/dashboard/sales', label: 'Vendas', icon: Receipt },
+      { to: '/dashboard/analysis', label: 'Análise IA', icon: Brain },
     ],
   },
   {

@@ -563,9 +563,35 @@ model CrmAiAgent {
   quietHours                Json?
   replyDelayMinSec          Int      @default(5)
   replyDelayMaxSec          Int      @default(20)
+  /// manual = só quando ligar no Chat; auto_* = regras de escopo
+  activationMode            String   @default("manual")
+  activationConfig          Json?
+  /// add_tag | remove_tag | move_stage | handoff
+  allowedTools              String[] @default([])
+  allowedTagIds             String[] @default([])
+  knowledgeText             String?  @db.Text
+  promptTemplateId          String?
+  locale                    String   @default("pt-BR")
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
+  knowledge                 CrmAiAgentKnowledge[]
 
+  @@index([userId])
+}
+
+model CrmAiAgentKnowledge {
+  id          String     @id @default(cuid())
+  userId      String
+  agentId     String
+  agent       CrmAiAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name        String
+  type        String     @default("text")
+  contentText String     @db.Text
+  mimeType    String?
+  fileSize    Int?
+  createdAt   DateTime   @default(now())
+
+  @@index([agentId])
   @@index([userId])
 }
 
@@ -733,4 +759,73 @@ model MetaEventDelivery {
   @@index([contactId, createdAt(sort: Desc)])
   @@index([eventName, createdAt(sort: Desc)])
   @@index([eventId])
+}
+
+// ------------------------- Análise de conversas (IA) -------------------------
+
+model CrmAnalysisProfile {
+  id             String   @id @default(cuid())
+  userId         String
+  name           String
+  enabled        Boolean  @default(true)
+  /// [{ id, label, description, weight }]
+  criteria       Json
+  systemPrompt   String   @db.Text
+  model          String   @default("gpt-4o-mini")
+  temperature    Float    @default(0.2)
+  maxTokens      Int      @default(1200)
+  minMessages    Int      @default(2)
+  maxMessages    Int      @default(80)
+  locale         String   @default("pt-BR")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  runs           CrmAnalysisRun[]
+  analyses       CrmConversationAnalysis[]
+
+  @@index([userId])
+}
+
+model CrmAnalysisRun {
+  id                 String   @id @default(cuid())
+  userId             String
+  profileId          String
+  profile            CrmAnalysisProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  scopeUserIds       String[]
+  periodFrom         DateTime?
+  periodTo           DateTime?
+  status             String   @default("running") // running | done | error | cancelled
+  totalConversations Int      @default(0)
+  doneConversations  Int      @default(0)
+  error              String?  @db.Text
+  sellerSummaries    Json?
+  startedAt          DateTime @default(now())
+  finishedAt         DateTime?
+  analyses           CrmConversationAnalysis[]
+
+  @@index([userId, status])
+  @@index([profileId])
+}
+
+model CrmConversationAnalysis {
+  id             String   @id @default(cuid())
+  runId          String?
+  run            CrmAnalysisRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  profileId      String
+  profile        CrmAnalysisProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  userId         String
+  conversationId String
+  messageCount   Int
+  scores         Json
+  failures       Json?
+  summary        String   @db.Text
+  strengths      Json?
+  weaknesses     Json?
+  overallScore   Float?
+  aggregateKey   String
+  analyzedAt     DateTime @default(now())
+
+  @@unique([profileId, conversationId, aggregateKey])
+  @@index([userId, analyzedAt])
+  @@index([runId])
+  @@index([conversationId])
 }

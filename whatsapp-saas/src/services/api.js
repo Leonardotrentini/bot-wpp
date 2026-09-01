@@ -1319,11 +1319,35 @@ export async function deleteCrmAgent(id) {
   return mockResponse({ ok: true })
 }
 
-export async function testCrmAgent(id, message) {
+export async function testCrmAgent(id, message, history = []) {
   if (resolveUseRealApi()) {
-    return apiClient.post(`/crm/agents/${encodeURIComponent(id)}/test`, { message }, { timeout: 90000 })
+    return apiClient.post(`/crm/agents/${encodeURIComponent(id)}/test`, { message, history }, { timeout: 90000 })
   }
   return mockResponse({ reply: 'Resposta de teste (modo demonstração).' })
+}
+
+export async function getCrmAiStatus() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/ai/status')
+  return mockResponse({ aiConfigured: false, defaultModel: 'gpt-4o-mini' })
+}
+
+export async function getCrmAgentKnowledge(agentId) {
+  if (resolveUseRealApi()) return apiClient.get(`/crm/agents/${encodeURIComponent(agentId)}/knowledge`)
+  return mockResponse({ items: [] })
+}
+
+export async function addCrmAgentKnowledge(agentId, payload) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(`/crm/agents/${encodeURIComponent(agentId)}/knowledge`, payload, { timeout: 120000 })
+  }
+  return mockResponse({ item: { id: `k-${Date.now()}`, name: payload.name, type: payload.type } })
+}
+
+export async function deleteCrmAgentKnowledge(agentId, kid) {
+  if (resolveUseRealApi()) {
+    return apiClient.delete(`/crm/agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(kid)}`)
+  }
+  return mockResponse({ ok: true })
 }
 
 export async function startCrmSync(payload = {}) {
@@ -1402,4 +1426,52 @@ export async function updateOrgMemberAvatar(userId, { avatar }) {
 export async function acceptOrgInvite({ token, password }) {
   if (resolveUseRealApi()) return (await apiClient.post('/auth/accept-invite', { token, password })).data
   return { user: mockUser, token: 'mock-jwt-token' }
+}
+
+// ------------------------- Análise de conversas (IA) -------------------------
+
+export async function getAnalysisStatus() {
+  if (resolveUseRealApi()) return (await apiClient.get('/crm/analysis/status')).data
+  return { aiConfigured: false }
+}
+
+export async function fetchAnalysisProfiles() {
+  if (resolveUseRealApi()) return (await apiClient.get('/crm/analysis/profiles')).data
+  return { profiles: [] }
+}
+
+export async function createDefaultAnalysisProfile() {
+  if (resolveUseRealApi()) return (await apiClient.post('/crm/analysis/profiles/default')).data
+  return { profile: null, created: false }
+}
+
+export async function saveAnalysisProfile(id, payload) {
+  if (resolveUseRealApi()) {
+    if (id) return (await apiClient.put(`/crm/analysis/profiles/${id}`, payload)).data
+    return (await apiClient.post('/crm/analysis/profiles', payload)).data
+  }
+  return { profile: { id: 'mock', ...payload } }
+}
+
+export async function deleteAnalysisProfile(id) {
+  if (resolveUseRealApi()) return (await apiClient.delete(`/crm/analysis/profiles/${id}`)).data
+  return { ok: true }
+}
+
+export async function startAnalysisRun(payload) {
+  if (resolveUseRealApi()) return (await apiClient.post('/crm/analysis/runs', payload)).data
+  return { run: { id: 'mock-run', status: 'done', totalConversations: 0, doneConversations: 0 } }
+}
+
+export async function getAnalysisRun(runId) {
+  if (resolveUseRealApi()) return (await apiClient.get(`/crm/analysis/runs/${runId}`)).data
+  return { run: null }
+}
+
+export async function getAnalysisRunResults(runId, { sellerUserId } = {}) {
+  if (resolveUseRealApi()) {
+    const params = sellerUserId ? `?sellerUserId=${encodeURIComponent(sellerUserId)}` : ''
+    return (await apiClient.get(`/crm/analysis/runs/${runId}/results${params}`)).data
+  }
+  return { run: null, results: [] }
 }

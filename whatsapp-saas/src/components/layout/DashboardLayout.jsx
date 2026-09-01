@@ -16,6 +16,7 @@ const titles = {
   '/dashboard/groups': 'Grupos',
   '/dashboard/chat': 'Conversas',
   '/dashboard/crm': 'CRM',
+  '/dashboard/analysis': 'Análise IA',
   '/dashboard/messages': 'Mensagens',
   '/dashboard/automations': 'Automações',
   '/dashboard/members': 'Lista de Leads',
