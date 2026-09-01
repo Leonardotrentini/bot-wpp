@@ -52,15 +52,23 @@ async function main() {
 
   const { flows } = await req("/crm/flows", { token })
   const enabled = (flows || []).filter((f) => f.enabled)
-  const keywordFlows = enabled.filter((f) => f.trigger?.type === "keyword" || f.trigger?.type === "new_conversation")
-  if (!keywordFlows.length) {
-    console.error("Nenhum fluxo keyword/new_conversation ativo.")
+  const sendsMessage = (f) => (f.actions || []).some((a) => a.type === "send_message")
+
+  const flow =
+    enabled.find((f) => f.trigger?.type === "new_conversation" && sendsMessage(f)) ||
+    enabled.find(
+      (f) =>
+        f.trigger?.type === "keyword" &&
+        sendsMessage(f) &&
+        (f.trigger?.keywords || []).some((k) => String(k).toLowerCase().includes("carta")),
+    ) ||
+    enabled.find((f) => sendsMessage(f))
+
+  if (!flow) {
+    console.error("Nenhum fluxo ativo com send_message.")
     process.exit(1)
   }
-  const flow = keywordFlows.find((f) =>
-    (f.trigger?.keywords || []).some((k) => String(k).toLowerCase().includes("carta")),
-  ) || keywordFlows[0]
-  console.log(`Fluxo: ${flow.name} (${flow.id})`)
+  console.log(`Fluxo: ${flow.name} (${flow.id}) — ${(flow.actions || []).map((a) => a.type).join(", ")}`)
 
   const { conversations } = await req("/crm/conversations?limit=100&q=carta", { token })
   const targets = (conversations || []).filter((c) =>

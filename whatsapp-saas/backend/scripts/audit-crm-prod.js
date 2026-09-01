@@ -74,7 +74,6 @@ async function main() {
     const hasFlowAfter = list.some(
       (m) =>
         m.fromMe &&
-        (m.source === "flow" || m.source === "ai") &&
         lastInbound &&
         new Date(m.timestamp) >= new Date(lastInbound.timestamp),
     )
