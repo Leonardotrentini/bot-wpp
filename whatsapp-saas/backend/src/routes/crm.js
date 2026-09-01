@@ -39,7 +39,7 @@ const {
 const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw, stripMediaBase64 } = require("../lib/crmMedia")
-const { onStageChange, notifyTagAddedForContact, testFlowOnConversation } = require("../lib/crmFlows")
+const { onStageChange, notifyTagAddedForContact, testFlowOnConversation, dispatchCrmMessageFlows } = require("../lib/crmFlows")
 const { importCrmPack } = require("../lib/crmPackImport")
 const { processPendingCrmDeliveries, flushCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
@@ -574,6 +574,63 @@ function createCrmRouter({ io }) {
     })
     emitCrmEvent(io, convo.userId, "crm:conversation", { conversation: formatConversationRow(updated) })
     return res.json({ conversation: formatConversationRow(updated) })
+  })
+
+  /** Re-dispara fluxos automáticos (mesmo caminho do webhook) — não consome teto global. */
+  router.post("/conversations/:id/redispatch-flows", async (req, res) => {
+    const convo = await findScopedConversation(req, req.params.id)
+    if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+
+    const lastInbound = await prisma.crmMessage.findFirst({
+      where: {
+        conversationId: convo.id,
+        fromMe: false,
+        source: { notIn: ["flow", "ai"] },
+      },
+      orderBy: { timestamp: "desc" },
+    })
+    if (!lastInbound) {
+      return res.status(400).json({ error: "NO_INBOUND", message: "Conversa sem mensagem inbound do contato." })
+    }
+
+    const priorInbound = await prisma.crmMessage.count({
+      where: {
+        conversationId: convo.id,
+        fromMe: false,
+        id: { not: lastInbound.id },
+        source: { notIn: ["flow", "ai"] },
+        timestamp: { lt: lastInbound.timestamp },
+      },
+    })
+
+    const flowDeps = { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, fetchChatMessages, findMessageById }
+    try {
+      await dispatchCrmMessageFlows(
+        flowDeps,
+        {
+          message: lastInbound,
+          conversation: convo,
+          isNewConversation: priorInbound === 0,
+          dispatchNewConversation: priorInbound === 0,
+          shouldDispatchFlows: true,
+        },
+        { includeAi: false },
+      )
+      const flush = await flushCrmDeliveries(flowDeps, { conversationId: convo.id, maxMs: 90000 })
+      const runs = await prisma.crmFlowRun.findMany({
+        where: { conversationId: convo.id, createdAt: { gte: new Date(Date.now() - 120000) } },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      })
+      return res.json({
+        ok: true,
+        flushed: flush.flushed,
+        runs: runs.map((r) => ({ status: r.status, detail: r.detail, createdAt: r.createdAt.toISOString() })),
+      })
+    } catch (err) {
+      console.error("[crm] redispatch-flows:", err?.message || err)
+      return res.status(500).json({ error: "REDISPATCH_FAILED", message: "Falha ao re-disparar fluxos." })
+    }
   })
 
   router.patch("/conversations/:id", async (req, res) => {

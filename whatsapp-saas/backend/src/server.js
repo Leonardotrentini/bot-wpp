@@ -3993,7 +3993,7 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null, opti
     }
 
     if (shouldDispatchFlows) {
-      dispatchCrmMessageFlows(getCrmDeps(), result, { includeAi: true })
+      await dispatchCrmMessageFlows(getCrmDeps(), result, { includeAi: true })
     }
   }
 }

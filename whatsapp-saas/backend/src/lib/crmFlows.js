@@ -16,7 +16,7 @@
  */
 
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
-const { processPendingCrmDeliveries } = require("./crmDelivery")
+const { processPendingCrmDeliveries, flushCrmDeliveries } = require("./crmDelivery")
 const { isFlowsStopped, isFlowsStoppedForContact, stopFlowsForContact } = require("./crmFlowStop")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 800)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200)
@@ -190,35 +190,67 @@ async function conditionsPass(prisma, flow, conversation) {
 }
 
 const CRM_FLOW_DEFAULT_COOLDOWN_HOURS = 24
+/** 0 = sem teto global (recomendado). Defina CRM_FLOW_MAX_RUNS_PER_DAY só como proteção anti-abuso. */
+const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY ?? 0)
 
-async function isFlowOnCooldown(prisma, flow, conversationId) {
+const PROD_RUN_WHERE = {
+  status: "ok",
+  NOT: { detail: { startsWith: "test:" } },
+}
+
+/** Por que runFlow não executou — null = pode rodar. */
+async function getFlowBlockReason(prisma, flow, conversation) {
+  if (isFlowsStopped(conversation?.contact)) return "flows_stopped"
+  if (await isFlowsStoppedForContact(prisma, conversation?.contactId, conversation?.contact)) {
+    return "flows_stopped"
+  }
+  if (isWithinQuietHours(flow.quietHours)) return "quiet_hours"
+  if (!(await conditionsPass(prisma, flow, conversation))) return "conditions"
+
   const raw = Number(flow.cooldownPerContactHours ?? CRM_FLOW_DEFAULT_COOLDOWN_HOURS)
   const cooldownHours = Number.isFinite(raw) ? Math.min(720, Math.max(0, Math.round(raw))) : CRM_FLOW_DEFAULT_COOLDOWN_HOURS
 
   if (cooldownHours > 0) {
     const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
     const recent = await prisma.crmFlowRun.count({
-      where: { flowId: flow.id, conversationId, status: "ok", createdAt: { gte: since } },
+      where: {
+        flowId: flow.id,
+        conversationId: conversation.id,
+        createdAt: { gte: since },
+        ...PROD_RUN_WHERE,
+      },
     })
-    if (recent > 0) return true
+    if (recent > 0) return "cooldown_contact"
   }
 
-  // Teto global opcional (por fluxo/dia), ignorando testes manuais — padrão alto para não bloquear tráfego Meta.
-  const maxPerDay = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 500)
-  if (maxPerDay > 0) {
+  if (CRM_FLOW_MAX_RUNS_PER_DAY > 0) {
     const dayAgo = new Date(Date.now() - 24 * 3600 * 1000)
     const runsToday = await prisma.crmFlowRun.count({
       where: {
         flowId: flow.id,
-        status: "ok",
         createdAt: { gte: dayAgo },
-        NOT: { detail: { startsWith: "test:" } } },
+        ...PROD_RUN_WHERE,
       },
     })
-    if (runsToday >= maxPerDay) return true
+    if (runsToday >= CRM_FLOW_MAX_RUNS_PER_DAY) return "daily_cap"
   }
 
-  return false
+  return null
+}
+
+async function recordSkippedFlowRun(prisma, flow, conversation, reason, blockReason) {
+  if (!flow?.id) return
+  await prisma.crmFlowRun
+    .create({
+      data: {
+        userId: conversation.userId,
+        flowId: flow.id,
+        conversationId: conversation.id,
+        status: "skipped",
+        detail: `${reason}: skipped (${blockReason})`,
+      },
+    })
+    .catch((err) => console.warn("[crm-flow] skipped run log:", err?.message || err))
 }
 
 function deliveryDelayMs() {
@@ -488,15 +520,21 @@ async function testFlowOnConversation(deps, { flow, conversationId, userId }) {
 
 async function runFlow(deps, flow, conversation, reason) {
   const { prisma } = deps
-  if (isFlowsStopped(conversation?.contact)) return false
-  if (await isFlowsStoppedForContact(prisma, conversation?.contactId, conversation?.contact)) return false
-  if (isWithinQuietHours(flow.quietHours)) return false
-  if (await isFlowOnCooldown(prisma, flow, conversation.id)) return false
-  if (!(await conditionsPass(prisma, flow, conversation))) return false
+  const blockReason = await getFlowBlockReason(prisma, flow, conversation)
+  if (blockReason) {
+    await recordSkippedFlowRun(prisma, flow, conversation, reason, blockReason)
+    console.warn(
+      `[crm-flow] skipped flow=${flow.id || flow.name || "?"} conv=${conversation.id} reason=${blockReason} trigger=${reason}`,
+    )
+    return false
+  }
 
   const detail = await executeActions(deps, flow, conversation)
   await processPendingCrmDeliveries(deps).catch((err) =>
     console.error("[crm-flow] processPendingCrmDeliveries:", err?.message || err),
+  )
+  flushCrmDeliveries(deps, { conversationId: conversation.id, maxMs: 90000 }).catch((err) =>
+    console.error("[crm-flow] flushCrmDeliveries:", err?.message || err),
   )
 
   const hasSend = detail.some((d) => String(d).startsWith("send_message"))
@@ -544,14 +582,18 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation, di
 
   if (isNewConversation || dispatchNewConversation) {
     for (const flow of await loadEnabledFlows(prisma, conversation.userId, "new_conversation")) {
-      await runFlow(deps, flow, conversation, "new_conversation").catch(() => {})
+      await runFlow(deps, flow, conversation, "new_conversation").catch((err) =>
+        console.error("[crm-flow] new_conversation:", err?.message || err),
+      )
     }
   }
 
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "keyword")) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger && keywordMatches(trigger, message.body)) {
-      await runFlow(deps, flow, conversation, `keyword`).catch(() => {})
+      await runFlow(deps, flow, conversation, "keyword").catch((err) =>
+        console.error("[crm-flow] keyword:", err?.message || err),
+      )
     }
   }
 
@@ -562,7 +604,9 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation, di
       if (!trigger?.tagIds?.length) continue
       const ok = await contactHasAnyTag(prisma, conversation.contactId, trigger.tagIds)
       if (ok) {
-        await runFlow(deps, flow, conversation, "contact_reply").catch(() => {})
+        await runFlow(deps, flow, conversation, "contact_reply").catch((err) =>
+          console.error("[crm-flow] contact_reply:", err?.message || err),
+        )
       }
     }
   }
@@ -579,7 +623,9 @@ async function onStageChange(deps, { conversation, stageId }) {
     const trigger = normalizeTrigger(flow.trigger)
     if (!trigger) continue
     if (!trigger.stageId || trigger.stageId === targetKey) {
-      await runFlow(deps, flow, conversation, "stage_change").catch(() => {})
+      await runFlow(deps, flow, conversation, "stage_change").catch((err) =>
+        console.error("[crm-flow] stage_change:", err?.message || err),
+      )
     }
   }
 }
@@ -594,7 +640,9 @@ async function onTagAdded(deps, { conversation, tagId }) {
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "tag_added")) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger && trigger.tagId === wanted) {
-      await runFlow(deps, flow, conversation, "tag_added").catch(() => {})
+      await runFlow(deps, flow, conversation, "tag_added").catch((err) =>
+        console.error("[crm-flow] tag_added:", err?.message || err),
+      )
     }
   }
 }
@@ -644,7 +692,9 @@ async function processNoReplyFlows(deps) {
       include: CONVERSATION_INCLUDE,
     })
     for (const conversation of candidates) {
-      await runFlow(deps, flow, conversation, "no_reply").catch(() => {})
+      await runFlow(deps, flow, conversation, "no_reply").catch((err) =>
+        console.error("[crm-flow] no_reply:", err?.message || err),
+      )
     }
   }
 }
@@ -685,4 +735,5 @@ module.exports = {
   isWithinQuietHours,
   normalizeQuietHours,
   deliveryDelayMs,
+  getFlowBlockReason,
 }
