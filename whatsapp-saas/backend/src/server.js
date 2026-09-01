@@ -131,6 +131,7 @@ const { ensureWhatsAppConnected } = require("./lib/whatsappConnection")
 const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } = require("./lib/crmProfile")
 const { onCrmMessage, processNoReplyFlows, dispatchCrmMessageFlows } = require("./lib/crmFlows")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
+const { runCrmStorageMaintenance } = require("./lib/crmMaintenance")
 const { processDueContactReminders } = require("./lib/crmContactReminders")
 const { trackConversationStartedEvent } = require("./lib/metaConversions")
 const { mergeCrmContactsIntoMembers, resolveTagAppliedAt } = require("./lib/membersDirectory")
@@ -2784,6 +2785,10 @@ const MESSAGE_SEND_RETRIES = Number(process.env.MESSAGE_SEND_RETRIES || 1)
 const MESSAGE_SEND_RETRY_DELAY_MS = Number(process.env.MESSAGE_SEND_RETRY_DELAY_MS || 4000)
 const { validateMediaContentSize } = require("./lib/mediaLimits.js")
 const ENABLE_SCHEDULER = process.env.ENABLE_SCHEDULER !== "false"
+const CRM_MAINTENANCE_INTERVAL_MS = Math.max(
+  300000,
+  Number(process.env.CRM_MAINTENANCE_INTERVAL_MS || 3600000),
+)
 
 function getX1Deps() {
   return { prisma, sendText, sendMedia, sendWhatsAppAudio }
@@ -4432,5 +4437,24 @@ httpServer.listen(port, () => {
     }, MESSAGE_SYNC_TICK_MS)
     console.log(`Agendador de automações e X1 ativo (tick 30s, max ${SCHEDULER_MAX_AUTOMATIONS_PER_TICK}/tick).`)
     console.log(`Importação gradual de mensagens de grupos a cada ${MESSAGE_SYNC_TICK_MS / 1000}s.`)
+
+    let crmMaintenanceTicks = 0
+    setInterval(() => {
+      crmMaintenanceTicks += 1
+      const full = crmMaintenanceTicks % 24 === 0
+      void runCrmStorageMaintenance(prisma, { full }).catch((err) =>
+        console.error("[crm-maintenance]", err?.message || err),
+      )
+    }, CRM_MAINTENANCE_INTERVAL_MS)
+    console.log(
+      `Manutenção CRM ativa (a cada ${CRM_MAINTENANCE_INTERVAL_MS / 60000} min — compacta raw e limpa entregas).`,
+    )
+
+    // Após subir, limpa mídia legada em entregas já concluídas (recuperação pós disco cheio).
+    setTimeout(() => {
+      void runCrmStorageMaintenance(prisma, { full: true }).catch((err) =>
+        console.error("[crm-maintenance] boot:", err?.message || err),
+      )
+    }, 120000)
   }
 })

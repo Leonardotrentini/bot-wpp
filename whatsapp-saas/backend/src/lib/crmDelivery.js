@@ -319,7 +319,7 @@ async function processOneDelivery(deps, delivery, options = {}) {
     if (ack.ackOk) {
       await prisma.crmDelivery.update({
         where: { id: delivery.id },
-        data: { status: "sent", sentAt: now, providerMessageId, error: null },
+        data: { status: "sent", sentAt: now, providerMessageId, error: null, mediaBase64: null },
       })
     } else {
       await prisma.crmDelivery.update({
@@ -328,6 +328,7 @@ async function processOneDelivery(deps, delivery, options = {}) {
           status: "failed",
           providerMessageId,
           error: String(ack.detail || "WhatsApp não confirmou entrega.").slice(0, 500),
+          mediaBase64: null,
         },
       })
       emitCrmEvent(io, delivery.userId, "crm:delivery_failed", {
@@ -354,7 +355,7 @@ async function processOneDelivery(deps, delivery, options = {}) {
     console.error(`[crm-delivery] envio falhou (${delivery.id}):`, errMsg)
     await prisma.crmDelivery.update({
       where: { id: delivery.id },
-      data: { status: "failed", error: errMsg.slice(0, 500) },
+      data: { status: "failed", error: errMsg.slice(0, 500), mediaBase64: null },
     })
     emitCrmEvent(io, delivery.userId, "crm:delivery_failed", {
       conversationId: delivery.conversationId,

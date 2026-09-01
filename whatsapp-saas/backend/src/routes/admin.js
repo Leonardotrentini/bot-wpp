@@ -8,6 +8,7 @@ const { ensureDefaultPlans } = require("../lib/ensureBillingDefaults")
 const { ensureUserOrganization, backfillAllUserOrganizations, cleanupEmptyOrganizations } = require("../lib/orgScope")
 const { purgeUserById, purgeOrganizationById } = require("../lib/adminPurge")
 const { compactMessageRawAll } = require("../lib/messageRawCompact")
+const { runCrmStorageMaintenance } = require("../lib/crmMaintenance")
 
 const router = express.Router()
 
@@ -833,6 +834,31 @@ router.post("/maintenance/compact-message-raw", authMiddleware, requireAdmin, as
     return res.status(500).json({
       error: "COMPACT_FAILED",
       message: err?.message || "Falha ao compactar mensagens.",
+    })
+  }
+})
+
+router.post("/maintenance/crm-storage", authMiddleware, requireAdmin, async (req, res) => {
+  const schema = z.object({ full: z.boolean().optional() })
+  const parsed = schema.safeParse(req.body || {})
+  if (!parsed.success) {
+    return res.status(400).json({ error: "VALIDATION_ERROR", message: "Parâmetros inválidos." })
+  }
+  try {
+    const result = await runCrmStorageMaintenance(prisma, { full: parsed.data.full !== false })
+    return res.json({
+      ok: true,
+      message: "Manutenção CRM executada.",
+      ...result,
+      compactMb: result.compact
+        ? Math.round((result.compact.bytesSavedTotal / (1024 * 1024)) * 100) / 100
+        : 0,
+    })
+  } catch (err) {
+    console.error("[admin] crm-storage:", err)
+    return res.status(500).json({
+      error: "MAINTENANCE_FAILED",
+      message: err?.message || "Falha na manutenção CRM.",
     })
   }
 })
