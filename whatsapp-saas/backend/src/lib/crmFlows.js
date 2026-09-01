@@ -15,7 +15,6 @@
  * - contact_reply exige tagIds e só roda em conversa já existente (!isNewConversation).
  */
 
-const CRM_FLOW_MAX_RUNS_PER_DAY = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 20)
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
 const { processPendingCrmDeliveries } = require("./crmDelivery")
 const { isFlowsStopped, isFlowsStoppedForContact, stopFlowsForContact } = require("./crmFlowStop")
@@ -204,11 +203,22 @@ async function isFlowOnCooldown(prisma, flow, conversationId) {
     if (recent > 0) return true
   }
 
-  const dayAgo = new Date(Date.now() - 24 * 3600 * 1000)
-  const runsToday = await prisma.crmFlowRun.count({
-    where: { flowId: flow.id, status: "ok", createdAt: { gte: dayAgo } },
-  })
-  return runsToday >= CRM_FLOW_MAX_RUNS_PER_DAY
+  // Teto global opcional (por fluxo/dia), ignorando testes manuais — padrão alto para não bloquear tráfego Meta.
+  const maxPerDay = Number(process.env.CRM_FLOW_MAX_RUNS_PER_DAY || 500)
+  if (maxPerDay > 0) {
+    const dayAgo = new Date(Date.now() - 24 * 3600 * 1000)
+    const runsToday = await prisma.crmFlowRun.count({
+      where: {
+        flowId: flow.id,
+        status: "ok",
+        createdAt: { gte: dayAgo },
+        NOT: { detail: { startsWith: "test:" } } },
+      },
+    })
+    if (runsToday >= maxPerDay) return true
+  }
+
+  return false
 }
 
 function deliveryDelayMs() {
