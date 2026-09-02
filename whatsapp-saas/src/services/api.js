@@ -1471,6 +1471,7 @@ export async function previewAnalysisRun({
   periodFrom,
   periodTo,
   maxConversations,
+  minMessages,
 } = {}) {
   if (resolveUseRealApi()) {
     const params = new URLSearchParams()
@@ -1479,6 +1480,7 @@ export async function previewAnalysisRun({
     if (periodFrom) params.set('periodFrom', periodFrom)
     if (periodTo) params.set('periodTo', periodTo)
     if (maxConversations) params.set('maxConversations', String(maxConversations))
+    if (minMessages) params.set('minMessages', String(minMessages))
     const qs = params.toString()
     return (await apiClient.get(`/crm/analysis/preview${qs ? `?${qs}` : ''}`)).data
   }

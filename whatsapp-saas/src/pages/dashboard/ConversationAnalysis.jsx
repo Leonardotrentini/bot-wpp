@@ -120,6 +120,7 @@ export function ConversationAnalysis() {
   const [dateFrom, setDateFrom] = useState(initialRange.dateFrom)
   const [dateTo, setDateTo] = useState(initialRange.dateTo)
   const [maxConversations, setMaxConversations] = useState('50')
+  const [minMessagesFilter, setMinMessagesFilter] = useState('4')
   const [preview, setPreview] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [run, setRun] = useState(null)
@@ -185,6 +186,12 @@ export function ConversationAnalysis() {
     return Math.min(500, Math.floor(n))
   }, [maxConversations])
 
+  const parsedMinMessages = useMemo(() => {
+    const n = Number(minMessagesFilter)
+    if (!Number.isFinite(n) || n < 2) return 2
+    return Math.min(50, Math.floor(n))
+  }, [minMessagesFilter])
+
   useEffect(() => {
     if (!profile?.id || !periodIso || !sellerIdsForRun.length) {
       setPreview(null)
@@ -200,6 +207,7 @@ export function ConversationAnalysis() {
           periodFrom: periodIso.periodFrom,
           periodTo: periodIso.periodTo,
           maxConversations: parsedMaxConversations,
+          minMessages: parsedMinMessages,
         })
         if (!cancelled) setPreview(data)
       } catch {
@@ -212,7 +220,7 @@ export function ConversationAnalysis() {
       cancelled = true
       clearTimeout(t)
     }
-  }, [profile?.id, periodIso, sellerIdsForRun, parsedMaxConversations])
+  }, [profile?.id, periodIso, sellerIdsForRun, parsedMaxConversations, parsedMinMessages])
 
   const applyPeriodPreset = (mode) => {
     setPeriodMode(mode)
@@ -303,6 +311,7 @@ export function ConversationAnalysis() {
         periodTo: periodIso.periodTo,
       }
       if (parsedMaxConversations) payload.maxConversations = parsedMaxConversations
+      payload.minMessages = parsedMinMessages
       const { run: started } = await startAnalysisRun(payload)
       setRun(started)
       setResults([])
@@ -517,6 +526,18 @@ export function ConversationAnalysis() {
                   />
                 </div>
                 <div>
+                  <label className="text-xs text-slate-500 block mb-1">Mín. mensagens</label>
+                  <input
+                    type="number"
+                    min={2}
+                    max={50}
+                    title="Conversas com menos mensagens humanas são ignoradas"
+                    className="w-28 rounded-md border border-white/10 bg-brand-900 px-2 py-1.5 text-sm text-white"
+                    value={minMessagesFilter}
+                    onChange={(e) => setMinMessagesFilter(e.target.value)}
+                  />
+                </div>
+                <div>
                   <label className="text-xs text-slate-500 block mb-1">Máx. conversas</label>
                   <input
                     type="number"
@@ -530,7 +551,8 @@ export function ConversationAnalysis() {
                 </div>
               </div>
               <p className="text-xs text-slate-500 mt-2">
-                Limite de até 500 conversas por execução. Deixe vazio ou 0 para analisar todas no período.
+                Só entram conversas com pelo menos o mínimo de mensagens (vendedor + cliente, sem bot/fluxo).
+                Limite de até 500 conversas por execução — deixe máx. vazio para analisar todas no período.
               </p>
             </div>
 
@@ -541,15 +563,17 @@ export function ConversationAnalysis() {
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Contando conversas…
                   </span>
                 ) : preview?.willAnalyze === 0 ? (
-                  'Nenhuma conversa elegível no período (mínimo 2 mensagens humanas).'
+                  `Nenhuma conversa elegível no período (mínimo ${preview?.minMessages ?? parsedMinMessages} mensagens humanas).`
                 ) : preview?.capped ? (
                   <>
                     <strong>{preview.willAnalyze}</strong> conversa(s) serão analisadas (de{' '}
-                    <strong>{preview.totalEligible}</strong> elegíveis no período).
+                    <strong>{preview.totalEligible}</strong> com ≥{preview.minMessages ?? parsedMinMessages} msgs no
+                    período).
                   </>
                 ) : (
                   <>
-                    <strong>{preview?.willAnalyze ?? 0}</strong> conversa(s) elegíveis serão analisadas.
+                    <strong>{preview?.willAnalyze ?? 0}</strong> conversa(s) com ≥
+                    {preview?.minMessages ?? parsedMinMessages} mensagens serão analisadas.
                   </>
                 )}
               </div>

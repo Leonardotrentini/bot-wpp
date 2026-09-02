@@ -86,6 +86,7 @@ function registerCrmAnalysisRoutes(router) {
       periodFrom: z.string().datetime().optional(),
       periodTo: z.string().datetime().optional(),
       maxConversations: z.coerce.number().int().min(1).max(500).optional(),
+      minMessages: z.coerce.number().int().min(2).max(50).optional(),
       profileId: z.string().optional(),
     })
     const parsed = schema.safeParse({
@@ -93,6 +94,7 @@ function registerCrmAnalysisRoutes(router) {
       periodFrom: req.query.periodFrom,
       periodTo: req.query.periodTo,
       maxConversations: req.query.maxConversations,
+      minMessages: req.query.minMessages,
       profileId: req.query.profileId,
     })
     if (!parsed.success) {
@@ -123,6 +125,7 @@ function registerCrmAnalysisRoutes(router) {
       })
       if (profile) minMessages = profile.minMessages || 2
     }
+    if (parsed.data.minMessages != null) minMessages = parsed.data.minMessages
 
     const { conversations, totalEligible } = await listConversationsForRun(prisma, {
       scopeUserIds: sellerIds,
@@ -137,6 +140,7 @@ function registerCrmAnalysisRoutes(router) {
       willAnalyze: conversations.length,
       capped: totalEligible > conversations.length,
       maxConversations: parsed.data.maxConversations ?? null,
+      minMessages,
     })
   })
 
@@ -252,6 +256,7 @@ function registerCrmAnalysisRoutes(router) {
       periodFrom: z.string().datetime().optional(),
       periodTo: z.string().datetime().optional(),
       maxConversations: z.number().int().min(1).max(500).optional(),
+      minMessages: z.number().int().min(2).max(50).optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
@@ -279,6 +284,7 @@ function registerCrmAnalysisRoutes(router) {
         periodFrom: parsed.data.periodFrom ? new Date(parsed.data.periodFrom) : null,
         periodTo: parsed.data.periodTo ? new Date(parsed.data.periodTo) : null,
         maxConversations: parsed.data.maxConversations ?? null,
+        minMessages: parsed.data.minMessages ?? null,
         status: "running",
       },
     })

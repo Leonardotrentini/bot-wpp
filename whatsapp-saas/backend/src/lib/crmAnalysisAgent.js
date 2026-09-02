@@ -280,7 +280,9 @@ async function listConversationsForRun(
     where.id = { in: conversationIds.map(String) }
   }
 
-  const fetchLimit = maxConversations > 0 ? Math.min(500, Math.max(50, maxConversations * 4)) : 500
+  const minMsg = Math.max(2, Number(minMessages) || 2)
+  const baseFetch = maxConversations > 0 ? Math.max(80, maxConversations * 5) : 500
+  const fetchLimit = Math.min(500, minMsg > 2 ? Math.max(baseFetch, baseFetch * 2) : baseFetch)
 
   const conversations = await prisma.crmConversation.findMany({
     where,
@@ -297,7 +299,7 @@ async function listConversationsForRun(
         source: { notIn: ["flow", "ai"] },
       },
     })
-    if (count >= minMessages) eligible.push(conv)
+    if (count >= minMsg) eligible.push(conv)
   }
 
   const totalEligible = eligible.length
@@ -333,7 +335,7 @@ async function processAnalysisRun(prisma, runId) {
       scopeUserIds: run.scopeUserIds,
       periodFrom: run.periodFrom,
       periodTo: run.periodTo,
-      minMessages: profile.minMessages || 2,
+      minMessages: run.minMessages ?? profile.minMessages ?? 2,
       maxConversations: run.maxConversations,
     })
 
@@ -462,6 +464,7 @@ function formatRunRow(row) {
     periodFrom: row.periodFrom?.toISOString?.() || null,
     periodTo: row.periodTo?.toISOString?.() || null,
     maxConversations: row.maxConversations ?? null,
+    minMessages: row.minMessages ?? null,
     status: row.status,
     totalConversations: row.totalConversations,
     doneConversations: row.doneConversations,

@@ -794,6 +794,7 @@ model CrmAnalysisRun {
   periodFrom         DateTime?
   periodTo           DateTime?
   maxConversations   Int?
+  minMessages        Int?
   status             String   @default("running") // running | done | error | cancelled
   totalConversations Int      @default(0)
   doneConversations  Int      @default(0)
