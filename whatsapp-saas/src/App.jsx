@@ -33,6 +33,13 @@ function AdminRoute({ children }) {
   return children
 }
 
+function AnalysisRoute({ children }) {
+  const { user, canAccessAnalysis } = useAuth()
+  if (!user) return <Navigate to="/login" replace />
+  if (!canAccessAnalysis) return <Navigate to="/dashboard" replace />
+  return children
+}
+
 function DashboardShell() {
   return (
     <SidebarProvider>
@@ -66,9 +73,9 @@ export default function App() {
         <Route
           path="analysis"
           element={
-            <AdminRoute>
+            <AnalysisRoute>
               <ConversationAnalysis />
-            </AdminRoute>
+            </AnalysisRoute>
           }
         />
         <Route path="automations" element={<Messages defaultTab="automacoes" />} />

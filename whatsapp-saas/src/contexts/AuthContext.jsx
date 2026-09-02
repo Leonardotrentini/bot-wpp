@@ -68,6 +68,8 @@ export function AuthProvider({ children }) {
       isImpersonating: Boolean(impersonation),
       isAuthenticated: !!user,
       isAdmin: user?.role === 'ADMIN' && !impersonation,
+      /** Análise IA: admin na própria conta ou visualizando conta de cliente */
+      canAccessAnalysis: user?.role === 'ADMIN' || Boolean(impersonation),
       org: user?.orgId ? { id: user.orgId, name: user.orgName || '' } : null,
       orgRole,
       isOrgOwner,

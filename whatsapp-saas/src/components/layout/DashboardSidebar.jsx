@@ -63,7 +63,7 @@ const navSections = [
 
 export function DashboardSidebar() {
   const { collapsed, setCollapsed } = useSidebar()
-  const { isAdmin, isOrgOwner, isOrgSeller } = useAuth()
+  const { isAdmin, isOrgOwner, isOrgSeller, canAccessAnalysis } = useAuth()
 
   const visibleSections = useMemo(() => {
     return navSections
@@ -72,11 +72,11 @@ export function DashboardSidebar() {
         ...section,
         items: section.items.filter(
           (item) =>
-            (!item.ownerOnly || isOrgOwner) && (!item.adminOnly || isAdmin),
+            (!item.ownerOnly || isOrgOwner) && (!item.adminOnly || canAccessAnalysis),
         ),
       }))
       .filter((section) => section.items.length > 0)
-  }, [isOrgOwner, isAdmin])
+  }, [isOrgOwner, canAccessAnalysis])
 
   return (
     <aside

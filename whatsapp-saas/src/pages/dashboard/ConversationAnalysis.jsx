@@ -81,7 +81,7 @@ function CriteriaEditor({ criteria, onChange }) {
 
 export function ConversationAnalysis() {
   const toast = useToast()
-  const { user, isOrgOwner } = useAuth()
+  const { user, isOrgOwner, isImpersonating, impersonation } = useAuth()
   const [aiOk, setAiOk] = useState(null)
   const [profiles, setProfiles] = useState([])
   const [profile, setProfile] = useState(null)
@@ -248,6 +248,13 @@ export function ConversationAnalysis() {
           </div>
         )}
       </div>
+
+      {isImpersonating && (
+        <div className="rounded-lg border border-accent-500/30 bg-accent-500/10 px-4 py-3 text-sm text-accent-100">
+          Modo admin — analisando o atendimento da conta{' '}
+          <strong>{impersonation?.name || user?.name}</strong>.
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-1 space-y-4 p-4">

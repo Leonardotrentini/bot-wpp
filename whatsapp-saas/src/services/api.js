@@ -23,6 +23,8 @@ apiClient.interceptors.request.use((config) => {
   config.baseURL = resolveApiBaseURL()
   const token = localStorage.getItem('vg_auth_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+  const adminToken = sessionStorage.getItem('vg_admin_token')
+  if (adminToken) config.headers['X-Vesto-Admin-Token'] = adminToken
   return config
 })
 
