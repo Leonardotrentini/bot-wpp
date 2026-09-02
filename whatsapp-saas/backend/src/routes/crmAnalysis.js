@@ -6,7 +6,12 @@ const { z } = require("zod")
 const { prisma } = require("../lib/prisma")
 const { readUserFilter, assertUserInScope } = require("../lib/orgScope")
 const { CONVERSATION_INCLUDE } = require("../lib/crmCore")
-const { DEFAULT_ANALYSIS_CRITERIA, DEFAULT_ANALYSIS_SYSTEM_PROMPT } = require("../lib/crmAnalysisDefaults")
+const {
+  DEFAULT_ANALYSIS_CRITERIA,
+  DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+  usesLegacyAnalysisCriteria,
+  defaultAnalysisProfileFields,
+} = require("../lib/crmAnalysisDefaults")
 const { requireAdminOrImpersonation } = require("../lib/adminAuth")
 const {
   aiConfigured,
@@ -79,7 +84,21 @@ function registerCrmAnalysisRoutes(router) {
       where: { userId: req.user.sub },
       orderBy: { updatedAt: "desc" },
     })
-    return res.json({ profiles: rows.map(formatProfileRow) })
+
+    const migrated = []
+    for (const row of rows) {
+      if (!usesLegacyAnalysisCriteria(row.criteria)) {
+        migrated.push(row)
+        continue
+      }
+      const updated = await prisma.crmAnalysisProfile.update({
+        where: { id: row.id },
+        data: defaultAnalysisProfileFields(),
+      })
+      migrated.push(updated)
+    }
+
+    return res.json({ profiles: migrated.map(formatProfileRow) })
   })
 
   router.post("/analysis/profiles", async (req, res) => {
@@ -110,18 +129,23 @@ function registerCrmAnalysisRoutes(router) {
     const existing = await prisma.crmAnalysisProfile.findFirst({
       where: { userId: req.user.sub, name: "Análise de vendas" },
     })
-    if (existing) return res.json({ profile: formatProfileRow(existing), created: false })
+    if (existing) {
+      if (usesLegacyAnalysisCriteria(existing.criteria)) {
+        const updated = await prisma.crmAnalysisProfile.update({
+          where: { id: existing.id },
+          data: defaultAnalysisProfileFields(),
+        })
+        return res.json({ profile: formatProfileRow(updated), created: false, migrated: true })
+      }
+      return res.json({ profile: formatProfileRow(existing), created: false })
+    }
 
     const row = await prisma.crmAnalysisProfile.create({
       data: {
         userId: req.user.sub,
         name: "Análise de vendas",
         enabled: true,
-        criteria: DEFAULT_ANALYSIS_CRITERIA,
-        systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
-        model: "gpt-4o-mini",
-        maxTokens: 2500,
-        temperature: 0.2,
+        ...defaultAnalysisProfileFields(),
       },
     })
     return res.status(201).json({ profile: formatProfileRow(row), created: true })

@@ -97,4 +97,40 @@ Responda SOMENTE em JSON válido, no idioma indicado pelo campo locale. Estrutur
   }
 }`
 
-module.exports = { DEFAULT_ANALYSIS_CRITERIA, DEFAULT_ANALYSIS_SYSTEM_PROMPT }
+/** IDs dos critérios do perfil legado (pré-atacado moda). */
+const LEGACY_CRITERION_IDS = new Set([
+  "rapport",
+  "diagnostico",
+  "diagnostico_descoberta",
+  "clareza",
+  "objecoes",
+  "fechamento",
+])
+
+function usesLegacyAnalysisCriteria(criteria) {
+  const list = Array.isArray(criteria) ? criteria : []
+  if (list.length !== DEFAULT_ANALYSIS_CRITERIA.length) return true
+  const ids = new Set(list.map((c) => String(c?.id || "")))
+  if (!ids.has("ponto_morte") || !ids.has("regra_ouro_perguntas")) return true
+  for (const id of LEGACY_CRITERION_IDS) {
+    if (ids.has(id)) return true
+  }
+  return false
+}
+
+function defaultAnalysisProfileFields() {
+  return {
+    criteria: DEFAULT_ANALYSIS_CRITERIA,
+    systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+    model: "gpt-4o-mini",
+    maxTokens: 2500,
+    temperature: 0.2,
+  }
+}
+
+module.exports = {
+  DEFAULT_ANALYSIS_CRITERIA,
+  DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+  usesLegacyAnalysisCriteria,
+  defaultAnalysisProfileFields,
+}
