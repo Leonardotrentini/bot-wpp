@@ -47,7 +47,7 @@ const navSections = [
       { to: '/dashboard/chat', label: 'Conversas', icon: MessageSquare },
       { to: '/dashboard/crm', label: 'CRM', icon: Kanban },
       { to: '/dashboard/sales', label: 'Vendas', icon: Receipt },
-      { to: '/dashboard/analysis', label: 'Análise IA', icon: Brain },
+      { to: '/dashboard/analysis', label: 'Análise IA', icon: Brain, adminOnly: true },
     ],
   },
   {
@@ -70,10 +70,13 @@ export function DashboardSidebar() {
       .filter((section) => !section.ownerOnly || isOrgOwner)
       .map((section) => ({
         ...section,
-        items: section.items.filter((item) => !item.ownerOnly || isOrgOwner),
+        items: section.items.filter(
+          (item) =>
+            (!item.ownerOnly || isOrgOwner) && (!item.adminOnly || isAdmin),
+        ),
       }))
       .filter((section) => section.items.length > 0)
-  }, [isOrgOwner])
+  }, [isOrgOwner, isAdmin])
 
   return (
     <aside

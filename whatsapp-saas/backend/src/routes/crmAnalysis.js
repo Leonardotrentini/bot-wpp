@@ -7,6 +7,7 @@ const { prisma } = require("../lib/prisma")
 const { readUserFilter, assertUserInScope } = require("../lib/orgScope")
 const { CONVERSATION_INCLUDE } = require("../lib/crmCore")
 const { DEFAULT_ANALYSIS_CRITERIA, DEFAULT_ANALYSIS_SYSTEM_PROMPT } = require("../lib/crmAnalysisDefaults")
+const { requireAdmin } = require("../lib/adminAuth")
 const {
   aiConfigured,
   scheduleAnalysisRun,
@@ -36,6 +37,8 @@ const profileSchema = z.object({
 })
 
 function registerCrmAnalysisRoutes(router) {
+  router.use("/analysis", requireAdmin)
+
   function resolveScopeUserIds(req, sellerUserIds) {
     const scope = req.dataScope
     const requested = Array.isArray(sellerUserIds) ? sellerUserIds.map(String).filter(Boolean) : []
@@ -225,7 +228,7 @@ function registerCrmAnalysisRoutes(router) {
     })
   })
 
-  router.get("/conversations/:id/analysis", async (req, res) => {
+  router.get("/conversations/:id/analysis", requireAdmin, async (req, res) => {
     const uf = readUserFilter(req.dataScope)
     const convo = await prisma.crmConversation.findFirst({
       where: { id: req.params.id, ...uf },

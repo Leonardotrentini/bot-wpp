@@ -63,7 +63,14 @@ export default function App() {
         <Route path="chat" element={<Chat />} />
         <Route path="crm" element={<Crm />} />
         <Route path="sales" element={<Sales />} />
-        <Route path="analysis" element={<ConversationAnalysis />} />
+        <Route
+          path="analysis"
+          element={
+            <AdminRoute>
+              <ConversationAnalysis />
+            </AdminRoute>
+          }
+        />
         <Route path="automations" element={<Messages defaultTab="automacoes" />} />
         <Route path="automations/library" element={<Messages defaultTab="criar" />} />
         <Route path="automations/cadences" element={<Messages defaultTab="cadencia" />} />
