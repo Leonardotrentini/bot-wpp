@@ -1437,6 +1437,11 @@ export async function getAnalysisStatus() {
   return { aiConfigured: false }
 }
 
+export async function fetchAnalysisDefaults() {
+  if (resolveUseRealApi()) return (await apiClient.get('/crm/analysis/defaults')).data
+  return { criteria: [], systemPrompt: '' }
+}
+
 export async function fetchAnalysisProfiles() {
   if (resolveUseRealApi()) return (await apiClient.get('/crm/analysis/profiles')).data
   return { profiles: [] }
@@ -1470,10 +1475,13 @@ export async function getAnalysisRun(runId) {
   return { run: null }
 }
 
-export async function getAnalysisRunResults(runId, { sellerUserId } = {}) {
+export async function getAnalysisRunResults(runId, { sellerUserId, limit } = {}) {
   if (resolveUseRealApi()) {
-    const params = sellerUserId ? `?sellerUserId=${encodeURIComponent(sellerUserId)}` : ''
-    return (await apiClient.get(`/crm/analysis/runs/${runId}/results${params}`)).data
+    const params = new URLSearchParams()
+    if (sellerUserId) params.set('sellerUserId', sellerUserId)
+    if (limit) params.set('limit', String(limit))
+    const qs = params.toString()
+    return (await apiClient.get(`/crm/analysis/runs/${runId}/results${qs ? `?${qs}` : ''}`)).data
   }
   return { run: null, results: [] }
 }

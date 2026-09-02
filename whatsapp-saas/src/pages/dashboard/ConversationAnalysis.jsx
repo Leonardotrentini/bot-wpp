@@ -12,6 +12,7 @@ import {
   Save,
   Plus,
   Trash2,
+  Download,
 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -27,7 +28,9 @@ import {
   getAnalysisRun,
   getAnalysisRunResults,
   fetchOrgMembers,
+  fetchAnalysisDefaults,
 } from '../../services/api.js'
+import { downloadGeneralReport, downloadSellerReport } from '../../lib/analysisReportExport.js'
 
 function ScoreBadge({ score }) {
   if (score == null) return <span className="text-slate-400">—</span>
@@ -94,6 +97,8 @@ export function ConversationAnalysis() {
   const [tab, setTab] = useState('summary')
   const [expandedId, setExpandedId] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [exportingGeneral, setExportingGeneral] = useState(false)
+  const [exportingSellerId, setExportingSellerId] = useState(null)
 
   const sellers = useMemo(() => {
     if (!isOrgOwner) return [{ userId: user?.id, name: user?.name || 'Você' }]
@@ -156,6 +161,17 @@ export function ConversationAnalysis() {
     }, 2500)
     return () => clearInterval(t)
   }, [run, toast])
+
+  const handleRestoreDefaults = async () => {
+    if (!profile) return
+    try {
+      const { criteria, systemPrompt } = await fetchAnalysisDefaults()
+      setProfile({ ...profile, criteria, systemPrompt })
+      toast.success('Critérios padrão carregados. Clique em Salvar para persistir.')
+    } catch {
+      toast.error('Falha ao carregar padrão.')
+    }
+  }
 
   const handleSaveProfile = async () => {
     if (!profile) return
@@ -220,6 +236,49 @@ export function ConversationAnalysis() {
   const narrative = run?.sellerSummaries?.narrative
   const sellerRows = run?.sellerSummaries?.sellers || []
   const orgIssues = run?.sellerSummaries?.orgTopIssues || []
+  const accountName = impersonation?.name || user?.name || null
+
+  const handleDownloadGeneral = async () => {
+    if (!run?.id) return
+    setExportingGeneral(true)
+    try {
+      const { results: allResults } = await getAnalysisRunResults(run.id, { limit: 500 })
+      downloadGeneralReport({
+        run,
+        profile,
+        results: allResults?.length ? allResults : results,
+        accountName,
+      })
+      toast.success('Relatório geral baixado.')
+    } catch {
+      toast.error('Falha ao gerar relatório.')
+    } finally {
+      setExportingGeneral(false)
+    }
+  }
+
+  const handleDownloadSeller = async (seller) => {
+    if (!run?.id || !seller?.userId) return
+    setExportingSellerId(seller.userId)
+    try {
+      const { results: sellerResults } = await getAnalysisRunResults(run.id, {
+        sellerUserId: seller.userId,
+        limit: 500,
+      })
+      downloadSellerReport({
+        run,
+        profile,
+        seller,
+        results: sellerResults || [],
+        accountName,
+      })
+      toast.success(`Relatório de ${seller.sellerName} baixado.`)
+    } catch {
+      toast.error('Falha ao gerar relatório.')
+    } finally {
+      setExportingSellerId(null)
+    }
+  }
 
   if (loading) {
     return (
@@ -278,15 +337,20 @@ export function ConversationAnalysis() {
                 onChange={(criteria) => setProfile({ ...profile, criteria })}
               />
               <textarea
-                className="w-full rounded-md border border-white/10 bg-brand-900 px-2 py-1.5 text-xs min-h-[80px]"
+                className="w-full rounded-md border border-white/10 bg-brand-900 px-2 py-1.5 text-xs min-h-[200px]"
                 value={profile.systemPrompt || ''}
                 onChange={(e) => setProfile({ ...profile, systemPrompt: e.target.value })}
                 placeholder="Instruções gerais para a IA auditora"
               />
-              <Button size="sm" onClick={handleSaveProfile} disabled={saving}>
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                <span className="ml-1">Salvar critérios</span>
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" type="button" onClick={handleRestoreDefaults}>
+                  Restaurar padrão atacado
+                </Button>
+                <Button size="sm" onClick={handleSaveProfile} disabled={saving}>
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  <span className="ml-1">Salvar critérios</span>
+                </Button>
+              </div>
             </>
           )}
         </Card>
@@ -357,21 +421,37 @@ export function ConversationAnalysis() {
 
       {run?.status === 'done' && (
         <>
-          <div className="flex gap-2 border-b border-white/10 pb-2">
-            <button
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-2">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-sm rounded-md ${tab === 'summary' ? 'bg-accent-500/20 text-accent-100' : 'text-slate-400'}`}
+                onClick={() => setTab('summary')}
+              >
+                Resumo geral
+              </button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-sm rounded-md ${tab === 'conversations' ? 'bg-accent-500/20 text-accent-100' : 'text-slate-400'}`}
+                onClick={() => setTab('conversations')}
+              >
+                Por conversa ({results.length})
+              </button>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
               type="button"
-              className={`px-3 py-1.5 text-sm rounded-md ${tab === 'summary' ? 'bg-accent-500/20 text-accent-100' : 'text-slate-400'}`}
-              onClick={() => setTab('summary')}
+              onClick={handleDownloadGeneral}
+              disabled={exportingGeneral}
             >
-              Resumo geral
-            </button>
-            <button
-              type="button"
-              className={`px-3 py-1.5 text-sm rounded-md ${tab === 'conversations' ? 'bg-accent-500/20 text-accent-100' : 'text-slate-400'}`}
-              onClick={() => setTab('conversations')}
-            >
-              Por conversa ({results.length})
-            </button>
+              {exportingGeneral ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              ) : (
+                <Download className="h-4 w-4 mr-1" />
+              )}
+              Baixar relatório geral
+            </Button>
           </div>
 
           {tab === 'summary' && (
@@ -401,9 +481,26 @@ export function ConversationAnalysis() {
               <div className="grid gap-4 md:grid-cols-2">
                 {sellerRows.map((s) => (
                   <Card key={s.userId} className="p-4">
-                    <div className="flex justify-between items-start mb-2">
+                    <div className="flex justify-between items-start mb-2 gap-2">
                       <h4 className="font-medium text-white">{s.sellerName}</h4>
-                      <ScoreBadge score={s.overallAvg} />
+                      <div className="flex items-center gap-2 shrink-0">
+                        <ScoreBadge score={s.overallAvg} />
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          type="button"
+                          title="Baixar relatório individual"
+                          aria-label={`Baixar relatório de ${s.sellerName}`}
+                          onClick={() => handleDownloadSeller(s)}
+                          disabled={exportingSellerId === s.userId}
+                        >
+                          {exportingSellerId === s.userId ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Download className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                     <p className="text-xs text-slate-500 mb-2">{s.conversationCount} conversa(s) analisada(s)</p>
                     {s.topFailureAreas?.length > 0 && (
@@ -447,8 +544,32 @@ export function ConversationAnalysis() {
                     <p className="mt-2 text-sm text-slate-400 line-clamp-2">{r.summary}</p>
                   </button>
                   {expandedId === r.id && (
-                    <div className="mt-4 pt-4 border-t border-white/10 space-y-3 text-sm">
-                      <p className="text-slate-300">{r.summary}</p>
+                    <div className="mt-4 pt-4 border-t border-white/10 space-y-4 text-sm">
+                      {r.resumoGeral?.momentoCritico && (
+                        <div className="rounded-md border border-amber-500/20 bg-amber-500/10 p-3">
+                          <p className="text-xs uppercase text-amber-200/80 mb-1">Momento crítico</p>
+                          <p className="text-slate-200">{r.resumoGeral.momentoCritico}</p>
+                        </div>
+                      )}
+                      {r.resumoGeral?.acaoPrioritaria && (
+                        <div className="rounded-md border border-accent-500/20 bg-accent-500/10 p-3">
+                          <p className="text-xs uppercase text-accent-200/80 mb-1">Ação prioritária</p>
+                          <p className="text-slate-200">{r.resumoGeral.acaoPrioritaria}</p>
+                        </div>
+                      )}
+                      {!r.resumoGeral?.momentoCritico && r.summary && (
+                        <p className="text-slate-300">{r.summary}</p>
+                      )}
+                      {r.strengths?.length > 0 && (
+                        <div>
+                          <p className="text-xs uppercase text-slate-500 mb-1">Pontos fortes</p>
+                          <ul className="list-disc pl-4 text-emerald-300/90">
+                            {r.strengths.map((w, i) => (
+                              <li key={i}>{w}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                       {r.weaknesses?.length > 0 && (
                         <div>
                           <p className="text-xs uppercase text-slate-500 mb-1">Pontos fracos</p>
@@ -459,15 +580,47 @@ export function ConversationAnalysis() {
                           </ul>
                         </div>
                       )}
+                      {r.scores && Object.keys(r.scores).length > 0 && (
+                        <div>
+                          <p className="text-xs uppercase text-slate-500 mb-2">Notas por critério</p>
+                          <ul className="space-y-1">
+                            {(profile?.criteria || []).map((c) => {
+                              const nota = r.scores[c.id]
+                              if (nota == null) return null
+                              return (
+                                <li key={c.id} className="flex justify-between text-slate-300">
+                                  <span>{c.label}</span>
+                                  <ScoreBadge score={nota} />
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        </div>
+                      )}
                       {r.failures?.length > 0 && (
                         <div>
-                          <p className="text-xs uppercase text-slate-500 mb-1">Falhas identificadas</p>
-                          <ul className="space-y-2">
+                          <p className="text-xs uppercase text-slate-500 mb-2">Análise por critério</p>
+                          <ul className="space-y-3">
                             {r.failures.map((f, i) => (
-                              <li key={i} className="rounded-md bg-rose-500/10 border border-rose-500/20 p-2">
-                                <p className="text-rose-200">{f.issue}</p>
-                                {f.quote && <p className="text-slate-500 italic mt-1">&ldquo;{f.quote}&rdquo;</p>}
-                                {f.suggestion && <p className="text-emerald-300/90 mt-1">→ {f.suggestion}</p>}
+                              <li key={i} className="rounded-md bg-white/5 border border-white/10 p-3">
+                                <div className="flex justify-between items-start gap-2 mb-1">
+                                  <p className="font-medium text-white">{f.criterionName || f.criterionId}</p>
+                                  {f.nota != null && <ScoreBadge score={f.nota} />}
+                                </div>
+                                {f.issue && <p className="text-slate-300">{f.issue}</p>}
+                                {f.positiveQuote && (
+                                  <p className="text-emerald-300/90 italic mt-2 text-xs">
+                                    ✓ &ldquo;{f.positiveQuote}&rdquo;
+                                  </p>
+                                )}
+                                {f.quote && (
+                                  <p className="text-rose-300/90 italic mt-1 text-xs">
+                                    ✗ &ldquo;{f.quote}&rdquo;
+                                  </p>
+                                )}
+                                {f.suggestion && (
+                                  <p className="text-accent-300/90 mt-2 text-xs">→ {f.suggestion}</p>
+                                )}
                               </li>
                             ))}
                           </ul>

@@ -46,7 +46,7 @@ function buildSellerSummaries(analyses, criteria, sellerNames = {}) {
       bucket.scoresCount[k] = (bucket.scoresCount[k] || 0) + 1
     }
 
-    const failures = Array.isArray(row.failures) ? row.failures : []
+    const failures = Array.isArray(row.failures) ? row.failures.filter((f) => f?.criterionId !== "_resumo") : []
     for (const f of failures) {
       bucket.failures.push({ ...f, conversationId: row.conversationId })
     }

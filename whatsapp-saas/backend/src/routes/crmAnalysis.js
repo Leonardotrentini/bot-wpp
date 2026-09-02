@@ -67,6 +67,13 @@ function registerCrmAnalysisRoutes(router) {
     return res.json({ aiConfigured: aiConfigured() })
   })
 
+  router.get("/analysis/defaults", async (_req, res) => {
+    return res.json({
+      criteria: DEFAULT_ANALYSIS_CRITERIA,
+      systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+    })
+  })
+
   router.get("/analysis/profiles", async (req, res) => {
     const rows = await prisma.crmAnalysisProfile.findMany({
       where: { userId: req.user.sub },
@@ -90,7 +97,7 @@ function registerCrmAnalysisRoutes(router) {
         systemPrompt: data.systemPrompt,
         model: data.model || "gpt-4o-mini",
         temperature: data.temperature ?? 0.2,
-        maxTokens: data.maxTokens ?? 1200,
+        maxTokens: data.maxTokens ?? 2500,
         minMessages: data.minMessages ?? 2,
         maxMessages: data.maxMessages ?? 80,
         locale: data.locale || "pt-BR",
@@ -212,7 +219,7 @@ function registerCrmAnalysisRoutes(router) {
     const rows = await prisma.crmConversationAnalysis.findMany({
       where,
       orderBy: { analyzedAt: "desc" },
-      take: Math.min(200, Number(req.query.limit) || 100),
+      take: Math.min(500, Number(req.query.limit) || 100),
     })
 
     const convIds = [...new Set(rows.map((r) => r.conversationId))]

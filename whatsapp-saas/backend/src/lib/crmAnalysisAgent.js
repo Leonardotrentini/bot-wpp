@@ -55,42 +55,91 @@ function buildAnalysisPrompt(profile, transcript, contactName) {
 LOCALE: ${profile.locale || "pt-BR"}
 CONTATO: ${contactName || "Lead"}
 
-CRITÉRIOS (avalie cada um de 1 a 5):
+CRITÉRIOS (use exatamente estes nomes no campo "nome" de cada item em "criterios"):
 ${criteriaBlock}
 
 TRANSCRITO DA CONVERSA:
-${transcript}
-
-Responda em JSON com esta estrutura exata:
-{
-  "scores": { "<criterionId>": <number 1-5> },
-  "overallScore": <number 1-5>,
-  "summary": "<resumo detalhado da conversa em 3-6 frases>",
-  "strengths": ["<ponto forte 1>", "..."],
-  "weaknesses": ["<ponto fraco 1>", "..."],
-  "failures": [
-    {
-      "criterionId": "<id do critério>",
-      "issue": "<descrição da falha>",
-      "quote": "<trecho relevante ou vazio>",
-      "suggestion": "<como melhorar>"
-    }
-  ]
-}`
+${transcript}`
 }
 
-function parseAnalysisJson(content, criteria) {
-  let parsed = {}
-  try {
-    const cleaned = String(content || "")
-      .replace(/^```json\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim()
-    parsed = JSON.parse(cleaned)
-  } catch {
-    parsed = { summary: String(content || "").slice(0, 4000), scores: {}, failures: [] }
+function resolveCriterionId(criteria, nome, index) {
+  const list = Array.isArray(criteria) ? criteria : []
+  const norm = String(nome || "")
+    .trim()
+    .toLowerCase()
+  const byLabel = list.find((c) => String(c.label || "").trim().toLowerCase() === norm)
+  if (byLabel?.id) return String(byLabel.id)
+  if (list[index]?.id) return String(list[index].id)
+  return `criterio_${index + 1}`
+}
+
+function parseNota(value) {
+  if (value == null) return null
+  const raw = String(value).trim().toUpperCase()
+  if (raw === "N/A" || raw === "NA") return null
+  const n = Number(value)
+  if (!Number.isFinite(n)) return null
+  return Math.min(5, Math.max(1, Math.round(n * 10) / 10))
+}
+
+function parseNewFormat(parsed, criteria) {
+  const criterios = Array.isArray(parsed.criterios) ? parsed.criterios : []
+  const resumo = parsed.resumo_geral && typeof parsed.resumo_geral === "object" ? parsed.resumo_geral : {}
+
+  const scores = {}
+  const failures = []
+
+  criterios.forEach((c, index) => {
+    const criterionId = resolveCriterionId(criteria, c.nome, index)
+    const nota = parseNota(c.nota)
+    if (nota != null) scores[criterionId] = nota
+
+    failures.push({
+      criterionId,
+      criterionName: String(c.nome || "").slice(0, 120),
+      nota,
+      issue: String(c.analise || "").slice(0, 2000),
+      quote: c.exemplo_negativo ? String(c.exemplo_negativo).slice(0, 300) : null,
+      positiveQuote: c.exemplo_positivo ? String(c.exemplo_positivo).slice(0, 300) : null,
+      suggestion: c.sugestao ? String(c.sugestao).slice(0, 500) : null,
+    })
+  })
+
+  let overallScore = parseNota(resumo.nota_final)
+  if (overallScore == null) {
+    const vals = Object.values(scores).filter((n) => Number.isFinite(Number(n)))
+    overallScore = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 : null
   }
 
+  const strengths = Array.isArray(resumo.pontos_fortes)
+    ? resumo.pontos_fortes.map(String).filter(Boolean).slice(0, 8)
+    : []
+  const weaknesses = Array.isArray(resumo.pontos_fracos)
+    ? resumo.pontos_fracos.map(String).filter(Boolean).slice(0, 8)
+    : []
+
+  const summaryParts = []
+  if (resumo.momento_critico) summaryParts.push(String(resumo.momento_critico).trim())
+  if (resumo.acao_prioritaria) {
+    summaryParts.push(`Ação prioritária: ${String(resumo.acao_prioritaria).trim()}`)
+  }
+  const summary = summaryParts.join("\n\n") || "Análise sem resumo."
+
+  return {
+    scores,
+    overallScore,
+    summary,
+    strengths,
+    weaknesses,
+    failures,
+    resumoGeral: {
+      momentoCritico: resumo.momento_critico ? String(resumo.momento_critico) : null,
+      acaoPrioritaria: resumo.acao_prioritaria ? String(resumo.acao_prioritaria) : null,
+    },
+  }
+}
+
+function parseLegacyFormat(parsed, criteria) {
   const scores = parsed.scores && typeof parsed.scores === "object" ? parsed.scores : {}
   for (const c of criteria || []) {
     const id = String(c.id || "")
@@ -114,11 +163,30 @@ function parseAnalysisJson(content, criteria) {
       ? parsed.failures.slice(0, 12).map((f) => ({
           criterionId: String(f.criterionId || f.criterion || ""),
           issue: String(f.issue || f.description || "").slice(0, 500),
-          quote: String(f.quote || "").slice(0, 300),
-          suggestion: String(f.suggestion || "").slice(0, 500),
+          quote: f.quote ? String(f.quote).slice(0, 300) : null,
+          suggestion: f.suggestion ? String(f.suggestion).slice(0, 500) : null,
         }))
       : [],
+    resumoGeral: null,
   }
+}
+
+function parseAnalysisJson(content, criteria) {
+  let parsed = {}
+  try {
+    const cleaned = String(content || "")
+      .replace(/^```json\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim()
+    parsed = JSON.parse(cleaned)
+  } catch {
+    parsed = { summary: String(content || "").slice(0, 4000), scores: {}, failures: [] }
+  }
+
+  if (Array.isArray(parsed.criterios) || parsed.resumo_geral) {
+    return parseNewFormat(parsed, criteria)
+  }
+  return parseLegacyFormat(parsed, criteria)
 }
 
 async function analyzeOneConversation(prisma, profile, conversation) {
@@ -140,7 +208,7 @@ async function analyzeOneConversation(prisma, profile, conversation) {
   const completion = await callChatCompletion({
     model: profile.model || "gpt-4o-mini",
     temperature: profile.temperature ?? 0.2,
-    maxTokens: profile.maxTokens || 1200,
+    maxTokens: profile.maxTokens || 2500,
     responseFormat: { type: "json_object" },
     messages: [
       { role: "system", content: "Você retorna apenas JSON válido para análise de vendas." },
@@ -150,6 +218,13 @@ async function analyzeOneConversation(prisma, profile, conversation) {
 
   const criteria = Array.isArray(profile.criteria) ? profile.criteria : []
   const parsed = parseAnalysisJson(completion.content, criteria)
+  const failuresToStore = [...parsed.failures]
+  if (parsed.resumoGeral?.momentoCritico || parsed.resumoGeral?.acaoPrioritaria) {
+    failuresToStore.push({
+      criterionId: "_resumo",
+      resumoGeral: parsed.resumoGeral,
+    })
+  }
   const lastTs = msgs[msgs.length - 1]?.timestamp
   const aggregateKey = buildAggregateKey(conversation, msgs.length, lastTs)
 
@@ -167,7 +242,7 @@ async function analyzeOneConversation(prisma, profile, conversation) {
       conversationId: conversation.id,
       messageCount: msgs.length,
       scores: parsed.scores,
-      failures: parsed.failures,
+      failures: failuresToStore,
       summary: parsed.summary,
       strengths: parsed.strengths,
       weaknesses: parsed.weaknesses,
@@ -177,7 +252,7 @@ async function analyzeOneConversation(prisma, profile, conversation) {
     update: {
       messageCount: msgs.length,
       scores: parsed.scores,
-      failures: parsed.failures,
+      failures: failuresToStore,
       summary: parsed.summary,
       strengths: parsed.strengths,
       weaknesses: parsed.weaknesses,
@@ -341,6 +416,9 @@ function formatProfileRow(row) {
 }
 
 function formatAnalysisRow(row, conversation) {
+  const allFailures = Array.isArray(row.failures) ? row.failures : []
+  const meta = allFailures.find((f) => f?.criterionId === "_resumo")
+  const failures = allFailures.filter((f) => f?.criterionId !== "_resumo")
   return {
     id: row.id,
     runId: row.runId,
@@ -349,11 +427,12 @@ function formatAnalysisRow(row, conversation) {
     conversationId: row.conversationId,
     messageCount: row.messageCount,
     scores: row.scores,
-    failures: row.failures,
+    failures,
     summary: row.summary,
     strengths: row.strengths,
     weaknesses: row.weaknesses,
     overallScore: row.overallScore,
+    resumoGeral: meta?.resumoGeral || null,
     analyzedAt: row.analyzedAt?.toISOString?.() || row.analyzedAt,
     contactName:
       conversation?.contact?.savedName ||
