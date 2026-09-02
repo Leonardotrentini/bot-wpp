@@ -19,6 +19,7 @@ const {
   formatProfileRow,
   formatAnalysisRow,
   formatRunRow,
+  listConversationsForRun,
 } = require("../lib/crmAnalysisAgent")
 
 const criterionSchema = z.object({
@@ -76,6 +77,66 @@ function registerCrmAnalysisRoutes(router) {
     return res.json({
       criteria: DEFAULT_ANALYSIS_CRITERIA,
       systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+    })
+  })
+
+  router.get("/analysis/preview", async (req, res) => {
+    const schema = z.object({
+      sellerUserIds: z.union([z.string(), z.array(z.string())]).optional(),
+      periodFrom: z.string().datetime().optional(),
+      periodTo: z.string().datetime().optional(),
+      maxConversations: z.coerce.number().int().min(1).max(500).optional(),
+      profileId: z.string().optional(),
+    })
+    const parsed = schema.safeParse({
+      sellerUserIds: req.query.sellerUserIds,
+      periodFrom: req.query.periodFrom,
+      periodTo: req.query.periodTo,
+      maxConversations: req.query.maxConversations,
+      profileId: req.query.profileId,
+    })
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Parâmetros inválidos." })
+    }
+
+    let sellerIds
+    const raw = parsed.data.sellerUserIds
+    const sellerUserIds = Array.isArray(raw)
+      ? raw
+      : raw
+        ? String(raw)
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : []
+    try {
+      sellerIds = resolveScopeUserIds(req, sellerUserIds.length ? sellerUserIds : undefined)
+    } catch (err) {
+      if (err.code === "FORBIDDEN") return res.status(403).json({ error: err.code, message: err.message })
+      throw err
+    }
+
+    let minMessages = 2
+    if (parsed.data.profileId) {
+      const profile = await prisma.crmAnalysisProfile.findFirst({
+        where: { id: parsed.data.profileId, userId: req.user.sub },
+      })
+      if (profile) minMessages = profile.minMessages || 2
+    }
+
+    const { conversations, totalEligible } = await listConversationsForRun(prisma, {
+      scopeUserIds: sellerIds,
+      periodFrom: parsed.data.periodFrom ? new Date(parsed.data.periodFrom) : null,
+      periodTo: parsed.data.periodTo ? new Date(parsed.data.periodTo) : null,
+      minMessages,
+      maxConversations: parsed.data.maxConversations,
+    })
+
+    return res.json({
+      totalEligible,
+      willAnalyze: conversations.length,
+      capped: totalEligible > conversations.length,
+      maxConversations: parsed.data.maxConversations ?? null,
     })
   })
 
@@ -190,6 +251,7 @@ function registerCrmAnalysisRoutes(router) {
       sellerUserIds: z.array(z.string()).optional(),
       periodFrom: z.string().datetime().optional(),
       periodTo: z.string().datetime().optional(),
+      maxConversations: z.number().int().min(1).max(500).optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
@@ -216,6 +278,7 @@ function registerCrmAnalysisRoutes(router) {
         scopeUserIds,
         periodFrom: parsed.data.periodFrom ? new Date(parsed.data.periodFrom) : null,
         periodTo: parsed.data.periodTo ? new Date(parsed.data.periodTo) : null,
+        maxConversations: parsed.data.maxConversations ?? null,
         status: "running",
       },
     })

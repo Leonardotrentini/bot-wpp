@@ -264,7 +264,10 @@ async function analyzeOneConversation(prisma, profile, conversation) {
   return { skipped: false, analysis: row, messageCount: msgs.length }
 }
 
-async function listConversationsForRun(prisma, { scopeUserIds, periodFrom, periodTo, conversationIds, minMessages = 2 }) {
+async function listConversationsForRun(
+  prisma,
+  { scopeUserIds, periodFrom, periodTo, conversationIds, minMessages = 2, maxConversations },
+) {
   const where = {
     userId: scopeUserIds.length === 1 ? scopeUserIds[0] : { in: scopeUserIds },
   }
@@ -277,11 +280,13 @@ async function listConversationsForRun(prisma, { scopeUserIds, periodFrom, perio
     where.id = { in: conversationIds.map(String) }
   }
 
+  const fetchLimit = maxConversations > 0 ? Math.min(500, Math.max(50, maxConversations * 4)) : 500
+
   const conversations = await prisma.crmConversation.findMany({
     where,
     include: CONVERSATION_INCLUDE,
     orderBy: { lastMessageAt: "desc" },
-    take: 500,
+    take: fetchLimit,
   })
 
   const eligible = []
@@ -294,7 +299,12 @@ async function listConversationsForRun(prisma, { scopeUserIds, periodFrom, perio
     })
     if (count >= minMessages) eligible.push(conv)
   }
-  return eligible
+
+  const totalEligible = eligible.length
+  const limited =
+    maxConversations > 0 ? eligible.slice(0, Math.min(500, maxConversations)) : eligible
+
+  return { conversations: limited, totalEligible }
 }
 
 const activeRuns = new Set()
@@ -319,11 +329,12 @@ async function processAnalysisRun(prisma, runId) {
       return
     }
 
-    const conversations = await listConversationsForRun(prisma, {
+    const { conversations } = await listConversationsForRun(prisma, {
       scopeUserIds: run.scopeUserIds,
       periodFrom: run.periodFrom,
       periodTo: run.periodTo,
       minMessages: profile.minMessages || 2,
+      maxConversations: run.maxConversations,
     })
 
     await prisma.crmAnalysisRun.update({
@@ -450,6 +461,7 @@ function formatRunRow(row) {
     scopeUserIds: row.scopeUserIds,
     periodFrom: row.periodFrom?.toISOString?.() || null,
     periodTo: row.periodTo?.toISOString?.() || null,
+    maxConversations: row.maxConversations ?? null,
     status: row.status,
     totalConversations: row.totalConversations,
     doneConversations: row.doneConversations,

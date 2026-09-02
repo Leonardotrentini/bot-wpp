@@ -29,8 +29,32 @@ import {
   getAnalysisRunResults,
   fetchOrgMembers,
   fetchAnalysisDefaults,
+  previewAnalysisRun,
 } from '../../services/api.js'
 import { downloadGeneralReport, downloadSellerReport } from '../../lib/analysisReportExport.js'
+
+function formatYmd(date) {
+  const d = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toISOString().slice(0, 10)
+}
+
+function presetRange(days) {
+  const to = new Date()
+  const from = new Date(Date.now() - days * 86400000)
+  return { dateFrom: formatYmd(from), dateTo: formatYmd(to) }
+}
+
+function toPeriodIso(dateFrom, dateTo) {
+  if (!dateFrom || !dateTo) return null
+  const fromTs = new Date(`${dateFrom}T00:00:00`).getTime()
+  const toTs = new Date(`${dateTo}T23:59:59.999`).getTime()
+  if (Number.isNaN(fromTs) || Number.isNaN(toTs) || fromTs > toTs) return null
+  return {
+    periodFrom: new Date(fromTs).toISOString(),
+    periodTo: new Date(toTs).toISOString(),
+  }
+}
 
 function ScoreBadge({ score }) {
   if (score == null) return <span className="text-slate-400">—</span>
@@ -91,7 +115,13 @@ export function ConversationAnalysis() {
   const [saving, setSaving] = useState(false)
   const [members, setMembers] = useState([])
   const [selectedSellers, setSelectedSellers] = useState([])
-  const [periodDays, setPeriodDays] = useState('30')
+  const initialRange = presetRange(7)
+  const [periodMode, setPeriodMode] = useState('7')
+  const [dateFrom, setDateFrom] = useState(initialRange.dateFrom)
+  const [dateTo, setDateTo] = useState(initialRange.dateTo)
+  const [maxConversations, setMaxConversations] = useState('50')
+  const [preview, setPreview] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const [run, setRun] = useState(null)
   const [results, setResults] = useState([])
   const [tab, setTab] = useState('summary')
@@ -141,6 +171,56 @@ export function ConversationAnalysis() {
   useEffect(() => {
     if (!isOrgOwner && user?.id) setSelectedSellers([user.id])
   }, [isOrgOwner, user?.id])
+
+  const sellerIdsForRun = useMemo(
+    () => (isOrgOwner ? selectedSellers : user?.id ? [user.id] : []),
+    [isOrgOwner, selectedSellers, user?.id],
+  )
+
+  const periodIso = useMemo(() => toPeriodIso(dateFrom, dateTo), [dateFrom, dateTo])
+
+  const parsedMaxConversations = useMemo(() => {
+    const n = Number(maxConversations)
+    if (!maxConversations.trim() || !Number.isFinite(n) || n < 1) return undefined
+    return Math.min(500, Math.floor(n))
+  }, [maxConversations])
+
+  useEffect(() => {
+    if (!profile?.id || !periodIso || !sellerIdsForRun.length) {
+      setPreview(null)
+      return undefined
+    }
+    let cancelled = false
+    const t = setTimeout(async () => {
+      setPreviewLoading(true)
+      try {
+        const data = await previewAnalysisRun({
+          profileId: profile.id,
+          sellerUserIds: sellerIdsForRun,
+          periodFrom: periodIso.periodFrom,
+          periodTo: periodIso.periodTo,
+          maxConversations: parsedMaxConversations,
+        })
+        if (!cancelled) setPreview(data)
+      } catch {
+        if (!cancelled) setPreview(null)
+      } finally {
+        if (!cancelled) setPreviewLoading(false)
+      }
+    }, 450)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [profile?.id, periodIso, sellerIdsForRun, parsedMaxConversations])
+
+  const applyPeriodPreset = (mode) => {
+    setPeriodMode(mode)
+    if (mode === 'custom') return
+    const range = presetRange(Number(mode) || 7)
+    setDateFrom(range.dateFrom)
+    setDateTo(range.dateTo)
+  }
 
   useEffect(() => {
     if (!run?.id || run.status !== 'running') return undefined
@@ -203,25 +283,33 @@ export function ConversationAnalysis() {
       toast.error('IA não configurada no servidor (OPENAI_API_KEY).')
       return
     }
-    const sellerIds = isOrgOwner ? selectedSellers : [user.id]
-    if (isOrgOwner && !sellerIds.length) {
+    if (!sellerIdsForRun.length) {
       toast.error('Selecione ao menos um vendedor.')
       return
     }
-    const days = Number(periodDays) || 30
-    const periodTo = new Date().toISOString()
-    const periodFrom = new Date(Date.now() - days * 86400000).toISOString()
+    if (!periodIso) {
+      toast.error('Informe um período válido (data inicial e final).')
+      return
+    }
+    if (preview && preview.willAnalyze === 0) {
+      toast.error('Nenhuma conversa elegível no período selecionado.')
+      return
+    }
     try {
-      const { run: started } = await startAnalysisRun({
+      const payload = {
         profileId: profile.id,
-        sellerUserIds: sellerIds,
-        periodFrom,
-        periodTo,
-      })
+        sellerUserIds: sellerIdsForRun,
+        periodFrom: periodIso.periodFrom,
+        periodTo: periodIso.periodTo,
+      }
+      if (parsedMaxConversations) payload.maxConversations = parsedMaxConversations
+      const { run: started } = await startAnalysisRun(payload)
       setRun(started)
       setResults([])
       setTab('summary')
-      toast.info('Análise iniciada — isso pode levar alguns minutos.')
+      toast.info(
+        `Análise iniciada — ${preview?.willAnalyze ?? '…'} conversa(s). Isso pode levar alguns minutos.`,
+      )
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Falha ao iniciar análise.')
     }
@@ -379,16 +467,98 @@ export function ConversationAnalysis() {
             </div>
           )}
 
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-3">
             <div>
               <label className="text-xs text-slate-500 block mb-1">Período</label>
-              <Select value={periodDays} onChange={(e) => setPeriodDays(e.target.value)}>
-                <option value="7">Últimos 7 dias</option>
-                <option value="30">Últimos 30 dias</option>
-                <option value="90">Últimos 90 dias</option>
-              </Select>
+              <div className="flex flex-wrap gap-2 mb-2">
+                {[
+                  { id: '7', label: '7 dias' },
+                  { id: '30', label: '30 dias' },
+                  { id: '90', label: '90 dias' },
+                  { id: 'custom', label: 'Personalizado' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => applyPeriodPreset(opt.id)}
+                    className={`rounded-full px-3 py-1 text-sm border transition ${
+                      periodMode === opt.id
+                        ? 'border-accent-400 bg-accent-500/20 text-accent-100'
+                        : 'border-white/10 text-slate-400 hover:border-white/20'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 block mb-1">De</label>
+                  <input
+                    type="date"
+                    className="rounded-md border border-white/10 bg-brand-900 px-2 py-1.5 text-sm text-white"
+                    value={dateFrom}
+                    onChange={(e) => {
+                      setDateFrom(e.target.value)
+                      setPeriodMode('custom')
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 block mb-1">Até</label>
+                  <input
+                    type="date"
+                    className="rounded-md border border-white/10 bg-brand-900 px-2 py-1.5 text-sm text-white"
+                    value={dateTo}
+                    onChange={(e) => {
+                      setDateTo(e.target.value)
+                      setPeriodMode('custom')
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 block mb-1">Máx. conversas</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    placeholder="Todas"
+                    className="w-28 rounded-md border border-white/10 bg-brand-900 px-2 py-1.5 text-sm text-white"
+                    value={maxConversations}
+                    onChange={(e) => setMaxConversations(e.target.value)}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Limite de até 500 conversas por execução. Deixe vazio ou 0 para analisar todas no período.
+              </p>
             </div>
-            <Button onClick={handleRun} disabled={!aiOk || run?.status === 'running'}>
+
+            {(previewLoading || preview) && (
+              <div className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-300">
+                {previewLoading ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Contando conversas…
+                  </span>
+                ) : preview?.willAnalyze === 0 ? (
+                  'Nenhuma conversa elegível no período (mínimo 2 mensagens humanas).'
+                ) : preview?.capped ? (
+                  <>
+                    <strong>{preview.willAnalyze}</strong> conversa(s) serão analisadas (de{' '}
+                    <strong>{preview.totalEligible}</strong> elegíveis no período).
+                  </>
+                ) : (
+                  <>
+                    <strong>{preview?.willAnalyze ?? 0}</strong> conversa(s) elegíveis serão analisadas.
+                  </>
+                )}
+              </div>
+            )}
+
+            <Button
+              onClick={handleRun}
+              disabled={!aiOk || run?.status === 'running' || previewLoading || !periodIso}
+            >
               {run?.status === 'running' ? (
                 <Loader2 className="h-4 w-4 animate-spin mr-1" />
               ) : (

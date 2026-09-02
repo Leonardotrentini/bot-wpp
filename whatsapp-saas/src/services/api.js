@@ -1465,6 +1465,26 @@ export async function deleteAnalysisProfile(id) {
   return { ok: true }
 }
 
+export async function previewAnalysisRun({
+  profileId,
+  sellerUserIds,
+  periodFrom,
+  periodTo,
+  maxConversations,
+} = {}) {
+  if (resolveUseRealApi()) {
+    const params = new URLSearchParams()
+    if (profileId) params.set('profileId', profileId)
+    if (sellerUserIds?.length) params.set('sellerUserIds', sellerUserIds.join(','))
+    if (periodFrom) params.set('periodFrom', periodFrom)
+    if (periodTo) params.set('periodTo', periodTo)
+    if (maxConversations) params.set('maxConversations', String(maxConversations))
+    const qs = params.toString()
+    return (await apiClient.get(`/crm/analysis/preview${qs ? `?${qs}` : ''}`)).data
+  }
+  return { totalEligible: 0, willAnalyze: 0, capped: false }
+}
+
 export async function startAnalysisRun(payload) {
   if (resolveUseRealApi()) return (await apiClient.post('/crm/analysis/runs', payload)).data
   return { run: { id: 'mock-run', status: 'done', totalConversations: 0, doneConversations: 0 } }
