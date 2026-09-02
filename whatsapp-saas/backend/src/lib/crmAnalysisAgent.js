@@ -206,7 +206,7 @@ async function analyzeOneConversation(prisma, profile, conversation) {
 
   const userContent = buildAnalysisPrompt(profile, transcript, contactName)
   const completion = await callChatCompletion({
-    model: profile.model || "gpt-4o-mini",
+    model: "gpt-4o-mini",
     temperature: profile.temperature ?? 0.2,
     maxTokens: profile.maxTokens || 2500,
     responseFormat: { type: "json_object" },

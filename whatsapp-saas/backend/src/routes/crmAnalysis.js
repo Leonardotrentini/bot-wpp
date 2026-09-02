@@ -119,6 +119,9 @@ function registerCrmAnalysisRoutes(router) {
         enabled: true,
         criteria: DEFAULT_ANALYSIS_CRITERIA,
         systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+        model: "gpt-4o-mini",
+        maxTokens: 2500,
+        temperature: 0.2,
       },
     })
     return res.status(201).json({ profile: formatProfileRow(row), created: true })
