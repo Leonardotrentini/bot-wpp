@@ -240,6 +240,11 @@ async function getFlowBlockReason(prisma, flow, conversation) {
 
 async function recordSkippedFlowRun(prisma, flow, conversation, reason, blockReason) {
   if (!flow?.id) return
+
+  // Skips rotineiros (cooldown/conditions) não gravam no DB — inundavam disco e I/O.
+  const noisy = new Set(["cooldown_contact", "conditions", "quiet_hours", "daily_cap", "flows_stopped", "disabled"])
+  if (noisy.has(String(blockReason || ""))) return
+
   await prisma.crmFlowRun
     .create({
       data: {
@@ -251,6 +256,23 @@ async function recordSkippedFlowRun(prisma, flow, conversation, reason, blockRea
       },
     })
     .catch((err) => console.warn("[crm-flow] skipped run log:", err?.message || err))
+}
+
+const skipWarnThrottle = new Map()
+function warnSkippedFlow(flow, conversation, reason, blockReason) {
+  const key = `${flow?.id || "?"}:${blockReason}`
+  const now = Date.now()
+  const last = skipWarnThrottle.get(key) || 0
+  if (now - last < 60_000) return
+  skipWarnThrottle.set(key, now)
+  if (skipWarnThrottle.size > 2000) {
+    for (const [k, t] of skipWarnThrottle) {
+      if (now - t > 300_000) skipWarnThrottle.delete(k)
+    }
+  }
+  console.warn(
+    `[crm-flow] skipped flow=${flow?.id || flow?.name || "?"} conv=${conversation?.id} reason=${blockReason} trigger=${reason}`,
+  )
 }
 
 function deliveryDelayMs() {
@@ -523,9 +545,7 @@ async function runFlow(deps, flow, conversation, reason) {
   const blockReason = await getFlowBlockReason(prisma, flow, conversation)
   if (blockReason) {
     await recordSkippedFlowRun(prisma, flow, conversation, reason, blockReason)
-    console.warn(
-      `[crm-flow] skipped flow=${flow.id || flow.name || "?"} conv=${conversation.id} reason=${blockReason} trigger=${reason}`,
-    )
+    warnSkippedFlow(flow, conversation, reason, blockReason)
     return false
   }
 
@@ -533,7 +553,8 @@ async function runFlow(deps, flow, conversation, reason) {
   await processPendingCrmDeliveries(deps).catch((err) =>
     console.error("[crm-flow] processPendingCrmDeliveries:", err?.message || err),
   )
-  flushCrmDeliveries(deps, { conversationId: conversation.id, maxMs: 90000 }).catch((err) =>
+  // Flush curto: o scheduler (30s) entrega o restante — evita segurar event loop 90s por fluxo.
+  flushCrmDeliveries(deps, { conversationId: conversation.id, maxMs: 8000 }).catch((err) =>
     console.error("[crm-flow] flushCrmDeliveries:", err?.message || err),
   )
 

@@ -500,7 +500,7 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
   if (Array.isArray(mentioned) && mentioned.length) body.mentioned = mentioned
   if (linkPreview === true) body.linkPreview = true
   if (mentionAll === true) body.mentionAll = true
-  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
+  const timeoutMs = Number(process.env.EVOLUTION_SEND_MEDIA_TIMEOUT_MS || 180000)
   const opts = { method: "POST", body, timeoutMs }
   return firstSuccess([
     () => requestEvolution(`/message/sendMedia/${encodeURIComponent(instanceName)}`, opts),
@@ -515,7 +515,7 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
 async function sendWhatsAppAudio(instanceName, number, { audio, encoding = true, mimetype } = {}) {
   const { prepareWhatsAppPttAudio, assertWhatsAppAudioAccepted, WHATSAPP_PTT_MIME } = require("./whatsappAudio")
   const prepared = await prepareWhatsAppPttAudio({ audio, mimetype })
-  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
+  const timeoutMs = Number(process.env.EVOLUTION_SEND_MEDIA_TIMEOUT_MS || 180000)
   const instance = encodeURIComponent(instanceName)
   const rawMedia = prepared.base64
   const opts = { method: "POST", timeoutMs }
@@ -579,7 +579,8 @@ async function getBase64FromMediaMessage(instanceName, rawRecord, { convertToMp4
     message: slim,
     convertToMp4: Boolean(convertToMp4),
   }
-  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_TIMEOUT_MS || 600000)
+  // Timeout curto no download (chat). Envios usam EVOLUTION_SEND_MEDIA_TIMEOUT_MS.
+  const timeoutMs = Number(process.env.EVOLUTION_MEDIA_DOWNLOAD_TIMEOUT_MS || 45000)
   const opts = { method: "POST", body, timeoutMs }
   return firstSuccess([
     () => requestEvolution(`/chat/getBase64FromMediaMessage/${instance}`, opts),

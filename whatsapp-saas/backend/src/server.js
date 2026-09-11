@@ -202,7 +202,31 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "850mb" }))
+const { enqueueWebhookJob, webhookQueueStats } = require("./lib/webhookQueue")
+const { createSemaphore } = require("./lib/semaphore")
+const mediaDownloadSemaphore = createSemaphore(Number(process.env.MEDIA_DOWNLOAD_CONCURRENCY || 2))
+
+/** JSON pequeno por padrão (webhook/API). Rotas de upload de mídia usam limite maior. */
+const JSON_LIMIT_DEFAULT = process.env.JSON_BODY_LIMIT || "5mb"
+const JSON_LIMIT_LARGE = process.env.JSON_BODY_LIMIT_LARGE || "80mb"
+const jsonParserDefault = express.json({ limit: JSON_LIMIT_DEFAULT })
+const jsonParserLarge = express.json({ limit: JSON_LIMIT_LARGE })
+
+function needsLargeJsonBody(req) {
+  if (!["POST", "PUT", "PATCH"].includes(req.method)) return false
+  const p = String(req.path || "")
+  if (p.includes("/evolution/webhook")) return false
+  return (
+    /\/(send|quick-replies|flows|packs|templates|automations|agents)/.test(p) ||
+    p.includes("/x1") ||
+    p.includes("/message-templates")
+  )
+}
+
+app.use((req, res, next) => {
+  const parser = needsLargeJsonBody(req) ? jsonParserLarge : jsonParserDefault
+  return parser(req, res, next)
+})
 
 app.get("/vesto-attribution.js", (_req, res) => {
   res.type("application/javascript")
@@ -226,7 +250,13 @@ app.use("/api/integrations", createIntegrationsRouter())
 app.get("/health", async (_req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`
-    res.json({ ok: true, service: "vesto-backend", db: "ok", ts: new Date().toISOString() })
+    res.json({
+      ok: true,
+      service: "vesto-backend",
+      db: "ok",
+      webhookQueue: webhookQueueStats(),
+      ts: new Date().toISOString(),
+    })
   } catch (err) {
     res.status(503).json({
       ok: false,
@@ -1761,9 +1791,11 @@ app.get("/api/groups/messages/:messageId/media", authMiddleware, async (req, res
       return res.status(409).json({ error: "MEDIA_UNAVAILABLE", message: "Mídia indisponível para esta mensagem." })
     }
 
-    const resp = await getBase64FromMediaMessage(conn.instanceName, rawRecord, {
-      convertToMp4: mediaKind === "video",
-    })
+    const resp = await mediaDownloadSemaphore.run(() =>
+      getBase64FromMediaMessage(conn.instanceName, rawRecord, {
+        convertToMp4: mediaKind === "video",
+      }),
+    )
     const media = extractMediaBase64Payload(resp)
     if (!media) {
       return res.status(502).json({ error: "MEDIA_FETCH_FAILED", message: "Não foi possível baixar a mídia." })
@@ -4244,7 +4276,22 @@ async function updateOutboundAckFromWebhook(instanceName, body) {
   }
 }
 
-app.post("/api/evolution/webhook", async (req, res) => {
+async function processEvolutionWebhookEvent(event, instanceName, body) {
+  if (event === "CONNECTION_UPDATE" || event === "QRCODE_UPDATED") {
+    await updateConnectionFromWebhook(instanceName, body)
+  } else if (event === "GROUP_PARTICIPANTS_UPDATE") {
+    await updateGroupsFromWebhook(instanceName, body)
+    await handleGroupParticipantsX1Webhook(getX1Deps(), instanceName, body)
+  } else if (["GROUPS_UPSERT", "GROUP_UPDATE"].includes(event)) {
+    await updateGroupsFromWebhook(instanceName, body)
+  } else if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
+    await storeIncomingMessages(instanceName, body, { webhookEvent: event })
+  } else if (event === "MESSAGES_UPDATE") {
+    await updateOutboundAckFromWebhook(instanceName, body)
+  }
+}
+
+app.post("/api/evolution/webhook", (req, res) => {
   try {
     if (!isValidEvolutionWebhook(req)) {
       return res.status(401).json({ error: "INVALID_WEBHOOK_SECRET" })
@@ -4254,23 +4301,27 @@ app.post("/api/evolution/webhook", async (req, res) => {
     const instanceName = getWebhookInstanceName(req.body)
     if (!instanceName) return res.json({ ok: true, ignored: "missing-instance" })
 
+    const body = req.body
+    const label = `${event || "UNKNOWN"}:${instanceName}`
+
+    // Conexão/QR: processa síncrono (rápido e o cliente espera o status).
     if (event === "CONNECTION_UPDATE" || event === "QRCODE_UPDATED") {
-      await updateConnectionFromWebhook(instanceName, req.body)
-    } else if (event === "GROUP_PARTICIPANTS_UPDATE") {
-      await updateGroupsFromWebhook(instanceName, req.body)
-      await handleGroupParticipantsX1Webhook(getX1Deps(), instanceName, req.body)
-    } else if (["GROUPS_UPSERT", "GROUP_UPDATE"].includes(event)) {
-      await updateGroupsFromWebhook(instanceName, req.body)
-    } else if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
-      await storeIncomingMessages(instanceName, req.body, { webhookEvent: event })
-    } else if (event === "MESSAGES_UPDATE") {
-      await updateOutboundAckFromWebhook(instanceName, req.body)
+      return processEvolutionWebhookEvent(event, instanceName, body)
+        .then(() => res.json({ ok: true }))
+        .catch((err) => {
+          console.error("[evolution-webhook]", err?.message || err)
+          return res.status(500).json({ ok: false, error: "WEBHOOK_PROCESSING_FAILED" })
+        })
     }
 
-    return res.json({ ok: true })
+    // Mensagens / grupos / ACK: ACK imediato + fila (evita timeout/retry/OOM).
+    res.json({ ok: true, queued: true })
+    enqueueWebhookJob(label, () => processEvolutionWebhookEvent(event, instanceName, body))
   } catch (err) {
     console.error("[evolution-webhook]", err?.message || err)
-    return res.status(500).json({ ok: false, error: "WEBHOOK_PROCESSING_FAILED" })
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, error: "WEBHOOK_PROCESSING_FAILED" })
+    }
   }
 })
 

@@ -25,6 +25,8 @@ const {
 } = require("../lib/evolution")
 const { enqueueUserSend } = require("../lib/sendQueue")
 const { validateMediaContentSize } = require("../lib/mediaLimits")
+const { createSemaphore } = require("../lib/semaphore")
+const mediaDownloadSemaphore = createSemaphore(Number(process.env.MEDIA_DOWNLOAD_CONCURRENCY || 2))
 const {
   formatContactRow,
   formatConversationRow,
@@ -383,9 +385,11 @@ function createCrmRouter({ io }) {
     }
 
     try {
-      const resp = await getBase64FromMediaMessage(conn.instanceName, rawRecord, {
-        convertToMp4: mediaKind === "video",
-      })
+      const resp = await mediaDownloadSemaphore.run(() =>
+        getBase64FromMediaMessage(conn.instanceName, rawRecord, {
+          convertToMp4: mediaKind === "video",
+        }),
+      )
       const media = extractMediaBase64Payload(resp)
       if (!media) {
         return res.status(502).json({ error: "MEDIA_FETCH_FAILED", message: "Não foi possível baixar a mídia." })
