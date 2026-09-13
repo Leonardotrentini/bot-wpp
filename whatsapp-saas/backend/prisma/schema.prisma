@@ -126,6 +126,8 @@ model WhatsAppConnection {
   userId              String    @unique
   user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   instanceName        String    @unique
+  /// primary = Evo1 (legado); secondary = Evo2 (novas conexões)
+  evolutionHost       String    @default("primary")
   status              String    @default("DISCONNECTED")
   connected           Boolean   @default(false)
   qrCode              String?

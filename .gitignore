@@ -41,3 +41,7 @@ desktop.ini
 
 # Test / coverage
 coverage/
+
+backups/
+evolution-api-src/
+

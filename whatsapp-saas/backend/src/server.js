@@ -54,7 +54,11 @@ const {
   pickPhone,
   fetchInstanceInfo,
   isInstanceAlreadyExistsError,
+  bindInstanceHost,
+  getDefaultHostForNewConnections,
+  normalizeHostId,
 } = require("./lib/evolution")
+const { warmInstanceHostCache, isSecondaryConfigured } = require("./lib/evolutionHosts")
 const { buildAnalytics, buildDashboard, buildOverview } = require("./lib/analytics.js")
 const {
   loadUnifiedMessages,
@@ -3907,6 +3911,7 @@ function getWebhookPayload(body) {
 async function updateConnectionFromWebhook(instanceName, body) {
   const existing = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
   if (!existing) return null
+  bindInstanceHost(instanceName, existing.evolutionHost || "primary")
 
   const payload = getWebhookPayload(body)
   const connected = pickConnected(payload) || pickConnected(body)
@@ -4153,7 +4158,7 @@ async function storeIncomingMessages(instanceName, body, options = {}) {
   return saved
 }
 
-async function upsertConnectionFromEvolution({ userId, instanceName, stateData, qrData }) {
+async function upsertConnectionFromEvolution({ userId, instanceName, stateData, qrData, evolutionHost }) {
   const connected = pickConnected(stateData)
   let qr =
     (await resolveQrForStorage(qrData)) || (await resolveQrForStorage(stateData))
@@ -4177,11 +4182,15 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
     qr = existing?.qrCode || null
   }
 
+  const hostForCreate = normalizeHostId(evolutionHost || getDefaultHostForNewConnections())
+  if (instanceName) bindInstanceHost(instanceName, hostForCreate)
+
   let conn = await prisma.whatsAppConnection.upsert({
     where: { userId },
     create: {
       userId,
       instanceName,
+      evolutionHost: hostForCreate,
       connected,
       status,
       qrCode: connected ? null : qr,
@@ -4190,6 +4199,7 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
     },
     update: {
       instanceName,
+      // NÃO altera evolutionHost no update — evita “migrar” quem já está na Evo1.
       connected,
       status,
       qrCode: connected ? null : qr,
@@ -4197,6 +4207,8 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
       lastSync: new Date(),
     },
   })
+
+  if (conn.evolutionHost) bindInstanceHost(conn.instanceName, conn.evolutionHost)
 
   if (connected) {
     const enforced = await enforceOrgNumberConflict({ userId, instanceName, phone: conn.phone })
@@ -4360,8 +4372,18 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
     const instanceName = toInstanceName(userId)
     const webhook = buildEvolutionWebhookUrl()
 
+    const existing = await prisma.whatsAppConnection.findUnique({
+      where: { userId },
+      select: { evolutionHost: true, instanceName: true },
+    })
+    // Existentes ficam no host já gravado; só conexões novas vão para a Evo2 (secondary).
+    const evolutionHost = existing?.evolutionHost
+      ? normalizeHostId(existing.evolutionHost)
+      : getDefaultHostForNewConnections()
+    bindInstanceHost(instanceName, evolutionHost)
+
     try {
-      await createInstance(instanceName, webhook)
+      await createInstance(instanceName, webhook, { hostId: evolutionHost })
     } catch (err) {
       if (!isInstanceAlreadyExistsError(err)) throw err
     }
@@ -4378,6 +4400,7 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
       instanceName,
       stateData,
       qrData,
+      evolutionHost,
     })
 
     emitWhatsAppToUser(userId, "whatsapp:qr", { qr: conn.qrCode })
@@ -4435,15 +4458,30 @@ async function refreshConnectedInstanceWebhooks() {
   if (!webhook) return
   const connections = await prisma.whatsAppConnection.findMany({
     where: { connected: true },
-    select: { instanceName: true },
+    select: { instanceName: true, evolutionHost: true },
   })
-  for (const { instanceName } of connections) {
+  await warmInstanceHostCache(connections)
+  for (const { instanceName, evolutionHost } of connections) {
+    bindInstanceHost(instanceName, evolutionHost || "primary")
     await setInstanceWebhook(instanceName, webhook).catch((err) => {
       console.warn(`[evolution] webhook ${instanceName}:`, err?.message || err)
     })
   }
   if (connections.length) {
     console.log(`[evolution] Webhook atualizado em ${connections.length} instância(s) conectada(s).`)
+  }
+  if (isSecondaryConfigured()) {
+    console.log("[evolution] Evo2 (secondary) configurada — novas conexões WhatsApp usam a Evo2.")
+  }
+}
+
+async function warmAllEvolutionHosts() {
+  const rows = await prisma.whatsAppConnection.findMany({
+    select: { instanceName: true, evolutionHost: true },
+  })
+  await warmInstanceHostCache(rows)
+  if (rows.length) {
+    console.log(`[evolution] Cache de hosts aquecido (${rows.length} conexão(ões)).`)
   }
 }
 
@@ -4456,9 +4494,11 @@ httpServer.listen(port, () => {
     .catch((err) => console.error("[bootstrap] backfillAllUserOrganizations:", err?.message || err))
   void syncLegacyCadenceStatus().catch((err) => console.error("[bootstrap] syncLegacyCadenceStatus:", err?.message || err))
   void migrateStoredX1Templates(prisma).catch((err) => console.error("[bootstrap] migrateStoredX1Templates:", err?.message || err))
-  void refreshConnectedInstanceWebhooks().catch((err) =>
-    console.error("[bootstrap] refreshConnectedInstanceWebhooks:", err?.message || err),
-  )
+  void warmAllEvolutionHosts()
+    .then(() => refreshConnectedInstanceWebhooks())
+    .catch((err) =>
+      console.error("[bootstrap] evolution hosts/webhooks:", err?.message || err),
+    )
   console.log(`Backend online na porta ${port}`)
   logStartupSecurityChecks()
   if (ENABLE_SCHEDULER) {

@@ -1,6 +1,13 @@
 const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_TIMEOUT_MS || 25000)
 const GROUPS_TIMEOUT_MS = Number(process.env.EVOLUTION_GROUPS_TIMEOUT_MS || 180000)
 const QRCode = require("qrcode")
+const {
+  resolveCreds,
+  guessInstanceFromPath,
+  bindInstanceHost,
+  getDefaultHostForNewConnections,
+  normalizeHostId,
+} = require("./evolutionHosts")
 
 function ensureConfig() {
   if (!process.env.EVOLUTION_BASE_URL || !process.env.EVOLUTION_API_KEY) {
@@ -11,7 +18,7 @@ function ensureConfig() {
 }
 
 function normalizeBaseUrl(raw) {
-  return raw.replace(/\/+$/, "")
+  return String(raw || "").replace(/\/+$/, "")
 }
 
 function parseEvolutionJson(text) {
@@ -47,17 +54,24 @@ function normalizeWebhook(input) {
   }
 }
 
-async function requestEvolution(path, { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  ensureConfig()
+async function requestEvolution(
+  path,
+  { method = "GET", body, timeoutMs = DEFAULT_TIMEOUT_MS, hostId, creds, instanceName } = {},
+) {
+  const guessed = instanceName || guessInstanceFromPath(path)
+  const resolved = await resolveCreds({ creds, hostId, instanceName: guessed })
+  // Primary sempre precisa existir; secondary só quando hostId/instance apontam para ela.
+  if (resolved.hostId === "primary") ensureConfig()
+
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const res = await fetch(`${normalizeBaseUrl(process.env.EVOLUTION_BASE_URL)}${path}`, {
+    const res = await fetch(`${normalizeBaseUrl(resolved.baseUrl)}${path}`, {
       method,
       headers: {
         "Content-Type": "application/json",
-        apikey: process.env.EVOLUTION_API_KEY,
+        apikey: resolved.apiKey,
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
@@ -192,7 +206,9 @@ async function fetchInstanceInfo(instanceName) {
   return null
 }
 
-async function createInstance(instanceName, webhookInput) {
+async function createInstance(instanceName, webhookInput, { hostId } = {}) {
+  const resolvedHost = normalizeHostId(hostId || getDefaultHostForNewConnections())
+  bindInstanceHost(instanceName, resolvedHost)
   const webhook = normalizeWebhook(webhookInput)
   const body = {
     instanceName,
@@ -200,7 +216,12 @@ async function createInstance(instanceName, webhookInput) {
     qrcode: true,
     ...(webhook ? { webhook } : {}),
   }
-  return requestEvolution("/instance/create", { method: "POST", body })
+  return requestEvolution("/instance/create", {
+    method: "POST",
+    body,
+    hostId: resolvedHost,
+    instanceName,
+  })
 }
 
 async function setInstanceWebhook(instanceName, webhookInput) {
@@ -642,4 +663,7 @@ module.exports = {
   pickPhone,
   fetchInstanceInfo,
   isInstanceAlreadyExistsError,
+  bindInstanceHost,
+  getDefaultHostForNewConnections,
+  normalizeHostId,
 }
