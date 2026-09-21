@@ -680,6 +680,8 @@ model MetaIntegration {
   pixelId         String
   accessToken     String
   facebookPageId  String?
+  /// IDs WABA (CTWA) — um cliente pode ter várias contas WhatsApp na Meta.
+  wabaIds         String[]  @default([])
   enabled         Boolean   @default(true)
   sendQuotes      Boolean   @default(true)
   sendPurchases   Boolean   @default(true)

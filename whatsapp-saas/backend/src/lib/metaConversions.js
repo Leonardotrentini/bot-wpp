@@ -20,6 +20,8 @@ const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttr
 const { parseSellersInput, normalizeBrazilPhone, isValidBrazilWhatsapp } = require("./lpSellers")
 const {
   parseFacebookPageId,
+  normalizeWabaIdList,
+  listIntegrationWabaIds,
   resolveCtwaClid,
   resolveFbc,
   resolveFbp,
@@ -387,11 +389,12 @@ function buildFunnelEvent({
   }
 
   if (mode.mode === "ctwa") {
+    const wabaIds = listIntegrationWabaIds(integration)
     return {
       ...base,
       user_data: buildCtwaUserData(contact, {
         userId,
-        whatsappBusinessAccountId: integration.facebookPageId,
+        whatsappBusinessAccountId: wabaIds[0] || integration.facebookPageId,
         ctwaClid: mode.ctwaClid,
       }),
     }
@@ -509,9 +512,11 @@ function formatMetaError(json) {
 function formatIntegrationRow(row) {
   if (!row) return null
   const token = String(row.accessToken || "")
+  const wabaIds = listIntegrationWabaIds(row)
   return {
     pixelId: row.pixelId,
-    facebookPageId: row.facebookPageId || "",
+    facebookPageId: wabaIds[0] || row.facebookPageId || "",
+    wabaIds,
     enabled: row.enabled,
     sendQuotes: row.sendQuotes,
     sendPurchases: row.sendPurchases,
@@ -549,21 +554,38 @@ async function getMetaIntegrationEnriched(prisma, userId) {
     return { ...integration, wabaDatasetId: null, wabaDatasetSkipped: true }
   }
 
-  const wabaId = parseFacebookPageId(integration.facebookPageId)
-  if (!wabaId || !row?.accessToken) {
-    return { ...integration, wabaDatasetId: null }
+  const wabaIds = listIntegrationWabaIds(row || integration)
+  if (!wabaIds.length || !row?.accessToken) {
+    return { ...integration, wabaDatasetId: null, wabaIds }
   }
 
-  try {
-    const wabaDatasetId = await resolveWabaDatasetId(wabaId, row.accessToken)
-    return { ...integration, wabaDatasetId }
-  } catch (err) {
+  const datasets = []
+  let firstError = null
+  for (const wabaId of wabaIds) {
+    try {
+      const wabaDatasetId = await resolveWabaDatasetId(wabaId, row.accessToken)
+      datasets.push({ wabaId, wabaDatasetId })
+    } catch (err) {
+      if (!firstError) firstError = err.message || "Não foi possível obter o dataset do WhatsApp."
+      datasets.push({ wabaId, wabaDatasetId: null, error: err.message || firstError })
+    }
+  }
+  const primary = datasets.find((d) => d.wabaDatasetId)
+  if (primary) {
     return {
       ...integration,
-      wabaDatasetId: null,
-      wabaDatasetError: err.message || "Não foi possível obter o dataset do WhatsApp.",
-      wabaDatasetOptional: true,
+      wabaIds,
+      wabaDatasetId: primary.wabaDatasetId,
+      wabaDatasets: datasets,
     }
+  }
+  return {
+    ...integration,
+    wabaIds,
+    wabaDatasetId: null,
+    wabaDatasets: datasets,
+    wabaDatasetError: firstError || "Não foi possível obter o dataset do WhatsApp.",
+    wabaDatasetOptional: true,
   }
 }
 
@@ -622,9 +644,17 @@ async function upsertMetaIntegration(prisma, userId, data) {
     return { error: "VALIDATION", message: "Informe o token de acesso da API de Conversões." }
   }
 
-  const facebookPageIdRaw =
-    data.facebookPageId != null ? String(data.facebookPageId).trim() : existing?.facebookPageId || ""
-  const facebookPageId = facebookPageIdRaw.replace(/\D/g, "") || null
+  const wabaIdsFromPayload =
+    data.wabaIds != null
+      ? normalizeWabaIdList(data.wabaIds)
+      : data.facebookPageId != null
+        ? normalizeWabaIdList([data.facebookPageId])
+        : null
+  const wabaIds =
+    wabaIdsFromPayload != null
+      ? wabaIdsFromPayload
+      : listIntegrationWabaIds(existing || {})
+  const facebookPageId = wabaIds[0] || null
 
   const adAccountIdRaw =
     data.adAccountId != null ? String(data.adAccountId).trim() : existing?.adAccountId || ""
@@ -682,6 +712,7 @@ async function upsertMetaIntegration(prisma, userId, data) {
       pixelId,
       accessToken,
       facebookPageId,
+      wabaIds,
       enabled: data.enabled !== false,
       sendQuotes: data.sendQuotes !== false,
       sendPurchases: data.sendPurchases !== false,
@@ -699,7 +730,8 @@ async function upsertMetaIntegration(prisma, userId, data) {
     update: {
       pixelId,
       accessToken,
-      facebookPageId: data.facebookPageId != null ? facebookPageId : undefined,
+      facebookPageId: data.wabaIds != null || data.facebookPageId != null ? facebookPageId : undefined,
+      wabaIds: data.wabaIds != null || data.facebookPageId != null ? wabaIds : undefined,
       enabled: data.enabled !== false,
       sendQuotes: data.sendQuotes !== false,
       sendPurchases: data.sendPurchases !== false,
@@ -846,7 +878,8 @@ async function resolveWabaDatasetId(wabaId, accessToken) {
 
 async function resolveEventTargetId(integration, mode) {
   if (mode?.mode === "ctwa" && useWabaDatasetTarget()) {
-    const wabaId = parseFacebookPageId(integration.facebookPageId)
+    const wabaIds = listIntegrationWabaIds(integration)
+    const wabaId = wabaIds[0] ? parseFacebookPageId(wabaIds[0]) : null
     return resolveWabaDatasetId(wabaId, integration.accessToken)
   }
   return integration.pixelId
@@ -1566,18 +1599,21 @@ async function testMetaIntegration(prisma, userId) {
     await sendTest(t.name, t.payload)
   }
 
-  if (useWabaDatasetTarget() && integration.facebookPageId) {
-    const wabaId = parseFacebookPageId(integration.facebookPageId)
-    try {
-      const datasetId = await resolveWabaDatasetId(wabaId, integration.accessToken)
-      results.push({ name: "CTWA Dataset (WABA)", ok: true, datasetId, optional: true })
-    } catch (err) {
-      results.push({
-        name: "CTWA Dataset (WABA)",
-        ok: false,
-        error: err.message,
-        optional: true,
-      })
+  const testWabaIds = listIntegrationWabaIds(integration)
+  if (useWabaDatasetTarget() && testWabaIds.length) {
+    for (const rawId of testWabaIds) {
+      const wabaId = parseFacebookPageId(rawId)
+      try {
+        const datasetId = await resolveWabaDatasetId(wabaId, integration.accessToken)
+        results.push({ name: `CTWA Dataset (WABA ${rawId})`, ok: true, datasetId, optional: true })
+      } catch (err) {
+        results.push({
+          name: `CTWA Dataset (WABA ${rawId})`,
+          ok: false,
+          error: err.message,
+          optional: true,
+        })
+      }
     }
   }
 

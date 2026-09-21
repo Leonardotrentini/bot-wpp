@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
-import { Megaphone, Loader2, CheckCircle2, AlertCircle, ExternalLink } from 'lucide-react'
+import { Megaphone, Loader2, CheckCircle2, AlertCircle, ExternalLink, Plus, Trash2 } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Input } from '../../components/common/Input.jsx'
@@ -47,9 +47,15 @@ function formatWhen(iso) {
 }
 
 function applyIntegrationToForm(integration) {
+  const wabaIds =
+    Array.isArray(integration.wabaIds) && integration.wabaIds.length
+      ? integration.wabaIds.map(String)
+      : integration.facebookPageId
+        ? [String(integration.facebookPageId)]
+        : ['']
   return {
     pixelId: integration.pixelId || '',
-    facebookPageId: integration.facebookPageId || '',
+    wabaIds: wabaIds.length ? wabaIds : [''],
     accessToken: '',
     enabled: integration.enabled !== false,
     sendQuotes: integration.sendQuotes !== false,
@@ -82,7 +88,7 @@ export function Integrations() {
   const [testResults, setTestResults] = useState(null)
   const [form, setForm] = useState({
     pixelId: '',
-    facebookPageId: '',
+    wabaIds: [''],
     accessToken: '',
     enabled: true,
     sendQuotes: true,
@@ -167,9 +173,13 @@ export function Integrations() {
   const handleSave = async () => {
     setSaving(true)
     try {
+      const wabaIds = (form.wabaIds || [])
+        .map((id) => String(id || '').replace(/\D/g, '').trim())
+        .filter(Boolean)
       const payload = {
         pixelId: form.pixelId.trim(),
-        facebookPageId: form.facebookPageId.trim() || null,
+        wabaIds,
+        facebookPageId: wabaIds[0] || null,
         enabled: form.enabled,
         sendQuotes: form.sendQuotes,
         sendPurchases: form.sendPurchases,
@@ -341,19 +351,64 @@ export function Integrations() {
                 Obrigatório para leads que vieram de anúncio direto no WhatsApp. Campanhas LP → WhatsApp não precisam.
               </p>
             </div>
-            <Input
-              label="ID da conta WhatsApp Business (WABA)"
-              placeholder="Ex.: 538521692670287"
-              value={form.facebookPageId}
-              onChange={(e) => setForm((f) => ({ ...f, facebookPageId: e.target.value }))}
-            />
-            <p className="-mt-2 text-xs text-stone-500">
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-stone-400">IDs da conta WhatsApp Business (WABA)</p>
+              {(form.wabaIds || ['']).map((wabaId, index) => (
+                <div key={`waba-${index}`} className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <Input
+                      placeholder="Ex.: 538521692670287"
+                      value={wabaId}
+                      onChange={(e) =>
+                        setForm((f) => {
+                          const next = [...(f.wabaIds || [''])]
+                          next[index] = e.target.value
+                          return { ...f, wabaIds: next }
+                        })
+                      }
+                    />
+                  </div>
+                  {(form.wabaIds || []).length > 1 ? (
+                    <button
+                      type="button"
+                      aria-label="Remover WABA"
+                      className="mt-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-brand-800 bg-brand-950/40 text-stone-400 hover:border-red-500/40 hover:text-red-400"
+                      onClick={() =>
+                        setForm((f) => {
+                          const next = (f.wabaIds || ['']).filter((_, i) => i !== index)
+                          return { ...f, wabaIds: next.length ? next : [''] }
+                        })
+                      }
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#25D366]/40 bg-[#25D366]/10 px-3 py-2 text-xs font-medium text-[#25D366] hover:bg-[#25D366]/20"
+                onClick={() =>
+                  setForm((f) => ({
+                    ...f,
+                    wabaIds: [...(f.wabaIds || ['']), ''],
+                  }))
+                }
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Adicionar outro WABA
+              </button>
+            </div>
+            <p className="text-xs text-stone-500">
               Meta Business Suite → <strong className="text-stone-400">Contas do WhatsApp</strong> → Configurações →{' '}
-              <strong className="text-stone-400">ID da conta</strong>. Não use ID da Página nem do Pixel.
+              <strong className="text-stone-400">ID da conta</strong>. Não use ID da Página nem do Pixel. Se a conta de
+              anúncios tiver vários números, adicione um WABA por WhatsApp.
             </p>
-            {form.facebookPageId ? (
+            {(form.wabaIds || []).some((id) => String(id || '').trim()) ? (
               <div className="space-y-1 text-xs">
-                <p className="text-emerald-400/90">WABA configurado: {form.facebookPageId}</p>
+                <p className="text-emerald-400/90">
+                  WABA configurado: {(form.wabaIds || []).map((id) => String(id || '').trim()).filter(Boolean).join(', ')}
+                </p>
                 {meta?.wabaDatasetId ? (
                   <p className="text-stone-400">
                     Dataset WhatsApp (META_USE_WABA_DATASET=true):{' '}
@@ -511,7 +566,7 @@ export function Integrations() {
           <Suspense fallback={<PanelFallback />}>
             <MetaIntegrationGuide
               pixelId={form.pixelId || meta?.pixelId}
-              wabaId={form.facebookPageId || meta?.facebookPageId}
+              wabaId={(form.wabaIds || []).map((id) => String(id || '').trim()).filter(Boolean)[0] || meta?.facebookPageId}
               wabaDatasetId={meta?.wabaDatasetId}
               wabaDatasetError={meta?.wabaDatasetError}
             />

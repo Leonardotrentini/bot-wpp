@@ -60,6 +60,7 @@ function createIntegrationsRouter() {
       pixelId: z.string().min(5).max(32),
       accessToken: z.string().max(512).optional().nullable(),
       facebookPageId: z.string().max(32).optional().nullable(),
+      wabaIds: z.array(z.string().max(32)).max(20).optional().nullable(),
       enabled: z.boolean().optional(),
       sendQuotes: z.boolean().optional(),
       sendPurchases: z.boolean().optional(),

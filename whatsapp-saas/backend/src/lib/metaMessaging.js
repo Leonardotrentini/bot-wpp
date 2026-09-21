@@ -10,16 +10,49 @@ function parseFacebookPageId(value) {
   return num
 }
 
+/** Normaliza lista de IDs WABA (só dígitos, únicos, mín. 5). */
+function normalizeWabaIdList(input) {
+  const raw = Array.isArray(input)
+    ? input
+    : String(input || "")
+        .split(/[,;\s]+/)
+        .map((s) => s.trim())
+  const out = []
+  const seen = new Set()
+  for (const item of raw) {
+    const digits = String(item || "").replace(/\D/g, "")
+    if (digits.length < 5 || digits.length > 32) continue
+    if (seen.has(digits)) continue
+    seen.add(digits)
+    out.push(digits)
+  }
+  return out
+}
+
+/** Todos os WABAs da integração (wabaIds + facebookPageId legado). */
+function listIntegrationWabaIds(integration) {
+  const fromArr = normalizeWabaIdList(integration?.wabaIds)
+  const legacy = parseFacebookPageId(integration?.facebookPageId)
+  if (legacy) {
+    const asStr = String(legacy)
+    if (!fromArr.includes(asStr)) fromArr.unshift(asStr)
+  }
+  return fromArr
+}
+
 function parseCustomFields(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {}
   return { ...value }
 }
 
-/** ctwa_clid real da Meta começa com ARA e é longo (Baileys: externalAdReply.ctwaClid). */
+/**
+ * ctwa_clid da Meta (Baileys/Evolution: contextInfo.externalAdReply.ctwaClid).
+ * Histórico: prefixo ARA… · CTWA Instagram/FB atual: frequentemente Af… (base64-url).
+ */
 function isValidCtwaClid(value) {
   const s = String(value || "").trim()
   if (s.length < 40) return false
-  return /^ARA[A-Za-z0-9_-]+$/.test(s)
+  return /^(ARA|AF)[A-Za-z0-9_-]+$/i.test(s)
 }
 
 function extractCtwaFromBaileysMessage(message) {
@@ -130,6 +163,13 @@ function extractCtwaClidFromRecord(record) {
   const fromBaileys = extractCtwaFromBaileysMessage(record.message)
   if (fromBaileys) return fromBaileys
 
+  // Evolution v2: contextInfo costuma vir no topo do evento, não só em message.*.
+  const topAd = record?.contextInfo?.externalAdReply
+  if (topAd) {
+    const topClid = topAd.ctwaClid || topAd.ctwa_clid
+    if (isValidCtwaClid(topClid)) return String(topClid).trim()
+  }
+
   const direct = [
     record?.referral?.ctwa_clid,
     record?.referral?.ctwaClid,
@@ -229,6 +269,8 @@ async function storeContactCtwaClid(prisma, contact, ctwaClid) {
 
 module.exports = {
   parseFacebookPageId,
+  normalizeWabaIdList,
+  listIntegrationWabaIds,
   parseCustomFields,
   isValidCtwaClid,
   resolveCtwaClid,

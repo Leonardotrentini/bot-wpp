@@ -785,7 +785,8 @@ export async function saveMetaIntegration(payload) {
   return mockResponse({
     integration: {
       pixelId: payload.pixelId,
-      facebookPageId: payload.facebookPageId || '',
+      facebookPageId: payload.facebookPageId || payload.wabaIds?.[0] || '',
+      wabaIds: payload.wabaIds || (payload.facebookPageId ? [payload.facebookPageId] : []),
       enabled: payload.enabled !== false,
       sendQuotes: payload.sendQuotes !== false,
       sendPurchases: payload.sendPurchases !== false,
