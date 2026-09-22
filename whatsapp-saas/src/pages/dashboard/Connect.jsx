@@ -51,8 +51,13 @@ export function Connect() {
       await disconnectWhatsApp()
       toast.success('WhatsApp desconectado.')
       await refresh()
-    } catch {
-      toast.error('Não foi possível desconectar.')
+    } catch (e) {
+      const msg =
+        e?.response?.data?.message ||
+        e?.response?.data?.error ||
+        e?.message ||
+        'Não foi possível desconectar.'
+      toast.error(typeof msg === 'string' ? msg : 'Não foi possível desconectar.')
     } finally {
       setActionLoading(false)
     }
@@ -119,10 +124,11 @@ export function Connect() {
         )}
         {numberConflict && (
           <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-            <p className="font-semibold">Número já usado por outro membro da empresa</p>
+            <p className="font-semibold">Número já conectado em outra conta</p>
             <p className="mt-1">
-              {status?.phoneFormatted || 'Este WhatsApp'} já está conectado em outra conta. A sessão foi encerrada aqui
-              para as conversas dos dois não se misturarem. Escaneie o QR com um número exclusivo desta conta.
+              {status?.phoneFormatted || 'Este WhatsApp'} já está em uso em outra conta do Vesto. A sessão foi encerrada
+              aqui para as conversas não se misturarem. Desconecte o número na outra conta (se for o caso) e escaneie com
+              um número exclusivo desta conta.
             </p>
           </div>
         )}

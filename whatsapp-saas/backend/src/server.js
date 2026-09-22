@@ -3796,48 +3796,85 @@ function formatConnectionPayload(conn, groupsCount = 0) {
 }
 
 /**
- * Duas contas da mesma empresa logadas no mesmo WhatsApp fazem a Evolution entregar os
- * mesmos eventos para as duas instâncias, e a inbox de um vendedor acaba espelhada na do
- * outro (mesmo messageId gravado nos dois userIds). Sem número salvo não há como perceber.
+ * Mesmo número WhatsApp em 2+ instâncias Evolution → eventos/inbox se misturam
+ * entre contas (mesmo de empresas diferentes). Exclusividade é GLOBAL.
  */
-async function findOrgNumberConflict(userId, phoneDigits) {
-  if (!phoneDigits) return null
-
-  const member = await prisma.organizationMember.findUnique({
-    where: { userId },
-    select: { organizationId: true },
-  })
-  if (!member) return null
-
-  const siblings = await prisma.organizationMember.findMany({
-    where: { organizationId: member.organizationId, userId: { not: userId } },
-    select: { userId: true },
-  })
-  if (!siblings.length) return null
+async function findPhoneConflicts(userId, phoneDigits) {
+  if (!phoneDigits) return []
 
   const connections = await prisma.whatsAppConnection.findMany({
-    where: { userId: { in: siblings.map((s) => s.userId) }, phone: { not: null } },
-    select: { userId: true, phone: true, instanceName: true, connected: true },
+    where: { userId: { not: userId }, phone: { not: null } },
+    select: {
+      userId: true,
+      phone: true,
+      instanceName: true,
+      connected: true,
+      evolutionHost: true,
+      user: { select: { name: true, email: true } },
+    },
   })
 
-  const conflict = connections.find((c) => phoneDigitsFromValue(c.phone) === phoneDigits)
-  if (!conflict) return null
-
-  const owner = await prisma.user.findUnique({
-    where: { id: conflict.userId },
-    select: { name: true, email: true },
-  })
-  return { ...conflict, ownerName: owner?.name || conflict.userId, ownerEmail: owner?.email || null }
+  return connections
+    .filter((c) => phoneDigitsFromValue(c.phone) === phoneDigits)
+    .map((c) => ({
+      userId: c.userId,
+      phone: c.phone,
+      instanceName: c.instanceName,
+      connected: c.connected,
+      evolutionHost: c.evolutionHost,
+      ownerName: c.user?.name || c.userId,
+      ownerEmail: c.user?.email || null,
+    }))
 }
 
-/** Derruba a instância que acabou de entrar num número já usado por outro membro. */
+/** Encerra sessão Evolution + limpa phone de outra conta (sessão contaminada/stale). */
+async function purgeConflictingConnection(other, { reason } = {}) {
+  if (!other?.instanceName) return
+  console.error(
+    `[whatsapp] limpando ${other.instanceName} (${other.ownerName}): número compartilhado` +
+      (reason ? ` — ${reason}` : ""),
+  )
+  try {
+    bindInstanceHost(other.instanceName, other.evolutionHost || "primary")
+    await logoutInstance(other.instanceName)
+  } catch (err) {
+    console.warn("[whatsapp] logout conflito:", err?.message || err)
+  }
+  const conn = await prisma.whatsAppConnection.update({
+    where: { userId: other.userId },
+    data: {
+      connected: false,
+      status: "DISCONNECTED",
+      qrCode: null,
+      phone: null,
+      lastSync: new Date(),
+    },
+  })
+  emitWhatsAppToUser(other.userId, "whatsapp:status", formatConnectionPayload(conn))
+}
+
+/**
+ * Garante 1 número = 1 conta no CRM:
+ * - outras contas desconectadas com o mesmo phone → logout + limpa phone (anti-revival)
+ * - outra conta AINDA conectada → derruba ESTA conexão (NUMBER_CONFLICT)
+ */
 async function enforceOrgNumberConflict({ userId, instanceName, phone }) {
   const phoneDigits = phoneDigitsFromValue(phone)
   if (!phoneDigits) return null
 
-  const conflict = await findOrgNumberConflict(userId, phoneDigits)
-  if (!conflict) return null
+  const conflicts = await findPhoneConflicts(userId, phoneDigits)
+  if (!conflicts.length) return null
 
+  const live = conflicts.filter((c) => c.connected)
+  const stale = conflicts.filter((c) => !c.connected)
+
+  for (const other of stale) {
+    await purgeConflictingConnection(other, { reason: "sessão stale com mesmo número" })
+  }
+
+  if (!live.length) return null
+
+  const conflict = live[0]
   console.error(
     `[whatsapp] número ${phoneDigits} já conectado em ${conflict.ownerName} (${conflict.instanceName}); ` +
       `derrubando ${instanceName} para não espelhar a inbox.`,
@@ -3853,7 +3890,7 @@ async function enforceOrgNumberConflict({ userId, instanceName, phone }) {
       connected: false,
       status: NUMBER_CONFLICT_STATUS,
       qrCode: null,
-      phone: String(phone),
+      phone: null,
       lastSync: new Date(),
     },
   })
@@ -3863,7 +3900,7 @@ async function enforceOrgNumberConflict({ userId, instanceName, phone }) {
     code: NUMBER_CONFLICT_STATUS,
     message:
       `Este WhatsApp (${formatPhoneBr(phoneDigits)}) já está conectado na conta de ${conflict.ownerName}. ` +
-      `Conecte um número exclusivo para esta conta — caso contrário as conversas dos dois se misturam.`,
+      `Desconecte lá primeiro e use um número exclusivo — caso contrário as conversas se misturam.`,
   })
 
   return { conn, conflict }
@@ -3920,13 +3957,19 @@ async function updateConnectionFromWebhook(instanceName, body) {
   const status = nextStatus && nextStatus !== "unknown" ? nextStatus.toUpperCase() : existing.status
   const phone = pickPhone(payload) || pickPhone(body)
 
+  const phoneForDb = connected
+    ? phone
+      ? String(phone)
+      : existing.phone
+    : null
+
   let conn = await prisma.whatsAppConnection.update({
     where: { instanceName },
     data: {
       connected,
       status,
       qrCode: connected ? null : qr,
-      phone: phone ? String(phone) : existing.phone,
+      phone: phoneForDb,
       lastSync: new Date(),
     },
   })
@@ -4185,6 +4228,9 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
   const hostForCreate = normalizeHostId(evolutionHost || getDefaultHostForNewConnections())
   if (instanceName) bindInstanceHost(instanceName, hostForCreate)
 
+  // Desconectado: não conservar ownerJid stale da Evolution (evita recontaminar outras contas).
+  const phoneForDb = connected ? (phone ? String(phone) : undefined) : null
+
   let conn = await prisma.whatsAppConnection.upsert({
     where: { userId },
     create: {
@@ -4194,7 +4240,7 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
       connected,
       status,
       qrCode: connected ? null : qr,
-      phone: phone ? String(phone) : null,
+      phone: connected && phone ? String(phone) : null,
       lastSync: new Date(),
     },
     update: {
@@ -4203,7 +4249,7 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
       connected,
       status,
       qrCode: connected ? null : qr,
-      phone: phone ? String(phone) : undefined,
+      phone: phoneForDb,
       lastSync: new Date(),
     },
   })
@@ -4372,6 +4418,7 @@ app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
             connected: false,
             status: existing.status === "NUMBER_CONFLICT" ? existing.status : "DISCONNECTED",
             qrCode: null,
+            phone: null,
             lastSync: new Date(),
           },
         })
@@ -4455,6 +4502,7 @@ app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res) => {
         connected: false,
         status: "DISCONNECTED",
         qrCode: null,
+        phone: null,
         lastSync: new Date(),
         groupSyncStatus: "IDLE",
         groupSyncProgress: 0,

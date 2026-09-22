@@ -27,7 +27,8 @@ async function refreshWhatsAppConnection(prisma, userId) {
       data: {
         connected,
         status,
-        phone: phone ? String(phone) : existing.phone,
+        // Sem conexão: não conservar ownerJid stale (evita recontaminar outras contas).
+        phone: connected ? (phone ? String(phone) : existing.phone) : null,
         qrCode: connected ? null : existing.qrCode,
         lastSync: new Date(),
       },
