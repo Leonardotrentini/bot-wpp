@@ -4300,6 +4300,9 @@ async function processEvolutionWebhookEvent(event, instanceName, body) {
     await storeIncomingMessages(instanceName, body, { webhookEvent: event })
   } else if (event === "MESSAGES_UPDATE") {
     await updateOutboundAckFromWebhook(instanceName, body)
+  } else if (event === "LABELS_ASSOCIATION" || event === "LABELS_EDIT") {
+    const { handleWhatsappLabelsWebhook } = require("./lib/crmWhatsappLabels")
+    await handleWhatsappLabelsWebhook(prisma, io, sendText, instanceName, event, body)
   }
 }
 
@@ -4351,7 +4354,32 @@ app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
       return res.json(formatConnectionPayload(existing, groupsCount))
     }
 
-    const stateData = await getConnectionState(existing.instanceName)
+    if (existing.instanceName) {
+      bindInstanceHost(existing.instanceName, existing.evolutionHost || "primary")
+    }
+
+    let stateData
+    try {
+      stateData = await getConnectionState(existing.instanceName)
+    } catch (err) {
+      // Instância apagada / offline: não 502 — devolve desconectado do CRM.
+      const status = Number(err?.status || 0)
+      const msg = String(err?.message || "").toLowerCase()
+      if (status === 404 || msg.includes("not found") || msg.includes("does not exist")) {
+        const conn = await prisma.whatsAppConnection.update({
+          where: { userId },
+          data: {
+            connected: false,
+            status: existing.status === "NUMBER_CONFLICT" ? existing.status : "DISCONNECTED",
+            qrCode: null,
+            lastSync: new Date(),
+          },
+        })
+        return res.json(formatConnectionPayload(conn, groupsCount))
+      }
+      throw err
+    }
+
     const conn = await upsertConnectionFromEvolution({
       userId,
       instanceName: existing.instanceName,
@@ -4417,7 +4445,10 @@ app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res) => {
     const existing = await prisma.whatsAppConnection.findUnique({ where: { userId } })
     if (!existing) return res.json(formatConnectionPayload(null))
 
-    await logoutInstance(existing.instanceName)
+    if (existing.instanceName) {
+      bindInstanceHost(existing.instanceName, existing.evolutionHost || "primary")
+      await logoutInstance(existing.instanceName)
+    }
     const conn = await prisma.whatsAppConnection.update({
       where: { userId },
       data: {

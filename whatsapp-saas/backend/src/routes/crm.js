@@ -75,6 +75,12 @@ const {
   assertOutboundRecipient,
   extractProviderMessageId,
 } = require("../lib/crmOutboundSend")
+const {
+  syncWhatsappLabelsForUser,
+  getWhatsappLabelsStatus,
+  mirrorStageChangeToWhatsapp,
+  mirrorQualifiedTagToWhatsapp,
+} = require("../lib/crmWhatsappLabels")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
@@ -701,6 +707,13 @@ function createCrmRouter({ io }) {
       onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: nextStageId }).catch((err) =>
         console.error("[crm-flow] stage_change:", err?.message || err),
       )
+
+      mirrorStageChangeToWhatsapp(prisma, {
+        userId,
+        conversation: updated,
+        previousStageId: convo.kanbanStageId || null,
+        nextStageId: nextStageId || null,
+      }).catch((err) => console.warn("[wa-labels] mirror:", err?.message || err))
     }
 
     return res.json({ conversation: formatConversationRow(updated) })
@@ -1167,6 +1180,11 @@ function createCrmRouter({ io }) {
       notifyTagAddedForContact({ prisma, io, sendText }, { userId, contactId: contact.id, tagId: tag.id }).catch(
         (err) => console.error("[crm-flow] tag_added:", err?.message || err),
       )
+      if (isQualifiedTagName(tag.name)) {
+        mirrorQualifiedTagToWhatsapp(prisma, { userId, contact: updated, action: "add" }).catch((err) =>
+          console.warn("[wa-labels] QUALIFICADO→WA:", err?.message || err),
+        )
+      }
     }
 
     const refreshed = await prisma.crmContact.findUnique({
@@ -1555,6 +1573,7 @@ function createCrmRouter({ io }) {
         sortOrder: (max._max.sortOrder ?? -1) + 1,
       },
     })
+    syncWhatsappLabelsForUser(prisma, userId, { forceResync: false }).catch(() => {})
     return res.status(201).json({ stage: formatStageRow(stage) })
   })
 
@@ -1573,6 +1592,9 @@ function createCrmRouter({ io }) {
       await prisma.crmKanbanStage.updateMany({ where: { userId }, data: { isDefault: false } })
     }
     const updated = await prisma.crmKanbanStage.update({ where: { id: stage.id }, data: parsed.data })
+    if (parsed.data.name != null) {
+      syncWhatsappLabelsForUser(prisma, userId, { forceResync: false }).catch(() => {})
+    }
     return res.json({ stage: formatStageRow(updated) })
   })
 
@@ -1601,6 +1623,38 @@ function createCrmRouter({ io }) {
     }
     await prisma.crmKanbanStage.delete({ where: { id: stage.id } })
     return res.json({ ok: true })
+  })
+
+  // ------------------------- Etiquetas WhatsApp Business -------------------------
+
+  router.get("/whatsapp-labels", async (req, res) => {
+    try {
+      const status = await getWhatsappLabelsStatus(prisma, req.user.sub)
+      return res.json(status)
+    } catch (err) {
+      console.error("[wa-labels] status:", err)
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: err?.message || "Falha ao carregar etiquetas do WhatsApp.",
+      })
+    }
+  })
+
+  router.post("/whatsapp-labels/sync", async (req, res) => {
+    try {
+      const result = await syncWhatsappLabelsForUser(prisma, req.user.sub, { forceResync: true })
+      if (!result.ok) {
+        const code = result.error === "NO_CONNECTION" || result.error === "DISCONNECTED" ? 400 : 502
+        return res.status(code).json({ error: result.error, message: result.message })
+      }
+      return res.json(result)
+    } catch (err) {
+      console.error("[wa-labels] sync:", err)
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: err?.message || "Falha ao sincronizar etiquetas.",
+      })
+    }
   })
 
   // ------------------------- Atalhos (quick replies) -------------------------

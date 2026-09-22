@@ -50,6 +50,8 @@ function normalizeWebhook(input) {
       "MESSAGES_UPSERT",
       "MESSAGES_SET",
       "MESSAGES_UPDATE",
+      "LABELS_EDIT",
+      "LABELS_ASSOCIATION",
     ],
   }
 }
@@ -346,7 +348,7 @@ async function findContacts(instanceName, where = {}) {
  * Busca mensagens de um grupo (Evolution v2 `POST /chat/findMessages/{instance}`).
  * Ordena por timestamp desc; paginado para limitar o volume por chamada.
  */
-const { normalizeEvolutionMessages, filterMessagesForGroup } = require("./evolutionMessages")
+const { normalizeEvolutionMessages, filterMessagesForGroup, jidsMatch, normalizeJid } = require("./evolutionMessages")
 
 function findMessagesEndpoints(instanceName, body) {
   return [
@@ -372,31 +374,49 @@ function buildEvolutionFindMessagesBody(groupJid, { page = 1, pageSize = 50, cut
   return { where, page, offset: pageSize }
 }
 
-async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50, cutoffMs } = {}) {
-  const bodies = [
-    buildEvolutionFindMessagesBody(groupJid, { page, pageSize, cutoffMs }),
-    buildEvolutionFindMessagesBody(groupJid, { page, pageSize, cutoffMs: null }),
-    {
-      where: { key: { remoteJidAlt: groupJid } },
+async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize = 50, cutoffMs, alternateJids = [] } = {}) {
+  const targets = [groupJid, ...(alternateJids || [])]
+    .map((j) => String(j || "").trim())
+    .filter(Boolean)
+  const uniqueTargets = [...new Set(targets)]
+
+  const bodies = []
+  for (const jid of uniqueTargets) {
+    bodies.push(buildEvolutionFindMessagesBody(jid, { page, pageSize, cutoffMs }))
+    bodies.push(buildEvolutionFindMessagesBody(jid, { page, pageSize, cutoffMs: null }))
+    bodies.push({
+      where: { key: { remoteJidAlt: jid } },
       page,
       offset: pageSize,
-    },
-  ]
+    })
+  }
 
   let lastPayload = null
   for (const body of bodies) {
     try {
       const payload = await requestFindMessages(instanceName, body)
       lastPayload = payload
-      const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid)
+      const records = filterMessagesForGroup(normalizeEvolutionMessages(payload), groupJid, uniqueTargets)
       if (records.length) return { payload, records, source: "filtered" }
+      // Query por alt/LID: se a Evolution já filtrou no where, aceita batch bruto.
+      const rawRecords = normalizeEvolutionMessages(payload)
+      if (rawRecords.length) {
+        const matched = filterMessagesForGroup(rawRecords, groupJid, uniqueTargets)
+        if (matched.length) return { payload, records: matched, source: "filtered" }
+        // Último recurso: where já apontava para este chat — não descartar por domínio lid≠pn.
+        const queriedJid =
+          body?.where?.key?.remoteJid || body?.where?.key?.remoteJidAlt || null
+        if (queriedJid && uniqueTargets.some((t) => jidsMatch(t, queriedJid) || normalizeJid(t) === normalizeJid(queriedJid))) {
+          return { payload, records: rawRecords, source: "unfiltered-query-match" }
+        }
+      }
     } catch {
       /* tenta próximo formato */
     }
   }
 
   if (lastPayload) {
-    const records = filterMessagesForGroup(normalizeEvolutionMessages(lastPayload), groupJid)
+    const records = filterMessagesForGroup(normalizeEvolutionMessages(lastPayload), groupJid, uniqueTargets)
     if (records.length) return { payload: lastPayload, records, source: "filtered-partial" }
   }
 
@@ -413,8 +433,8 @@ async function findChats(instanceName, { limit } = {}) {
 }
 
 /** Histórico paginado de um chat 1:1 (mesmo findMessages usado para grupos). */
-async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize = 50, cutoffMs } = {}) {
-  return fetchGroupMessages(instanceName, remoteJid, { page, pageSize, cutoffMs })
+async function fetchChatMessages(instanceName, remoteJid, { page = 1, pageSize = 50, cutoffMs, alternateJids = [] } = {}) {
+  return fetchGroupMessages(instanceName, remoteJid, { page, pageSize, cutoffMs, alternateJids })
 }
 
 /** Localiza mensagem enviada pelo ID (independente do JID — mais confiável para ACK). */
@@ -620,10 +640,29 @@ function extractMediaBase64Payload(resp) {
 }
 
 async function logoutInstance(instanceName) {
-  return firstSuccess([
-    () => requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
-    () => requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "GET" }),
-  ])
+  try {
+    return await requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, {
+      method: "DELETE",
+    })
+  } catch (err) {
+    // Já fechada / inexistente: desconectar no CRM ainda deve concluir.
+    if (isBenignLogoutError(err)) {
+      return { skipped: true, reason: err.message, status: err.status || null }
+    }
+    throw err
+  }
+}
+
+function isBenignLogoutError(err) {
+  const status = Number(err?.status || 0)
+  const msg = String(err?.message || "").toLowerCase()
+  const details = JSON.stringify(err?.details || "").toLowerCase()
+  if (status === 404) return true
+  if (status === 400 && (msg.includes("not connected") || details.includes("not connected"))) return true
+  if (msg.includes("not connected") || details.includes("not connected")) return true
+  if (msg.includes("does not exist") || details.includes("does not exist")) return true
+  if (msg.includes("instance not found") || details.includes("instance not found")) return true
+  return false
 }
 
 async function deleteInstance(instanceName) {
@@ -631,6 +670,53 @@ async function deleteInstance(instanceName) {
     () => requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     () => requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "GET" }),
   ])
+}
+
+/** Lista etiquetas WhatsApp Business da instância. */
+async function findLabels(instanceName) {
+  const data = await requestEvolution(`/label/findLabels/${encodeURIComponent(instanceName)}`, {
+    method: "GET",
+    instanceName,
+  })
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.labels)) return data.labels
+  if (Array.isArray(data?.data)) return data.data
+  return []
+}
+
+/** Força re-sync das labels (Evolution recente). Fallback: findLabels. */
+async function syncLabels(instanceName) {
+  try {
+    const data = await requestEvolution(`/label/syncLabels/${encodeURIComponent(instanceName)}`, {
+      method: "GET",
+      instanceName,
+      timeoutMs: 20000,
+    })
+    if (Array.isArray(data)) return data
+    if (Array.isArray(data?.labels)) return data.labels
+    if (Array.isArray(data?.data)) return data.data
+  } catch (err) {
+    console.warn("[evolution] syncLabels fallback findLabels:", err?.message || err)
+  }
+  return findLabels(instanceName)
+}
+
+/**
+ * Adiciona/remove etiqueta num chat.
+ * Na Evolution, `name` = id da label; `id` = JID do chat.
+ */
+async function handleLabel(instanceName, { labelId, chatJid, action = "add" }) {
+  const body = {
+    name: String(labelId),
+    type: "chat",
+    id: String(chatJid),
+    action: action === "remove" ? "remove" : "add",
+  }
+  return requestEvolution(`/label/handleLabel/${encodeURIComponent(instanceName)}`, {
+    method: "POST",
+    body,
+    instanceName,
+  })
 }
 
 module.exports = {
@@ -656,6 +742,10 @@ module.exports = {
   extractMediaBase64Payload,
   logoutInstance,
   deleteInstance,
+  findLabels,
+  syncLabels,
+  handleLabel,
+  isBenignLogoutError,
   pickQrSync,
   resolveQrForStorage,
   pickConnected,

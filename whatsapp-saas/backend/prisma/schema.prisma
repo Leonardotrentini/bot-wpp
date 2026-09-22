@@ -499,8 +499,36 @@ model CrmKanbanStage {
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
   conversations CrmConversation[]
+  waLabelLinks  CrmWhatsappLabelLink[]
 
   @@index([userId, sortOrder])
+}
+
+/// Mapeia etiquetas do WhatsApp Business ↔ CRM (estágio Kanban ou QUALIFICADO).
+model CrmWhatsappLabelLink {
+  id           String          @id @default(cuid())
+  userId       String
+  connectionId String
+  instanceName String
+  /// "stage" | "qualified"
+  kind         String
+  /// stageId ou "QUALIFIED" (acionamento)
+  crmRefKey    String
+  /// Preenchido quando kind=stage
+  stageId      String?
+  stage        CrmKanbanStage? @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  waLabelId    String
+  waLabelName  String
+  waLabelColor String?
+  lastSyncedAt DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([connectionId, waLabelId])
+  @@unique([connectionId, kind, crmRefKey])
+  @@index([userId])
+  @@index([instanceName, waLabelId])
+  @@index([stageId])
 }
 
 model CrmQuickReply {

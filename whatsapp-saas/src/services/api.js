@@ -1202,6 +1202,41 @@ export async function deleteCrmStage(id) {
   return mockResponse({ ok: true })
 }
 
+export async function getCrmWhatsappLabels() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/whatsapp-labels')
+  return mockResponse({
+    connection: { id: 'mock-conn', phone: '5511999999999', instanceName: 'mock', connected: true },
+    qualified: {
+      name: 'QUALIFICADO',
+      kind: 'qualified',
+      effect: 'Aplica tag no CRM → dispara LeadQualified → Meta',
+      linked: false,
+      waLabelId: null,
+      waLabelName: null,
+    },
+    stages: (mockCrmStages || []).map((s) => ({
+      stageId: s.id,
+      name: s.name,
+      color: s.color,
+      linked: false,
+      waLabelId: null,
+      waLabelName: null,
+    })),
+    linkedCount: 0,
+    pendingCount: 1 + (mockCrmStages?.length || 0),
+  })
+}
+
+export async function syncCrmWhatsappLabels() {
+  if (resolveUseRealApi()) return apiClient.post('/crm/whatsapp-labels/sync')
+  return mockResponse({
+    ok: true,
+    linked: [],
+    missing: [],
+    message: 'Mock: sincronização simulada.',
+  })
+}
+
 export async function getCrmQuickReplies() {
   if (resolveUseRealApi()) return apiClient.get('/crm/quick-replies')
   return mockResponse({ quickReplies: [] })

@@ -11,13 +11,16 @@ import {
   Pencil,
   Play,
   Plus,
-  Send,
   Tag as TagIcon,
   Trash2,
   Unplug,
   Upload,
   X,
   Zap,
+  Smartphone,
+  CheckCircle2,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react'
 import { MessageDeliveryIcon } from '../../components/crm/MessageDeliveryIcon.jsx'
 import { Button } from '../../components/common/Button.jsx'
@@ -34,6 +37,8 @@ import { QuickReplyFormModal } from '../../components/crm/QuickReplyFormModal.js
 import { FlowActionsEditor } from '../../components/crm/FlowActionsEditor.jsx'
 import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
+import { AgentEditorModal } from '../../components/crm/AgentEditorModal.jsx'
+import { ACTIVATION_MODE_LABELS } from '../../lib/agentPromptTemplates.js'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
 import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr, mergeIncomingConversation } from '../../lib/contactDisplay.js'
 import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
@@ -63,7 +68,7 @@ import {
 import { onSocketEvent } from '../../services/socket.js'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { isConversationInScope } from '../../lib/crmConversationScope.js'
-import { contactHasTag } from '../../lib/crmTags.js'
+import { contactHasTag, mergeCrmTagCatalog } from '../../lib/crmTags.js'
 import { getCrmBootstrapCache, setCrmBootstrapCache } from '../../lib/crmBootstrapCache.js'
 import {
   CRM_CONVERSATIONS_LIST_PARAMS,
@@ -85,6 +90,8 @@ import {
   updateCrmStage,
   reorderCrmStages,
   deleteCrmStage,
+  getCrmWhatsappLabels,
+  syncCrmWhatsappLabels,
   getCrmQuickReplies,
   createCrmQuickReply,
   updateCrmQuickReply,
@@ -100,7 +107,6 @@ import {
   updateCrmAgent,
   deleteCrmAgent,
   fetchOrgMembers,
-  testCrmAgent,
   getWhatsAppStatus,
   refreshCrmContactAvatar,
   bulkDeleteCrmContacts,
@@ -214,6 +220,13 @@ function CrmTabHeader({
           onClick={() => onOpenSettings('stages')}
         >
           <Kanban className="h-4 w-4" />
+        </CrmSettingsToolBtn>
+        <CrmSettingsToolBtn
+          title="Etiquetas do WhatsApp Business (celular)"
+          label="Etiquetas WhatsApp"
+          onClick={() => onOpenSettings('whatsappLabels')}
+        >
+          <Smartphone className="h-4 w-4" />
         </CrmSettingsToolBtn>
         <CrmSettingsToolBtn
           title="Gerenciar atalhos de mensagem"
@@ -1171,160 +1184,29 @@ function FlowTestModal({ isOpen, onClose, flow, tags, stages, agents, conversati
   )
 }
 
-// ============================================================ AGENTES
+// ============================================================ AGENTES — ver AgentEditorModal.jsx
 
-const EMPTY_AGENT = {
-  name: '',
-  enabled: false,
-  systemPrompt: '',
-  model: 'gpt-4o-mini',
-  temperature: 0.7,
-  maxTokens: 400,
-  maxRepliesPerConversation: 10,
-  handoffKeywords: ['humano', 'atendente'],
-  replyDelayMinSec: 5,
-  replyDelayMaxSec: 20,
-}
-
-function AgentModal({ isOpen, onClose, initial, onSave, saving }) {
-  const [agent, setAgent] = useState(EMPTY_AGENT)
-
-  useEffect(() => {
-    if (isOpen) setAgent(initial ? { ...initial } : { ...EMPTY_AGENT })
-  }, [isOpen, initial])
-
-  const valid = agent.name.trim() && agent.systemPrompt.trim().length >= 10
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={initial ? 'Editar agente' : 'Novo agente de IA'}
-      size="lg"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button onClick={() => onSave(agent)} disabled={!valid || saving}>
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Salvar agente
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <Input
-          label="Nome do agente"
-          value={agent.name}
-          onChange={(e) => setAgent((a) => ({ ...a, name: e.target.value }))}
-          placeholder="Ex.: Atendente virtual"
-        />
-        <div>
-          <p className="mb-1.5 text-sm font-medium text-stone-300">Instruções (prompt do sistema)</p>
-          <textarea
-            value={agent.systemPrompt}
-            onChange={(e) => setAgent((a) => ({ ...a, systemPrompt: e.target.value }))}
-            rows={6}
-            placeholder="Você é o atendente da loja X. Responda dúvidas sobre produtos, preços e prazos de entrega. Seja simpático e objetivo…"
-            className="w-full resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
-          />
-          <p className="mt-1 text-xs text-stone-500">Mínimo 10 caracteres. Descreva o negócio, o tom e o que a IA pode ou não fazer.</p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Modelo"
-            value={agent.model}
-            onChange={(e) => setAgent((a) => ({ ...a, model: e.target.value }))}
-            placeholder="gpt-4o-mini"
-          />
-          <Input
-            label="Máx. respostas por conversa/dia"
-            type="number"
-            min={1}
-            max={100}
-            value={agent.maxRepliesPerConversation}
-            onChange={(e) => setAgent((a) => ({ ...a, maxRepliesPerConversation: Math.max(1, Number(e.target.value) || 10) }))}
-          />
-          <Input
-            label="Delay mín. de resposta (s)"
-            type="number"
-            min={1}
-            max={120}
-            value={agent.replyDelayMinSec}
-            onChange={(e) => setAgent((a) => ({ ...a, replyDelayMinSec: Math.max(1, Number(e.target.value) || 5) }))}
-          />
-          <Input
-            label="Delay máx. de resposta (s)"
-            type="number"
-            min={1}
-            max={300}
-            value={agent.replyDelayMaxSec}
-            onChange={(e) => setAgent((a) => ({ ...a, replyDelayMaxSec: Math.max(1, Number(e.target.value) || 20) }))}
-          />
-        </div>
-        <Input
-          label="Palavras de transferência para humano (separadas por vírgula)"
-          value={(agent.handoffKeywords || []).join(', ')}
-          onChange={(e) =>
-            setAgent((a) => ({
-              ...a,
-              handoffKeywords: e.target.value
-                .split(',')
-                .map((k) => k.trim())
-                .filter(Boolean),
-            }))
-          }
-          placeholder="humano, atendente, falar com alguém"
-        />
-      </div>
-    </Modal>
-  )
-}
-
-function AgentTester({ agent }) {
-  const toast = useToast()
-  const [message, setMessage] = useState('')
-  const [reply, setReply] = useState('')
-  const [testing, setTesting] = useState(false)
-
-  const runTest = async () => {
-    if (!message.trim()) return
-    setTesting(true)
-    setReply('')
-    try {
-      const { data } = await testCrmAgent(agent.id, message)
-      setReply(data.reply || '(sem resposta)')
-    } catch (err) {
-      toast.error(err?.response?.data?.message || 'Falha no teste da IA.')
-    } finally {
-      setTesting(false)
-    }
+function buildAgentPayload(agent, overrides = {}) {
+  const merged = { ...agent, ...overrides }
+  return {
+    name: merged.name.trim(),
+    enabled: merged.enabled,
+    systemPrompt: merged.systemPrompt.trim(),
+    model: merged.model.trim() || 'gpt-4o-mini',
+    temperature: merged.temperature,
+    maxTokens: merged.maxTokens,
+    maxRepliesPerConversation: merged.maxRepliesPerConversation,
+    handoffKeywords: merged.handoffKeywords,
+    replyDelayMinSec: merged.replyDelayMinSec,
+    replyDelayMaxSec: Math.max(merged.replyDelayMinSec, merged.replyDelayMaxSec),
+    activationMode: merged.activationMode || 'manual',
+    activationConfig: merged.activationConfig || null,
+    allowedTools: merged.allowedTools || [],
+    allowedTagIds: merged.allowedTagIds || [],
+    knowledgeText: merged.knowledgeText || '',
+    promptTemplateId: merged.promptTemplateId || null,
+    locale: merged.locale || 'pt-BR',
   }
-
-  return (
-    <div className="mt-3 rounded-xl border border-brand-700/60 bg-brand-950/50 p-3">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-stone-500">Testar agente</p>
-      <div className="flex gap-2">
-        <input
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && runTest()}
-          placeholder="Simule uma mensagem de cliente…"
-          className="flex-1 rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
-        />
-        <Button size="sm" onClick={runTest} disabled={testing || !message.trim()}>
-          {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-        </Button>
-      </div>
-      {reply && (
-        <div className="mt-2 rounded-xl bg-brand-800/70 px-3 py-2 text-sm text-stone-200">
-          <Bot className="mr-1.5 inline h-3.5 w-3.5 text-sky-400" />
-          {reply}
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ============================================================ CONFIGURAÇÕES
@@ -1350,12 +1232,51 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
   const [dragOverStageId, setDragOverStageId] = useState(null)
   const [reorderingStages, setReorderingStages] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null) // { kind, id, label }
+  const [waLabelsStatus, setWaLabelsStatus] = useState(null)
+  const [waLabelsLoading, setWaLabelsLoading] = useState(false)
+  const [waLabelsSyncing, setWaLabelsSyncing] = useState(false)
+
+  const loadWhatsappLabels = useCallback(async () => {
+    setWaLabelsLoading(true)
+    try {
+      const { data } = await getCrmWhatsappLabels()
+      setWaLabelsStatus(data)
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao carregar etiquetas do WhatsApp.')
+    } finally {
+      setWaLabelsLoading(false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    if (openPanel !== 'whatsappLabels') return
+    loadWhatsappLabels()
+  }, [openPanel, loadWhatsappLabels])
+
+  const syncWhatsappLabels = async () => {
+    setWaLabelsSyncing(true)
+    try {
+      const { data } = await syncCrmWhatsappLabels()
+      setWaLabelsStatus((prev) => ({
+        ...(prev || {}),
+        connection: data.connection || prev?.connection,
+        linkedCount: data.linked?.length ?? prev?.linkedCount,
+        pendingCount: data.missing?.length ?? prev?.pendingCount,
+      }))
+      await loadWhatsappLabels()
+      toast.success(data.message || 'Etiquetas sincronizadas.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao sincronizar etiquetas.')
+    } finally {
+      setWaLabelsSyncing(false)
+    }
+  }
 
   const addTag = async () => {
     if (!tagName.trim()) return
     try {
       const { data } = await createCrmTag({ name: tagName.trim(), color: tagColor })
-      setTags((prev) => [...prev, data.tag].sort((a, b) => a.name.localeCompare(b.name)))
+      setTags((prev) => mergeCrmTagCatalog(prev, [data.tag]))
       setTagName('')
       toast.success('Tag criada.')
     } catch (err) {
@@ -1634,6 +1555,107 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
             )
           })}
         </div>
+      </Modal>
+
+      <Modal isOpen={openPanel === 'whatsappLabels'} onClose={onClosePanel} title="Etiquetas do WhatsApp" size="lg">
+        <p className="text-xs text-stone-500">
+          Estas etiquetas aparecem no <strong className="text-stone-400">WhatsApp Business do celular</strong>. Crie-as no
+          app com o <strong className="text-stone-400">mesmo nome</strong> e clique em sincronizar. A única que dispara
+          evento na Meta é <strong className="text-stone-300">QUALIFICADO</strong>. Orçamento e venda continuam só no CRM
+          (com valor).
+        </p>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={syncWhatsappLabels} disabled={waLabelsSyncing || waLabelsLoading}>
+            {waLabelsSyncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Sincronizar agora
+          </Button>
+          {waLabelsStatus?.connection ? (
+            <span className="text-xs text-stone-500">
+              WhatsApp {waLabelsStatus.connection.connected ? 'conectado' : 'desconectado'}
+              {waLabelsStatus.connection.phone ? ` · ${waLabelsStatus.connection.phone}` : ''}
+            </span>
+          ) : (
+            <span className="text-xs text-amber-400/90">Nenhum WhatsApp conectado nesta conta.</span>
+          )}
+        </div>
+
+        {waLabelsLoading && !waLabelsStatus ? (
+          <div className="mt-8 flex justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-stone-500" />
+          </div>
+        ) : (
+          <div className="mt-5 space-y-5">
+            <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Acionamento (Meta)</p>
+              <div className="mt-2 flex items-start gap-3">
+                {waLabelsStatus?.qualified?.linked ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                ) : (
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-stone-100">
+                    {waLabelsStatus?.qualified?.name || 'QUALIFICADO'}
+                  </p>
+                  <p className="mt-0.5 text-xs text-stone-500">
+                    {waLabelsStatus?.qualified?.effect ||
+                      'Aplica tag no CRM → dispara LeadQualified → Meta'}
+                  </p>
+                  <p className="mt-1 text-xs text-stone-400">
+                    {waLabelsStatus?.qualified?.linked
+                      ? `Vinculada à etiqueta WA: ${waLabelsStatus.qualified.waLabelName || waLabelsStatus.qualified.waLabelId}`
+                      : 'Pendente — crie a etiqueta QUALIFICADO no WhatsApp Business e sincronize.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-stone-400">
+                Estágios do Kanban (= etiquetas no celular)
+              </p>
+              <p className="mt-1 text-xs text-stone-500">
+                Ao marcar a etiqueta no WhatsApp, o lead move para a coluna correspondente no CRM. Arrastar no Kanban
+                também espelha no celular (quando vinculado).
+              </p>
+              <div className="mt-3 space-y-2">
+                {(waLabelsStatus?.stages || stages).map((s) => {
+                  const row = waLabelsStatus?.stages?.find((x) => x.stageId === s.stageId || x.stageId === s.id) || s
+                  const linked = Boolean(row.linked)
+                  const name = row.name || s.name
+                  const color = row.color || s.color
+                  return (
+                    <div
+                      key={row.stageId || s.id}
+                      className="flex items-center gap-2 rounded-xl border border-brand-700/60 bg-brand-900/40 px-3 py-2.5"
+                    >
+                      {linked ? (
+                        <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+                      )}
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                      <span className="min-w-0 flex-1 truncate text-sm text-stone-200">{name}</span>
+                      <span className={`text-[11px] ${linked ? 'text-emerald-400/90' : 'text-amber-400/90'}`}>
+                        {linked ? 'Vinculada' : 'Criar no WhatsApp'}
+                      </span>
+                    </div>
+                  )
+                })}
+                {(waLabelsStatus?.stages || stages).length === 0 && (
+                  <p className="text-sm text-stone-500">Nenhum estágio no Kanban. Crie colunas em Estágios.</p>
+                )}
+              </div>
+            </div>
+
+            <p className="rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-[11px] text-stone-500">
+              A Evolution não cria etiquetas novas no celular automaticamente. Use o mesmo nome da coluna (ex.:{' '}
+              <span className="text-stone-400">Novo</span>, <span className="text-stone-400">Em atendimento</span>) e
+              depois sincronize.
+            </p>
+          </div>
+        )}
       </Modal>
 
       <Modal isOpen={openPanel === 'quickReplies'} onClose={onClosePanel} title="Atalhos de mensagem" size="xl">
@@ -2175,18 +2197,7 @@ export function Crm() {
     async (agent) => {
       setAgentSaving(true)
       try {
-        const payload = {
-          name: agent.name.trim(),
-          enabled: agent.enabled,
-          systemPrompt: agent.systemPrompt.trim(),
-          model: agent.model.trim() || 'gpt-4o-mini',
-          temperature: agent.temperature,
-          maxTokens: agent.maxTokens,
-          maxRepliesPerConversation: agent.maxRepliesPerConversation,
-          handoffKeywords: agent.handoffKeywords,
-          replyDelayMinSec: agent.replyDelayMinSec,
-          replyDelayMaxSec: Math.max(agent.replyDelayMinSec, agent.replyDelayMaxSec),
-        }
+        const payload = buildAgentPayload(agent)
         if (agentEditing) {
           const { data } = await updateCrmAgent(agentEditing.id, payload)
           setAgents((prev) => prev.map((a) => (a.id === agentEditing.id ? data.agent : a)))
@@ -2518,26 +2529,15 @@ export function Crm() {
                       </p>
                       <p className="mt-1 line-clamp-2 text-xs text-stone-500">{agent.systemPrompt}</p>
                       <p className="mt-1 text-[11px] text-stone-500">
-                        {agent.model} · máx {agent.maxRepliesPerConversation} respostas/dia · delay {agent.replyDelayMinSec}–
-                        {agent.replyDelayMaxSec}s
+                        {agent.model} · {ACTIVATION_MODE_LABELS[agent.activationMode] || agent.activationMode || 'Manual'} ·
+                        delay {agent.replyDelayMinSec}–{agent.replyDelayMaxSec}s
                       </p>
                     </div>
                     <Toggle
                       checked={agent.enabled}
                       onChange={async (v) => {
                         try {
-                          const { data } = await updateCrmAgent(agent.id, {
-                            name: agent.name,
-                            enabled: v,
-                            systemPrompt: agent.systemPrompt,
-                            model: agent.model,
-                            temperature: agent.temperature,
-                            maxTokens: agent.maxTokens,
-                            maxRepliesPerConversation: agent.maxRepliesPerConversation,
-                            handoffKeywords: agent.handoffKeywords,
-                            replyDelayMinSec: agent.replyDelayMinSec,
-                            replyDelayMaxSec: agent.replyDelayMaxSec,
-                          })
+                          const { data } = await updateCrmAgent(agent.id, buildAgentPayload(agent, { enabled: v }))
                           setAgents((prev) => prev.map((a) => (a.id === agent.id ? data.agent : a)))
                         } catch (err) {
                           toast.error(err?.response?.data?.message || 'Falha ao alterar o agente.')
@@ -2567,7 +2567,6 @@ export function Crm() {
                       </button>
                     </div>
                   </div>
-                  {aiConfigured && <AgentTester agent={agent} />}
                 </Card>
               ))}
             </div>
@@ -2608,10 +2607,13 @@ export function Crm() {
         conversations={conversations}
         waConnected={waConnected}
       />
-      <AgentModal
+      <AgentEditorModal
         isOpen={agentModal}
         onClose={() => setAgentModal(false)}
         initial={agentEditing}
+        tags={tags}
+        stages={stages}
+        aiConfigured={aiConfigured}
         onSave={saveAgent}
         saving={agentSaving}
       />
