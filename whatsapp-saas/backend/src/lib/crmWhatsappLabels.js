@@ -22,6 +22,8 @@ const {
 const { trackMetaForContactTag } = require("./metaConversions")
 const { notifyTagAddedForContact, onStageChange } = require("./crmFlows")
 const { logContactActivity } = require("./crmContactActivity")
+const { emitCrmEvent, formatConversationRow, CONVERSATION_INCLUDE } = require("./crmCore")
+const { phoneDigitsFromValue } = require("./participantIdentity")
 
 const KIND_STAGE = "stage"
 const KIND_QUALIFIED = "qualified"
@@ -71,7 +73,12 @@ async function ensureWebhookLabelEvents(connection) {
   if (!connection?.instanceName) return
   const base = String(process.env.BACKEND_PUBLIC_URL || process.env.PUBLIC_API_URL || "").replace(/\/+$/, "")
   if (!base) return
-  const webhookUrl = `${base}/api/evolution/webhook`
+  // Em produção o secret é obrigatório — sem ele o backend responde 401 e a etiqueta
+  // muda no celular sem chegar no CRM.
+  const secret = process.env.EVOLUTION_WEBHOOK_SECRET?.trim()
+  const webhookUrl = secret
+    ? `${base}/api/evolution/webhook?secret=${encodeURIComponent(secret)}`
+    : `${base}/api/evolution/webhook`
   try {
     bindInstanceHost(connection.instanceName, connection.evolutionHost || "primary")
     await setInstanceWebhook(connection.instanceName, webhookUrl)
@@ -128,7 +135,37 @@ async function upsertLink(prisma, data) {
     })
   }
 
-  return prisma.crmWhatsappLabelLink.create({ data })
+  try {
+    return await prisma.crmWhatsappLabelLink.create({ data })
+  } catch (err) {
+    // Corrida com LABELS_EDIT auto-sync paralelo
+    if (err?.code === "P2002") {
+      const again = await prisma.crmWhatsappLabelLink.findUnique({
+        where: {
+          connectionId_waLabelId: {
+            connectionId: data.connectionId,
+            waLabelId: data.waLabelId,
+          },
+        },
+      })
+      if (again) {
+        return prisma.crmWhatsappLabelLink.update({
+          where: { id: again.id },
+          data: {
+            kind: data.kind,
+            crmRefKey: data.crmRefKey,
+            stageId: data.stageId || null,
+            waLabelName: data.waLabelName,
+            waLabelColor: data.waLabelColor,
+            lastSyncedAt: new Date(),
+            instanceName: data.instanceName,
+            userId: data.userId,
+          },
+        })
+      }
+    }
+    throw err
+  }
 }
 
 /**
@@ -327,19 +364,27 @@ async function findConversationByChatJid(prisma, userId, chatJid) {
   const jid = String(chatJid || "").trim()
   if (!jid || jid.endsWith("@g.us")) return null
   const variants = [jid]
-  if (jid.includes("@")) {
-    const bare = jid.split("@")[0]
-    variants.push(`${bare}@s.whatsapp.net`, `${bare}@lid`)
+  const bare = jid.includes("@") ? jid.split("@")[0] : jid
+  if (bare) {
+    variants.push(`${bare}@s.whatsapp.net`, `${bare}@lid`, bare)
   }
-  return prisma.crmConversation.findFirst({
+  const digits = phoneDigitsFromValue(bare)
+
+  let conversation = await prisma.crmConversation.findFirst({
     where: {
       userId,
-      remoteJid: { in: [...new Set(variants)] },
+      OR: [
+        { remoteJid: { in: [...new Set(variants)] } },
+        ...(digits && digits.length >= 10
+          ? [{ contact: { phone: { contains: digits.slice(-10) } } }]
+          : []),
+      ],
     },
     include: {
       contact: { include: { tags: { include: { tag: true } } } },
     },
   })
+  return conversation
 }
 
 async function applyQualifiedFromWhatsapp(prisma, io, sendText, { userId, conversation }) {
@@ -383,6 +428,14 @@ async function applyQualifiedFromWhatsapp(prisma, io, sendText, { userId, conver
     )
   }
 
+  const refreshed = await prisma.crmConversation.findUnique({
+    where: { id: conversation.id },
+    include: CONVERSATION_INCLUDE,
+  })
+  if (refreshed) {
+    emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(refreshed) })
+  }
+
   return { ok: true, metaTracking }
 }
 
@@ -396,6 +449,7 @@ async function applyStageFromWhatsapp(prisma, io, sendText, { userId, conversati
   const updated = await prisma.crmConversation.update({
     where: { id: conversation.id },
     data: { kanbanStageId: stageId },
+    include: CONVERSATION_INCLUDE,
   })
 
   if (conversation.contactId) {
@@ -407,6 +461,8 @@ async function applyStageFromWhatsapp(prisma, io, sendText, { userId, conversati
     }).catch(() => {})
   }
 
+  emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(updated) })
+
   if (io && sendText) {
     onStageChange({ prisma, io, sendText }, { conversation: updated, stageId }).catch((err) =>
       console.error("[wa-labels] stage_change flow:", err?.message || err),
@@ -414,6 +470,18 @@ async function applyStageFromWhatsapp(prisma, io, sendText, { userId, conversati
   }
 
   return { ok: true, stageId: stage.id, stageName: stage.name }
+}
+
+/**
+ * Extrai action add|remove do payload Evolution.
+ * NÃO usar association.type — no Baileys isso é "label_jid" / "label_message".
+ */
+function resolveLabelAssociationAction(payload) {
+  const raw = String(payload?.type || payload?.action || "").toLowerCase().trim()
+  if (raw === "remove" || raw === "delete" || raw === "unassociate") return "remove"
+  if (raw === "add" || raw === "associate" || raw === "create") return "add"
+  // Sem type explícito: eventos de associação sem flag costumam ser "add"
+  return "add"
 }
 
 /**
@@ -433,24 +501,47 @@ async function handleWhatsappLabelsWebhook(prisma, io, sendText, instanceName, e
 
   if (event !== "LABELS_ASSOCIATION") return
 
-  const payload = body?.data || body
-  const type = String(payload?.type || payload?.association?.type || "").toLowerCase()
-  const association = payload?.association || payload
-  const labelId = String(association?.labelId || association?.label_id || payload?.labelId || "").trim()
-  const chatId = String(association?.chatId || association?.chat_id || payload?.chatId || "").trim()
-  if (!labelId || !chatId) return
-  if (type && type !== "add" && type !== "remove") {
-    // alguns payloads omitem type e só mandam association
+  const payload = body?.data && typeof body.data === "object" ? body.data : body
+  const association =
+    payload?.association && typeof payload.association === "object" ? payload.association : null
+  const action = resolveLabelAssociationAction(payload)
+  const labelId = String(
+    payload?.labelId ||
+      payload?.label_id ||
+      association?.labelId ||
+      association?.label_id ||
+      "",
+  ).trim()
+  const chatId = String(
+    payload?.chatId ||
+      payload?.chat_id ||
+      association?.chatId ||
+      association?.chat_id ||
+      association?.jid ||
+      "",
+  ).trim()
+
+  if (!labelId || !chatId) {
+    console.warn("[wa-labels] LABELS_ASSOCIATION sem labelId/chatId", {
+      instanceName,
+      keys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 12) : [],
+    })
+    return
+  }
+
+  // Só reage a add (marcar etiqueta). Remove não zera o Kanban sozinho.
+  if (action !== "add") {
+    console.log(`[wa-labels] ignore ${action} label=${labelId} chat=${chatId}`)
+    return
   }
 
   const link = await prisma.crmWhatsappLabelLink.findFirst({
     where: { connectionId: conn.id, waLabelId: labelId },
   })
-  if (!link) return
-
-  // Só reage a add (marcar etiqueta). Remove de estágio não zera o Kanban automaticamente.
-  const isAdd = !type || type === "add"
-  if (!isAdd) return
+  if (!link) {
+    console.warn(`[wa-labels] etiqueta ${labelId} sem vínculo CRM (${instanceName})`)
+    return
+  }
 
   const conversation = await findConversationByChatJid(prisma, conn.userId, chatId)
   if (!conversation) {
@@ -459,19 +550,21 @@ async function handleWhatsappLabelsWebhook(prisma, io, sendText, instanceName, e
   }
 
   if (link.kind === KIND_QUALIFIED) {
-    await applyQualifiedFromWhatsapp(prisma, io, sendText, {
+    const result = await applyQualifiedFromWhatsapp(prisma, io, sendText, {
       userId: conn.userId,
       conversation,
     })
+    console.log(`[wa-labels] QUALIFICADO chat=${chatId}`, result)
     return
   }
 
   if (link.kind === KIND_STAGE && link.stageId) {
-    await applyStageFromWhatsapp(prisma, io, sendText, {
+    const result = await applyStageFromWhatsapp(prisma, io, sendText, {
       userId: conn.userId,
       conversation,
       stageId: link.stageId,
     })
+    console.log(`[wa-labels] stage→${result?.stageName || "?"} chat=${chatId}`, result)
   }
 }
 
