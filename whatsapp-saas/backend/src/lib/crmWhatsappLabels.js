@@ -369,12 +369,15 @@ async function findConversationByChatJid(prisma, userId, chatJid) {
     variants.push(`${bare}@s.whatsapp.net`, `${bare}@lid`, bare)
   }
   const digits = phoneDigitsFromValue(bare)
+  const unique = [...new Set(variants)]
 
-  let conversation = await prisma.crmConversation.findFirst({
+  return prisma.crmConversation.findFirst({
     where: {
       userId,
       OR: [
-        { remoteJid: { in: [...new Set(variants)] } },
+        { remoteJid: { in: unique } },
+        { contact: { remoteJid: { in: unique } } },
+        { contact: { lidJid: { in: unique } } },
         ...(digits && digits.length >= 10
           ? [{ contact: { phone: { contains: digits.slice(-10) } } }]
           : []),
@@ -384,7 +387,6 @@ async function findConversationByChatJid(prisma, userId, chatJid) {
       contact: { include: { tags: { include: { tag: true } } } },
     },
   })
-  return conversation
 }
 
 async function applyQualifiedFromWhatsapp(prisma, io, sendText, { userId, conversation }) {
