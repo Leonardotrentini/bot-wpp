@@ -1,5 +1,18 @@
 import { useMemo, useState } from 'react'
-import { Copy, Check, Sparkles, CheckCircle2, Plus, Trash2, X, AlertCircle, MessageCircle, Users, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  Copy,
+  Check,
+  Sparkles,
+  CheckCircle2,
+  Plus,
+  Trash2,
+  X,
+  AlertCircle,
+  MessageCircle,
+  Users,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { Textarea } from '../common/Textarea.jsx'
 import { Input } from '../common/Input.jsx'
@@ -11,19 +24,30 @@ import {
   isValidBrazilWhatsapp,
   formatPhoneExample,
   sellersToPayload,
+  domainsToPayload,
+  messagesToPayload,
+  newDomainRow,
+  newMessageRow,
+  normalizeDomainInput,
 } from '../../lib/lpSellers.js'
 
-function normalizeDomainsKey(textOrArr) {
-  const parts = Array.isArray(textOrArr)
-    ? textOrArr
-    : String(textOrArr || '')
+function normalizeDomainsKey(rowsOrArr) {
+  const parts = Array.isArray(rowsOrArr)
+    ? rowsOrArr.map((d) => (typeof d === 'string' ? d : d?.hostname))
+    : String(rowsOrArr || '')
         .split(/[\n,;]+/)
         .map((line) => line.trim())
   return parts
-    .map((d) => String(d).trim().toLowerCase().replace(/^www\./, ''))
+    .map((d) => normalizeDomainInput(d))
     .filter(Boolean)
     .sort()
     .join('|')
+}
+
+function messagesKey(rows) {
+  return messagesToPayload(rows)
+    .map((m) => `${m.label}|${m.message}`)
+    .join('||')
 }
 
 function sellersKey(rows) {
@@ -66,12 +90,19 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
     return fromMeta.filter((s) => s?.phone)
   }, [meta?.lpSellers])
 
-  const savedMessage = meta?.lpWhatsappMsg || 'Olá! Vim pelo site e quero mais informações.'
+  const savedMessages = useMemo(() => {
+    if (Array.isArray(meta?.lpMessages) && meta.lpMessages.length) {
+      return meta.lpMessages.filter((m) => m?.message)
+    }
+    const legacy = String(meta?.lpWhatsappMsg || '').trim()
+    return legacy ? [{ label: '', message: legacy }] : []
+  }, [meta?.lpMessages, meta?.lpWhatsappMsg])
+
+  const savedMessage = savedMessages[0]?.message || 'Olá! Vim pelo site e quero mais informações.'
   const rotatorMode = meta?.lpRotatorMode || form.lpRotatorMode || 'sequential'
   const draftInvite = normalizeGroupInviteUrl(form.lpGroupInviteUrl)
   const savedInvite = normalizeGroupInviteUrl(meta?.lpGroupInviteUrl)
 
-  // Só monta o prompt da aba ativa (textos longos ~10k).
   const activePrompt = useMemo(() => {
     if (promptVariant === 'group') {
       return buildMetaLpGroupPrompt({
@@ -89,6 +120,7 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
       domains: savedDomains,
       sellers: savedSellers,
       message: savedMessage,
+      messages: savedMessages,
       rotatorMode,
     })
   }, [
@@ -101,6 +133,7 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
     savedDomains,
     savedInvite,
     savedMessage,
+    savedMessages,
     savedSellers,
   ])
 
@@ -110,13 +143,20 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
 
   const hasUnsavedLp = useMemo(() => {
     if (!meta) return false
-    if (normalizeDomainsKey(form.allowedOriginsText) !== normalizeDomainsKey(meta.allowedOrigins)) return true
+    if (normalizeDomainsKey(form.lpDomains || []) !== normalizeDomainsKey(meta.allowedOrigins)) return true
     if (promptVariant === 'group') {
       return normalizeGroupInviteUrl(form.lpGroupInviteUrl) !== normalizeGroupInviteUrl(meta.lpGroupInviteUrl)
     }
-    if ((form.lpWhatsappMsg || '').trim() !== (meta.lpWhatsappMsg || '').trim()) return true
+    const savedMsgKey = messagesKey(
+      Array.isArray(meta.lpMessages) && meta.lpMessages.length
+        ? meta.lpMessages
+        : meta.lpWhatsappMsg
+          ? [{ label: '', message: meta.lpWhatsappMsg }]
+          : [],
+    )
+    if (messagesKey(form.lpMessages || []) !== savedMsgKey) return true
     return sellersKey(sellersToPayload(form.lpSellers || [])) !== sellersKey(meta.lpSellers || [])
-  }, [form.allowedOriginsText, form.lpGroupInviteUrl, form.lpSellers, form.lpWhatsappMsg, meta, promptVariant])
+  }, [form.lpDomains, form.lpGroupInviteUrl, form.lpMessages, form.lpSellers, meta, promptVariant])
 
   const copy = async (text, id) => {
     try {
@@ -146,6 +186,57 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
     setForm((f) => {
       const rows = (f.lpSellers || []).filter((row) => row.id !== id)
       return { ...f, lpSellers: rows.length ? rows : [newSellerRow(0)] }
+    })
+  }
+
+  const updateDomain = (id, value) => {
+    setForm((f) => ({
+      ...f,
+      lpDomains: (f.lpDomains || []).map((row) => (row.id === id ? { ...row, hostname: value } : row)),
+    }))
+  }
+
+  const addDomain = () => {
+    setForm((f) => ({
+      ...f,
+      lpDomains: [...(f.lpDomains || []), newDomainRow((f.lpDomains || []).length)],
+    }))
+  }
+
+  const removeDomain = (id) => {
+    setForm((f) => {
+      const rows = (f.lpDomains || []).filter((row) => row.id !== id)
+      return { ...f, lpDomains: rows.length ? rows : [newDomainRow(0)] }
+    })
+  }
+
+  const blurDomain = (id) => {
+    setForm((f) => ({
+      ...f,
+      lpDomains: (f.lpDomains || []).map((row) =>
+        row.id === id ? { ...row, hostname: normalizeDomainInput(row.hostname) } : row,
+      ),
+    }))
+  }
+
+  const updateMessage = (id, field, value) => {
+    setForm((f) => ({
+      ...f,
+      lpMessages: (f.lpMessages || []).map((row) => (row.id === id ? { ...row, [field]: value } : row)),
+    }))
+  }
+
+  const addMessage = () => {
+    setForm((f) => ({
+      ...f,
+      lpMessages: [...(f.lpMessages || []), newMessageRow((f.lpMessages || []).length)],
+    }))
+  }
+
+  const removeMessage = (id) => {
+    setForm((f) => {
+      const rows = (f.lpMessages || []).filter((row) => row.id !== id)
+      return { ...f, lpMessages: rows.length ? rows : [newMessageRow(0)] }
     })
   }
 
@@ -242,16 +333,49 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
         </div>
       ) : null}
 
-      <Textarea
-        label="Domínios da landing page (um por linha)"
-        placeholder={'baseset.vercel.app\nwww.seusite.com.br\n*.vercel.app'}
-        value={form.allowedOriginsText}
-        onChange={(e) => setForm((f) => ({ ...f, allowedOriginsText: e.target.value }))}
-        rows={3}
-      />
-      <p className="-mt-2 text-xs text-stone-500">
-        Só hostname (sem slug). Ex: <code className="text-stone-400">seusite.com.br</code> cobre /promo, /oferta, etc.
-      </p>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-medium text-stone-300">Domínios da landing page</p>
+            <p className="text-xs text-stone-500">
+              Só hostname (sem path). Ex: <code className="text-stone-400">seusite.com.br</code>
+            </p>
+          </div>
+          <Button variant="secondary" type="button" onClick={addDomain}>
+            <Plus className="h-4 w-4" />
+            Adicionar
+          </Button>
+        </div>
+        <div className="space-y-2">
+          {(form.lpDomains || []).map((row, index) => (
+            <div
+              key={row.id}
+              className="flex items-end gap-2 rounded-lg border border-brand-800 bg-brand-950/40 p-3"
+            >
+              <div className="min-w-0 flex-1">
+                <label className="mb-1 block text-xs text-stone-500">Domínio {index + 1}</label>
+                <input
+                  type="text"
+                  className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-600 focus:border-accent-500/50 focus:outline-none"
+                  value={row.hostname}
+                  onChange={(e) => updateDomain(row.id, e.target.value)}
+                  onBlur={() => blurDomain(row.id)}
+                  placeholder="ex: fabricante-basic.vercel.app"
+                />
+              </div>
+              <button
+                type="button"
+                className="rounded-lg p-2 text-stone-500 hover:bg-brand-900 hover:text-red-400 disabled:opacity-30"
+                onClick={() => removeDomain(row.id)}
+                disabled={(form.lpDomains || []).length <= 1}
+                title="Remover domínio"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {promptVariant === 'group' ? (
         <div className="space-y-2">
@@ -369,13 +493,62 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
             </p>
           </div>
 
-          <Textarea
-            label="Mensagem padrão do WhatsApp"
-            value={form.lpWhatsappMsg}
-            onChange={(e) => setForm((f) => ({ ...f, lpWhatsappMsg: e.target.value }))}
-            rows={2}
-            placeholder="Olá! Vim pelo site e quero mais informações."
-          />
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium text-stone-300">Mensagens do WhatsApp</p>
+                <p className="text-xs text-stone-500">
+                  Uma por LP (ex.: site / Instagram). A 1ª é a padrão do prompt e da API config.
+                </p>
+              </div>
+              <Button variant="secondary" type="button" onClick={addMessage}>
+                <Plus className="h-4 w-4" />
+                Adicionar
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {(form.lpMessages || []).map((row, index) => (
+                <div
+                  key={row.id}
+                  className="grid gap-2 rounded-lg border border-brand-800 bg-brand-950/40 p-3 sm:grid-cols-[0.8fr_1.4fr_auto]"
+                >
+                  <div>
+                    <label className="mb-1 block text-xs text-stone-500">
+                      Rótulo {index === 0 ? '(padrão)' : '(opcional)'}
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-600 focus:border-accent-500/50 focus:outline-none"
+                      value={row.label}
+                      onChange={(e) => updateMessage(row.id, 'label', e.target.value)}
+                      placeholder={index === 0 ? 'Site / campanha' : 'Linkbio Instagram'}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-stone-500">Mensagem</label>
+                    <textarea
+                      rows={2}
+                      className="w-full rounded-lg border border-brand-800 bg-brand-950 px-3 py-2 text-sm text-stone-100 placeholder:text-stone-600 focus:border-accent-500/50 focus:outline-none"
+                      value={row.message}
+                      onChange={(e) => updateMessage(row.id, 'message', e.target.value)}
+                      placeholder="Vim do site, e gostaria de comprar no atacado!"
+                    />
+                  </div>
+                  <div className="flex items-end justify-end pb-0.5">
+                    <button
+                      type="button"
+                      className="rounded-lg p-2 text-stone-500 hover:bg-brand-900 hover:text-red-400 disabled:opacity-30"
+                      onClick={() => removeMessage(row.id)}
+                      disabled={(form.lpMessages || []).length <= 1}
+                      title="Remover mensagem"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </>
       )}
 
@@ -386,40 +559,34 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
           ) : promptVariant === 'group' ? (
             'Salvar domínios e link do grupo'
           ) : (
-            'Salvar vendedores e domínios'
+            'Salvar vendedores, domínios e mensagens'
           )}
         </Button>
-        <p className="text-xs text-stone-500">
-          {promptVariant === 'group'
-            ? 'Salve antes de copiar o prompt do grupo — ele usa domínio + convite do servidor.'
-            : 'Salve antes de copiar o prompt 1:1 — ele usa os dados gravados no servidor.'}
+        <p className="text-[11px] text-stone-500">
+          Salve antes de copiar o prompt {promptVariant === 'group' ? 'Grupo' : '1:1'} — ele usa os dados gravados no
+          servidor.
         </p>
       </div>
 
-      {publicKey ? (
-        <div className="rounded-lg border border-brand-800 bg-brand-950/40 p-3 text-xs">
-          <p className="text-stone-500">Chave pública · Backend LP</p>
-          <code className="mt-1 block break-all text-stone-300">{publicKey}</code>
-          <code className="mt-1 block break-all text-stone-500">{backendOrigin}/vesto-attribution.js</code>
-        </div>
-      ) : (
-        <p className="text-xs text-stone-500">
-          A chave pública é gerada automaticamente no primeiro save da landing page.
-        </p>
-      )}
-
-      <div className="rounded-lg border border-accent-500/30 bg-accent-500/5 p-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-accent-400" />
+      <div className="space-y-2 border-t border-brand-800 pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
             <p className="text-sm font-medium text-stone-200">
               Prompt para IA — {promptVariant === 'group' ? 'LP → Grupo' : 'LP → 1:1'}
+            </p>
+            <p className="text-xs text-stone-500">
+              {promptReady
+                ? 'Pronto para copiar (dados salvos no servidor).'
+                : 'Salve Pixel, domínios e ' +
+                  (promptVariant === 'group' ? 'link do grupo' : 'vendedores') +
+                  ' para liberar.'}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button
               variant="secondary"
               type="button"
+              disabled={!promptReady}
               onClick={() => setPromptExpanded((v) => !v)}
             >
               {promptExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -429,37 +596,35 @@ export function MetaLpAttributionPanel({ form, setForm, meta, showSellerErrors =
               variant="primary"
               type="button"
               disabled={!promptReady}
-              onClick={() => copy(activePrompt, `prompt-${promptVariant}`)}
+              onClick={() => copy(activePrompt, 'prompt')}
             >
-              {copied === `prompt-${promptVariant}` ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied === 'prompt' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               Copiar prompt
             </Button>
           </div>
         </div>
-        <p className="mb-2 text-xs text-stone-500">
-          {promptVariant === 'group'
-            ? promptReady
-              ? 'Pronto — atribuição no clique + abre o convite do grupo. Cole no Cursor/Codex da LP.'
-              : !pixelId
-                ? 'Salve o Pixel da Meta acima antes de copiar o prompt.'
-                : !savedInvite
-                  ? 'Salve o link chat.whatsapp.com do grupo para gerar o prompt.'
-                  : 'Salve os domínios primeiro. O prompt usa a chave/domínios gravados.'
-            : promptReady
-              ? 'Pronto — mensagem limpa no WhatsApp, atribuição silenciosa. Cole no Cursor/Codex da LP.'
-              : !pixelId
-                ? 'Salve o Pixel da Meta acima antes de copiar o prompt.'
-                : 'Salve domínios + vendedores primeiro. O prompt só usa dados já gravados.'}
-        </p>
-        {promptExpanded ? (
-          <pre className="max-h-80 overflow-auto rounded-lg bg-brand-950 p-3 text-[10px] leading-relaxed text-stone-400 whitespace-pre-wrap">
-            {activePrompt}
-          </pre>
+
+        {publicKey ? (
+          <div className="rounded-lg border border-brand-800 bg-brand-950/50 px-3 py-2 text-xs">
+            <p className="text-stone-500">Chave pública Vesto</p>
+            <code className="mt-1 block break-all text-stone-300">{publicKey}</code>
+          </div>
         ) : (
-          <p className="rounded-lg bg-brand-950/60 px-3 py-2 text-[11px] text-stone-500">
-            Preview oculto ({Math.round(activePrompt.length / 1000)}k chars) — copie direto ou clique em Ver prompt.
+          <p className="text-xs text-amber-300/90">
+            A chave pública é gerada automaticamente no primeiro save da landing page.
           </p>
         )}
+
+        {promptExpanded && promptReady ? (
+          <Textarea readOnly value={activePrompt} rows={14} className="font-mono text-[11px] leading-relaxed" />
+        ) : null}
+
+        {!promptReady ? (
+          <div className="flex items-start gap-2 rounded-lg border border-brand-800 bg-brand-950/40 px-3 py-2 text-xs text-stone-500">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-stone-600" />
+            <p>Complete e salve os campos acima para gerar o prompt desta variante.</p>
+          </div>
+        ) : null}
       </div>
     </div>
   )

@@ -12,7 +12,7 @@ const {
   cleanupExpiredAttributionLeads,
   buildContactEventIdFromRef,
 } = require("../lib/metaAttributionLead")
-const { formatSellersForApi } = require("../lib/lpSellers")
+const { formatSellersForApi, formatLpMessagesForApi } = require("../lib/lpSellers")
 
 function resolvePublicKey(req) {
   return (
@@ -84,10 +84,15 @@ function createPublicMetaRouter() {
 
       const integration = check.integration
       const sellers = formatSellersForApi(integration)
+      const messages = formatLpMessagesForApi(integration)
       return res.json({
         ok: true,
         whatsapp: sellers[0]?.phone || String(integration.lpWhatsapp || "").replace(/\D/g, ""),
-        whatsappMsg: integration.lpWhatsappMsg || "Olá! Vim pelo site e quero mais informações.",
+        whatsappMsg:
+          messages[0]?.message ||
+          integration.lpWhatsappMsg ||
+          "Olá! Vim pelo site e quero mais informações.",
+        messages,
         pixelId: integration.pixelId || "",
         rotatorMode: integration.lpRotatorMode || "sequential",
         sellers,

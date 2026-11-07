@@ -17,7 +17,13 @@
 const crypto = require("crypto")
 const { formatAdsFields, normalizeAdAccountId } = require("./metaAds")
 const { generateVestoPublicKey, parseAllowedOriginsInput } = require("./metaAttributionLead")
-const { parseSellersInput, normalizeBrazilPhone, isValidBrazilWhatsapp } = require("./lpSellers")
+const {
+  parseSellersInput,
+  normalizeBrazilPhone,
+  isValidBrazilWhatsapp,
+  parseLpMessagesInput,
+  formatLpMessagesForApi,
+} = require("./lpSellers")
 const {
   parseFacebookPageId,
   normalizeWabaIdList,
@@ -534,6 +540,7 @@ function formatIntegrationRow(row) {
     allowedOrigins: Array.isArray(row.allowedOrigins) ? row.allowedOrigins : [],
     lpWhatsapp: row.lpWhatsapp || "",
     lpWhatsappMsg: row.lpWhatsappMsg || "",
+    lpMessages: formatLpMessagesForApi(row),
     lpRotatorMode: row.lpRotatorMode || "sequential",
     lpSellers: parseSellersInput(row.lpSellers),
     lpGroupInviteUrl: row.lpGroupInviteUrl || "",
@@ -788,8 +795,14 @@ async function updateMetaLpIntegration(prisma, userId, data) {
     return { error: "VALIDATION", message: "Informe ao menos um domínio da landing page." }
   }
 
-  const lpWhatsappMsg =
-    data.lpWhatsappMsg != null
+  const messagesProvided = data.lpMessages != null
+  const lpMessages = messagesProvided
+    ? parseLpMessagesInput(data.lpMessages, data.lpWhatsappMsg || existing.lpWhatsappMsg || "")
+    : parseLpMessagesInput(existing.lpMessages, existing.lpWhatsappMsg || "")
+
+  const lpWhatsappMsg = messagesProvided
+    ? lpMessages[0]?.message || null
+    : data.lpWhatsappMsg != null
       ? String(data.lpWhatsappMsg).trim() || null
       : existing.lpWhatsappMsg || null
 
@@ -819,6 +832,10 @@ async function updateMetaLpIntegration(prisma, userId, data) {
     return { error: "VALIDATION", message: "Informe ao menos um vendedor com WhatsApp válido." }
   }
 
+  if (messagesProvided && !lpMessages.length) {
+    return { error: "VALIDATION", message: "Informe ao menos uma mensagem padrão do WhatsApp." }
+  }
+
   for (let i = 0; i < lpSellers.length; i++) {
     if (!isValidBrazilWhatsapp(lpSellers[i].phone)) {
       return {
@@ -836,7 +853,8 @@ async function updateMetaLpIntegration(prisma, userId, data) {
     data: {
       allowedOrigins,
       lpWhatsapp: sellersProvided ? lpWhatsapp : undefined,
-      lpWhatsappMsg: data.lpWhatsappMsg != null ? lpWhatsappMsg : undefined,
+      lpWhatsappMsg: messagesProvided || data.lpWhatsappMsg != null ? lpWhatsappMsg : undefined,
+      lpMessages: messagesProvided ? lpMessages : undefined,
       lpRotatorMode: data.lpRotatorMode != null ? lpRotatorMode : undefined,
       lpSellers: sellersProvided ? lpSellers : undefined,
       lpGroupInviteUrl: data.lpGroupInviteUrl !== undefined ? lpGroupInviteUrl : undefined,

@@ -721,6 +721,8 @@ model MetaIntegration {
   allowedOrigins  String[]  @default([])
   lpWhatsapp      String?
   lpWhatsappMsg   String?
+  /// [{ label?, message }] — mensagens das LPs; lpWhatsappMsg espelha a 1ª
+  lpMessages      Json      @default("[]")
   lpRotatorMode   String    @default("sequential")
   lpSellers       Json      @default("[]")
   /** Convite chat.whatsapp.com para prompt LP → Grupo (opcional). */

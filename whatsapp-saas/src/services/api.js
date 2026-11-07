@@ -771,7 +771,8 @@ export async function saveMetaLpSettings(payload) {
     integration: {
       allowedOrigins: payload.allowedOrigins || [],
       lpWhatsapp: payload.lpSellers?.[0]?.phone || '',
-      lpWhatsappMsg: payload.lpWhatsappMsg || '',
+      lpWhatsappMsg: payload.lpWhatsappMsg || payload.lpMessages?.[0]?.message || '',
+      lpMessages: payload.lpMessages || [],
       lpRotatorMode: payload.lpRotatorMode || 'sequential',
       lpSellers: payload.lpSellers || [],
       lpGroupInviteUrl: payload.lpGroupInviteUrl || '',

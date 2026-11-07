@@ -55,13 +55,19 @@ export function buildMetaLpPrompt({
   domains = [],
   sellers = [],
   message = '',
+  messages = [],
   rotatorMode = 'sequential',
 }) {
   const key = publicKey || 'vpk_SALVE_NO_VESTO'
   const origin = (backendOrigin || DEFAULT_BACKEND_ORIGIN).replace(/\/+$/, '')
   const apiBase = `${origin}/api`
   const pixel = pixelId || 'SEU_PIXEL_ID'
-  const msg = message || 'Olá! Vim pelo site e quero mais informações.'
+  const msgList = Array.isArray(messages) && messages.length
+    ? messages.filter((m) => m?.message)
+    : message
+      ? [{ label: '', message }]
+      : []
+  const msg = msgList[0]?.message || message || 'Olá! Vim pelo site e quero mais informações.'
   const sellerCount = sellers.length || 0
   const scriptLine = `<script src="${origin}/vesto-attribution.js?key=${key}" defer data-selector="[data-vesto-skip]"></script>`
 
@@ -72,6 +78,15 @@ export function buildMetaLpPrompt({
   const sellerLines = sellers.length
     ? sellers.map((s, i) => formatSellerLine(s, i)).join('\n')
     : '- (salve os vendedores no Vesto)'
+
+  const messageLines = msgList.length
+    ? msgList
+        .map((m, i) => {
+          const label = m.label?.trim() || (i === 0 ? 'Padrão' : `Mensagem ${i + 1}`)
+          return `- ${label}: "${m.message}"`
+        })
+        .join('\n')
+    : `- Padrão: "${msg}"`
 
   const rotatorExplain =
     rotatorMode === 'sequential'
@@ -133,7 +148,12 @@ ${sellersJson}
 Exemplo de ordem com ${sellerCount || 'N'} vendedor(es):
 ${rotationExample}
 
-MENSAGEM WHATSAPP (texto limpo — exatamente assim no wa.me)
+MENSAGENS WHATSAPP (texto limpo — sem códigos técnicos)
+A mensagem padrão (1ª da lista) deve ir no /api/next-seller desta LP.
+Se houver mais de uma LP (ex.: campanha vs linkbio), cada LP usa a mensagem correspondente:
+${messageLines}
+
+MENSAGEM DESTA LP (wa.me — exatamente assim, limpa)
 "${msg}"
 
 FLUXO DO CLIQUE (obrigatório, nesta ordem)

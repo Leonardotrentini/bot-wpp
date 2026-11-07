@@ -9,7 +9,18 @@ import { useToast } from '../../contexts/ToastContext.jsx'
 import { getMetaIntegration, saveMetaIntegration, saveMetaLpSettings, testMetaIntegration } from '../../services/api.js'
 import { initMetaPixel } from '../../lib/metaPixel.js'
 import { MetaLpAttributionPanel } from '../../components/integrations/MetaLpAttributionPanel.jsx'
-import { parseSellersFromIntegration, sellersToPayload, validateSellers } from '../../lib/lpSellers.js'
+import {
+  parseSellersFromIntegration,
+  sellersToPayload,
+  validateSellers,
+  parseDomainsFromIntegration,
+  domainsToPayload,
+  parseMessagesFromIntegration,
+  messagesToPayload,
+  validateMessages,
+  newDomainRow,
+  newMessageRow,
+} from '../../lib/lpSellers.js'
 import { normalizeGroupInviteUrl } from '../../lib/buildMetaLpPrompt.js'
 
 const UtmUrlGenerator = lazy(() =>
@@ -23,18 +34,6 @@ const MetaIntegrationGuide = lazy(() =>
     default: m.MetaIntegrationGuide,
   })),
 )
-
-function originsToText(origins) {
-  if (!Array.isArray(origins) || !origins.length) return ''
-  return origins.join('\n')
-}
-
-function parseOriginsText(text) {
-  return String(text || '')
-    .split(/[\n,;]+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-}
 
 function formatWhen(iso) {
   if (!iso) return '—'
@@ -64,10 +63,10 @@ function applyIntegrationToForm(integration) {
     adAccountId: integration.adAccountId || '',
     adsAccessToken: '',
     adsEnabled: integration.adsEnabled === true,
-    allowedOriginsText: originsToText(integration.allowedOrigins),
+    lpDomains: parseDomainsFromIntegration(integration),
     lpSellers: parseSellersFromIntegration(integration),
     lpRotatorMode: integration.lpRotatorMode || 'sequential',
-    lpWhatsappMsg: integration.lpWhatsappMsg || 'Olá! Vim pelo site e quero mais informações.',
+    lpMessages: parseMessagesFromIntegration(integration),
     lpGroupInviteUrl: integration.lpGroupInviteUrl || '',
   }
 }
@@ -97,10 +96,10 @@ export function Integrations() {
     adAccountId: '',
     adsAccessToken: '',
     adsEnabled: false,
-    allowedOriginsText: '',
+    lpDomains: [newDomainRow(0)],
     lpSellers: [{ id: '1', label: '', phone: '' }],
     lpRotatorMode: 'sequential',
-    lpWhatsappMsg: 'Olá! Vim pelo site e quero mais informações.',
+    lpMessages: [newMessageRow(0, { message: 'Olá! Vim pelo site e quero mais informações.' })],
     lpGroupInviteUrl: '',
   })
   const [meta, setMeta] = useState(null)
@@ -212,7 +211,7 @@ export function Integrations() {
   }
 
   const handleSaveLp = async ({ mode = 'x1' } = {}) => {
-    const domains = parseOriginsText(form.allowedOriginsText)
+    const domains = domainsToPayload(form.lpDomains || [])
     if (!domains.length) {
       toastError('Informe ao menos um domínio da landing page.')
       return
@@ -236,9 +235,16 @@ export function Integrations() {
         toastError(sellerErrors[0])
         return
       }
+      const messageErrors = validateMessages(form.lpMessages || [])
+      if (messageErrors.length) {
+        toastError(messageErrors[0])
+        return
+      }
+      const messages = messagesToPayload(form.lpMessages || [])
       payload.lpSellers = sellersToPayload(form.lpSellers || [])
       payload.lpRotatorMode = form.lpRotatorMode || 'sequential'
-      payload.lpWhatsappMsg = form.lpWhatsappMsg.trim() || null
+      payload.lpMessages = messages
+      payload.lpWhatsappMsg = messages[0]?.message || null
     }
 
     setSavingLp(true)
@@ -248,17 +254,17 @@ export function Integrations() {
       setMeta((prev) => ({ ...prev, ...integration }))
       setForm((f) => ({
         ...f,
-        allowedOriginsText: originsToText(integration?.allowedOrigins),
+        lpDomains: parseDomainsFromIntegration(integration),
         lpSellers: parseSellersFromIntegration(integration),
         lpRotatorMode: integration?.lpRotatorMode || 'sequential',
-        lpWhatsappMsg: integration?.lpWhatsappMsg || f.lpWhatsappMsg,
+        lpMessages: parseMessagesFromIntegration(integration),
         lpGroupInviteUrl: integration?.lpGroupInviteUrl ?? f.lpGroupInviteUrl ?? '',
       }))
       setShowSellerErrors(false)
       toastSuccess(
         mode === 'group'
           ? 'Domínios e link do grupo salvos.'
-          : `${payload.lpSellers.length} vendedor(es) e domínios salvos.`,
+          : `${payload.lpSellers.length} vendedor(es), ${domains.length} domínio(s) e ${payload.lpMessages.length} mensagem(ns) salvos.`,
       )
     } catch (err) {
       const status = err?.response?.status

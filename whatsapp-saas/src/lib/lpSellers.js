@@ -68,3 +68,85 @@ export function validateSellers(rows) {
   })
   return errors
 }
+
+export function newDomainRow(index = 0, hostname = '') {
+  return { id: `domain-${Date.now()}-${index}`, hostname: String(hostname || '') }
+}
+
+export function newMessageRow(index = 0, { label = '', message = '' } = {}) {
+  return {
+    id: `msg-${Date.now()}-${index}`,
+    label: String(label || ''),
+    message: String(message || ''),
+  }
+}
+
+/** Extrai hostname de URL ou texto colado. */
+export function normalizeDomainInput(raw) {
+  let value = String(raw || '').trim().toLowerCase()
+  if (!value) return ''
+  try {
+    if (value.includes('://')) value = new URL(value).hostname
+    else value = value.split('/')[0].split('?')[0].split(':')[0]
+  } catch {
+    value = value.split('/')[0].split('?')[0].split(':')[0]
+  }
+  return value.replace(/^www\./, '')
+}
+
+export function parseDomainsFromIntegration(integration) {
+  const origins = Array.isArray(integration?.allowedOrigins) ? integration.allowedOrigins : []
+  if (!origins.length) return [newDomainRow(0)]
+  return origins.map((host, i) => newDomainRow(i, host))
+}
+
+export function domainsToPayload(rows) {
+  const seen = new Set()
+  const out = []
+  for (const row of rows || []) {
+    const host = normalizeDomainInput(row?.hostname ?? row)
+    if (!host || seen.has(host)) continue
+    seen.add(host)
+    out.push(host)
+  }
+  return out
+}
+
+export function parseMessagesFromIntegration(integration) {
+  const raw = integration?.lpMessages
+  if (Array.isArray(raw) && raw.length) {
+    return raw
+      .map((m, i) =>
+        newMessageRow(i, {
+          label: m?.label || '',
+          message: m?.message || m?.text || '',
+        }),
+      )
+      .filter((m) => m.message.trim())
+  }
+  const legacy = String(integration?.lpWhatsappMsg || '').trim()
+  if (legacy) return [newMessageRow(0, { message: legacy })]
+  return [newMessageRow(0, { message: 'Olá! Vim pelo site e quero mais informações.' })]
+}
+
+export function messagesToPayload(rows) {
+  return (rows || [])
+    .map((row) => ({
+      label: String(row.label || '').trim(),
+      message: String(row.message || '').trim().slice(0, 500),
+    }))
+    .filter((m) => m.message)
+}
+
+export function validateMessages(rows) {
+  const errors = []
+  const payload = messagesToPayload(rows)
+  if (!payload.length) {
+    errors.push('Informe ao menos uma mensagem do WhatsApp.')
+    return errors
+  }
+  payload.forEach((row, i) => {
+    if (!row.message) errors.push(`Mensagem ${i + 1}: texto obrigatório.`)
+  })
+  return errors
+}

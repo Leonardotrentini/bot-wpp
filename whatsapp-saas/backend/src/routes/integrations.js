@@ -98,6 +98,15 @@ function createIntegrationsRouter() {
     const schema = z.object({
       allowedOrigins: z.array(z.string().max(253)).optional(),
       lpWhatsappMsg: z.string().max(500).optional().nullable(),
+      lpMessages: z
+        .array(
+          z.object({
+            label: z.string().max(80).optional().nullable(),
+            message: z.string().min(1).max(500),
+          }),
+        )
+        .min(1)
+        .optional(),
       lpRotatorMode: z.enum(["sequential"]).optional(),
       lpGroupInviteUrl: z.string().max(500).optional().nullable(),
       lpSellers: z

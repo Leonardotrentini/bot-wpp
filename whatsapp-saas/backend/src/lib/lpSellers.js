@@ -58,9 +58,48 @@ function formatSellersForApi(row) {
   return []
 }
 
+/** Mensagens das LPs: [{ label?, message }] — legado: só lpWhatsappMsg. */
+function parseLpMessagesInput(raw, fallbackMsg = "") {
+  let value = raw
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      value = null
+    }
+  }
+  const out = []
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === "string") {
+        const message = String(item).trim()
+        if (message) out.push({ label: "", message })
+        continue
+      }
+      if (item && typeof item === "object") {
+        const message = String(item.message || item.text || "").trim()
+        if (!message) continue
+        const label = String(item.label || item.name || "").trim()
+        out.push({ label, message: message.slice(0, 500) })
+      }
+    }
+  }
+  if (!out.length) {
+    const legacy = String(fallbackMsg || "").trim()
+    if (legacy) out.push({ label: "", message: legacy.slice(0, 500) })
+  }
+  return out
+}
+
+function formatLpMessagesForApi(row) {
+  return parseLpMessagesInput(row?.lpMessages, row?.lpWhatsappMsg || "")
+}
+
 module.exports = {
   normalizeBrazilPhone,
   isValidBrazilWhatsapp,
   parseSellersInput,
   formatSellersForApi,
+  parseLpMessagesInput,
+  formatLpMessagesForApi,
 }
