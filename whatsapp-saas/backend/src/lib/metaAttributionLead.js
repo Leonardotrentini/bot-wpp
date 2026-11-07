@@ -9,9 +9,10 @@ const { storeContactMetaAttribution, parseCustomFields } = require("./metaMessag
 
 const REF_PATTERN = /\(?\s*(vst_[a-z0-9]{6,16})\s*\)?/i
 const ATTRIBUTION_TTL_DAYS = 14
-/** Janela curta para fallback “último clique” sem vst_ na mensagem (evita cruzar leads). */
+/** Janela para fallback “último clique” sem vst_ na mensagem (mensagem limpa da LP). */
 const PENDING_LEAD_MAX_AGE_MS = 2 * 60 * 60 * 1000
-const TEMPORAL_MATCH_WINDOW_MS = 10 * 60 * 1000
+/** Antes era 10 min — muita gente clica no anúncio e só manda no WhatsApp depois → sem fbc/ConversationStarted. */
+const TEMPORAL_MATCH_WINDOW_MS = PENDING_LEAD_MAX_AGE_MS
 const TEMPORAL_MATCH_FUTURE_TOLERANCE_MS = 30 * 1000
 const TEMPORAL_MATCH_AMBIGUITY_MS = 20 * 1000
 
