@@ -18,9 +18,11 @@ import {
   Film,
   FileText,
   Unplug,
+  AlertTriangle,
   Users,
   Pencil,
   Trash2,
+  Plus,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -31,7 +33,10 @@ import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { Spinner } from '../../components/common/Spinner.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
-import { onSocketEvent } from '../../services/socket.js'
+import { onSocketEvent, onSocketReconnect } from '../../services/socket.js'
+
+/** Fallback quando o socket falha: lista 1:1 não tem poll nativo. */
+const INBOX_POLL_MS = 20000
 import { isConversationInScope } from '../../lib/crmConversationScope.js'
 import { hasSeenChatOnboarding } from '../../lib/chatOnboarding.js'
 import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
@@ -43,7 +48,11 @@ import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/
 import { MessageDeliveryIcon } from '../../components/crm/MessageDeliveryIcon.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
 import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
+import { AddCrmContactModal } from '../../components/crm/AddCrmContactModal.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
+import { ChatAttachSheet } from '../../components/crm/ChatAttachSheet.jsx'
+import { ChatCameraCapture } from '../../components/crm/ChatCameraCapture.jsx'
+import { useMobileLayout } from '../../hooks/useMediaQuery.js'
 import {
   getCrmConversations,
   getCrmConversation,
@@ -65,6 +74,7 @@ import {
   getCrmQuickReplyContent,
   getCrmAgents,
   startCrmSync,
+  cancelCrmSync,
   getCrmSyncStatus,
   refreshCrmProfiles,
   refreshCrmContactAvatar,
@@ -78,7 +88,7 @@ import {
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName, isGenericContactName, mergeIncomingConversation } from '../../lib/contactDisplay.js'
 import { toastMetaTracking } from '../../lib/metaTrackingFeedback.js'
-import { contactHasTag } from '../../lib/crmTags.js'
+import { contactHasTag, mergeCrmTagCatalog } from '../../lib/crmTags.js'
 import {
   dedupeGroupsByJid,
   groupChatId,
@@ -100,7 +110,7 @@ import {
   replaceCachedMessage,
   setCachedConversationMessages,
 } from '../../lib/conversationMessagesCache.js'
-import { getCachedConversationsList, mirrorConversationsListCache, setCachedConversationsList } from '../../lib/conversationsListCache.js'
+import { getCachedConversationsList, mirrorConversationsListCache } from '../../lib/conversationsListCache.js'
 import {
   getCrmBootstrapCache,
   markProfilesRefreshDone,
@@ -244,12 +254,19 @@ export function Chat() {
   toastRef.current = toastApi
   const { user, isImpersonating, isOrgOwner } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const isMobileLayout = useMobileLayout()
+
+  const CONV_LIST_INITIAL = 100
+  const CONV_LIST_PAGE = 30
 
   const [conversations, setConversations] = useState([])
   const [monitoredGroups, setMonitoredGroups] = useState([])
   const [allMonitoredGroups, setAllMonitoredGroups] = useState([])
   const [loadingList, setLoadingList] = useState(true)
   const [refreshingList, setRefreshingList] = useState(false)
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false)
+  const [hasMoreConversations, setHasMoreConversations] = useState(false)
+  const conversationsFetchedRef = useRef(0)
   const [query, setQuery] = useState('')
   const [tagFilter, setTagFilter] = useState('')
   const [stageFilter, setStageFilter] = useState('')
@@ -258,8 +275,23 @@ export function Chat() {
   const [groupsOnly, setGroupsOnly] = useState(false)
   const [unidentifiedOnly, setUnidentifiedOnly] = useState(false)
 
-  const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '' })
-  scopeRef.current = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '', orgUserIds: [] })
+  const userIdRef = useRef(user?.id)
+  userIdRef.current = user?.id
+  const orgUserIds = useMemo(() => {
+    const ids = new Set()
+    if (user?.id) ids.add(user.id)
+    for (const m of orgMembers) {
+      if (m?.userId) ids.add(m.userId)
+    }
+    return [...ids]
+  }, [user?.id, orgMembers])
+  scopeRef.current = {
+    userId: user?.id,
+    isOrgOwner,
+    filterSellerUserId: sellerFilter || '',
+    orgUserIds,
+  }
 
   const [activeId, setActiveId] = useState(() => {
     // URLSearchParams já devolve decodificado — não usar encodeURIComponent ao gravar
@@ -293,13 +325,20 @@ export function Chat() {
 
   const [syncJob, setSyncJob] = useState(null)
   const [syncStarting, setSyncStarting] = useState(false)
+  const [syncCancelling, setSyncCancelling] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [waConnected, setWaConnected] = useState(true)
-  useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !loadingList })
+  const [waSyncStale, setWaSyncStale] = useState(false)
+  const [addContactOpen, setAddContactOpen] = useState(false)
+  useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !waSyncStale && !loadingList })
   const listLoadSeq = useRef(0)
   const listErrorAt = useRef(0)
 
-  const [showPanel, setShowPanel] = useState(true)
+  const [showPanel, setShowPanel] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true,
+  )
+  const [attachSheetOpen, setAttachSheetOpen] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
   const [notesDraft, setNotesDraft] = useState('')
   const [nameDraft, setNameDraft] = useState('')
   const [savingContact, setSavingContact] = useState(false)
@@ -320,6 +359,8 @@ export function Chat() {
   const threadRef = useRef(null)
   const inputRef = useRef(null)
   const fileRef = useRef(null)
+  const galleryRef = useRef(null)
+  const documentRef = useRef(null)
   const activeIdRef = useRef(activeId)
   const conversationsRef = useRef(conversations)
   const loadConversationsRef = useRef(() => {})
@@ -376,7 +417,12 @@ export function Chat() {
 
   const displayedConversations = useMemo(() => {
     const term = query.trim().toLowerCase()
-    const scope = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
+    const scope = {
+      userId: user?.id,
+      isOrgOwner,
+      filterSellerUserId: sellerFilter || '',
+      orgUserIds,
+    }
 
     const filterGroup = (c) => {
       if (sellerFilter && c.ownerUserId && c.ownerUserId !== sellerFilter) return false
@@ -396,7 +442,16 @@ export function Chat() {
 
     let direct = conversations.filter((c) => isConversationInScope(c, scope))
     if (unidentifiedOnly) {
-      direct = direct.filter((c) => contactNeedsIdentification(c.contact))
+      // Sem telefone / só LID / sem nome utilizável — buraco estilo Bina.
+      direct = direct.filter((c) => {
+        const contact = c.contact
+        if (!contact) return true
+        if (contactNeedsIdentification(contact)) return true
+        if (contact.isLid) return true
+        if (!contact.phone && /@lid$/i.test(String(contact.remoteJid || ""))) return true
+        if (!contact.phone) return true
+        return false
+      })
     }
     // Defesa: conversas CRM antigas com JID de grupo não devem poluir a inbox.
     direct = direct.filter((c) => !String(c.remoteJid || '').endsWith('@g.us'))
@@ -405,10 +460,18 @@ export function Chat() {
       .map(groupToListItem)
       .filter(filterGroup)
     return sortChatListItems([...groups, ...direct])
-  }, [monitoredGroups, conversations, groupsOnly, unidentifiedOnly, query, sellerFilter, user?.id, isOrgOwner])
+  }, [monitoredGroups, conversations, groupsOnly, unidentifiedOnly, query, sellerFilter, user?.id, isOrgOwner, orgUserIds])
 
   const unidentifiedCount = useMemo(
-    () => conversations.filter((c) => contactNeedsIdentification(c.contact)).length,
+    () =>
+      conversations.filter((c) => {
+        const contact = c.contact
+        if (!contact) return false
+        if (contactNeedsIdentification(contact)) return true
+        if (contact.isLid) return true
+        if (!contact.phone) return true
+        return false
+      }).length,
     [conversations],
   )
 
@@ -470,21 +533,32 @@ export function Chat() {
 
   const loadConversations = useCallback(async () => {
     const seq = ++listLoadSeq.current
+    const requestUserId = user?.id
     const hasData = conversationsRef.current.length > 0
     if (!hasData) setLoadingList(true)
     else setRefreshingList(true)
     try {
-      const [convRes, groupsRes] = await Promise.allSettled([getCrmConversations(listParams), getGroups()])
+      const [convRes, groupsRes] = await Promise.allSettled([
+        getCrmConversations({ ...listParams, limit: CONV_LIST_INITIAL, offset: 0 }),
+        getGroups(),
+      ])
       if (seq !== listLoadSeq.current) return
+      if (requestUserId !== userIdRef.current) return
       if (convRes.status === 'fulfilled') {
         const rows = convRes.value.data.conversations || []
+        conversationsFetchedRef.current = rows.length
+        setHasMoreConversations(rows.length >= CONV_LIST_INITIAL)
         setConversations((prev) => {
           const active = activeIdRef.current
           if (!active || isGroupChatId(active) || rows.some((c) => c.id === active)) return rows
+          // Nunca reintroduz conversa de outra conta (activeId residual / URL).
           const kept = prev.find((c) => c.id === active)
-          return kept ? [kept, ...rows] : rows
+          if (!kept) return rows
+          if (kept.userId && requestUserId && kept.userId !== requestUserId) return rows
+          if (kept.contact?.userId && requestUserId && kept.contact.userId !== requestUserId) return rows
+          return [kept, ...rows]
         })
-        mirrorConversationsListCache(rows, listParams)
+        mirrorConversationsListCache(rows, listParams, requestUserId)
       }
       if (groupsRes.status === 'fulfilled') {
         const preferred = user?.id || null
@@ -495,20 +569,71 @@ export function Chat() {
       if (convRes.status === 'rejected') throw convRes.reason
     } catch {
       if (seq !== listLoadSeq.current) return
+      if (requestUserId !== userIdRef.current) return
       const now = Date.now()
       if (now - listErrorAt.current > 10000) {
         listErrorAt.current = now
         toastRef.current.error('Falha ao carregar conversas.')
       }
     } finally {
-      if (seq === listLoadSeq.current) {
+      if (seq === listLoadSeq.current && requestUserId === userIdRef.current) {
         setLoadingList(false)
         setRefreshingList(false)
       }
     }
   }, [listParams, user?.id])
 
+  const loadMoreConversations = useCallback(async () => {
+    if (loadingMoreConversations || !hasMoreConversations || groupsOnly) return
+    setLoadingMoreConversations(true)
+    const seq = listLoadSeq.current
+    const requestUserId = user?.id
+    try {
+      const offset = conversationsFetchedRef.current
+      const { data } = await getCrmConversations({
+        ...listParams,
+        limit: CONV_LIST_PAGE,
+        offset,
+      })
+      if (seq !== listLoadSeq.current) return
+      if (requestUserId !== userIdRef.current) return
+      const rows = data.conversations || []
+      conversationsFetchedRef.current = offset + rows.length
+      setHasMoreConversations(rows.length >= CONV_LIST_PAGE)
+      if (!rows.length) return
+      setConversations((prev) => {
+        const ids = new Set(prev.map((c) => c.id))
+        const unique = rows.filter((c) => !ids.has(c.id))
+        const next = [...prev, ...unique]
+        mirrorConversationsListCache(next, listParams, requestUserId)
+        return next
+      })
+    } catch {
+      toastRef.current.error('Falha ao carregar mais conversas.')
+    } finally {
+      setLoadingMoreConversations(false)
+    }
+  }, [loadingMoreConversations, hasMoreConversations, groupsOnly, listParams, user?.id])
+
   loadConversationsRef.current = loadConversations
+
+  // Poll leve da inbox 1:1 — cobre socket morto / eventos perdidos sem precisar reconnect WA.
+  useEffect(() => {
+    if (groupsOnly) return undefined
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      loadConversationsRef.current()
+    }
+    const id = setInterval(tick, INBOX_POLL_MS)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [groupsOnly])
 
   useEffect(() => {
     const preferred = user?.id || null
@@ -562,6 +687,8 @@ export function Chat() {
       return
     }
     setConversations([])
+    conversationsFetchedRef.current = 0
+    setHasMoreConversations(false)
     setActiveId(null)
     setMessages([])
     setSearchParams(
@@ -576,27 +703,44 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setSearchParams propositalmente omitido
   }, [sellerFilter, tagFilter, stageFilter])
 
+  // Troca de conta: zera estado local imediatamente (Outlet key já remonta; defesa extra).
   useEffect(() => {
-    const cached = getCachedConversationsList(listParams)
+    listLoadSeq.current += 1
+    setConversations([])
+    conversationsFetchedRef.current = 0
+    setHasMoreConversations(false)
+    setMessages([])
+    setActiveId(null)
+    setSyncJob(null)
+    setAllMonitoredGroups([])
+    setMonitoredGroups([])
+    setLoadingList(true)
+  }, [user?.id])
+
+  useEffect(() => {
+    const cached = getCachedConversationsList(listParams, user?.id)
     if (cached?.length) {
       setConversations(cached)
       setLoadingList(false)
     }
     const t = setTimeout(loadConversations, query ? 350 : 0)
     return () => clearTimeout(t)
-  }, [loadConversations, query, listParams])
+  }, [loadConversations, query, listParams, user?.id])
 
   useEffect(() => {
-    const boot = getCrmBootstrapCache()
+    const boot = getCrmBootstrapCache(user?.id)
     if (boot) {
       if (boot.tags) setTags(boot.tags)
       if (boot.stages) setStages(boot.stages)
       if (boot.agents) setAgents(boot.agents)
       if (boot.quickReplies) setQuickReplies(boot.quickReplies)
       if (boot.waConnected != null) setWaConnected(boot.waConnected)
+      if (boot.waSyncStale != null) setWaSyncStale(Boolean(boot.waSyncStale))
     }
+    const requestUserId = user?.id
     Promise.allSettled([getCrmTags(), getCrmStages(), getCrmAgents(), getCrmQuickReplies(), getCrmSyncStatus(), getWhatsAppStatus()]).then(
       ([t, s, a, q, sync, wa]) => {
+        if (requestUserId !== userIdRef.current) return
         const next = {}
         if (t.status === 'fulfilled') {
           setTags(t.value.data.tags || [])
@@ -609,6 +753,9 @@ export function Chat() {
         if (a.status === 'fulfilled') {
           setAgents(a.value.data.agents || [])
           next.agents = a.value.data.agents || []
+          next.aiConfigured = Boolean(a.value.data.aiConfigured)
+          next.aiKeyLast4 = a.value.data.aiKeyLast4 || null
+          next.aiStatusLoaded = true
         }
         if (q.status === 'fulfilled') {
           setQuickReplies(q.value.data.quickReplies || [])
@@ -617,13 +764,17 @@ export function Chat() {
         if (sync.status === 'fulfilled') setSyncJob(sync.value.data.job || null)
         if (wa.status === 'fulfilled') {
           const connected = Boolean(wa.value.data?.connected)
+          // Banner só com stale=true (bug comprovado). RECOVERING não alerta.
+          const stale = Boolean(connected && wa.value.data?.stale === true)
           setWaConnected(connected)
+          setWaSyncStale(stale)
           next.waConnected = connected
+          next.waSyncStale = stale
         }
-        setCrmBootstrapCache(next)
+        setCrmBootstrapCache(next, requestUserId)
       },
     )
-  }, [])
+  }, [user?.id])
 
   useEffect(() => {
     if (!waConnected || profilesRefreshDoneThisSession()) return
@@ -678,7 +829,7 @@ export function Chat() {
   const prefetchConversation = useCallback(
     (conversationId) => {
       if (isGroupChatId(conversationId)) return
-      prefetchConversationMessages(conversationId, (id, params) => fetchMessagesPage(id, params))
+      prefetchConversationMessages(conversationId, (id, params) => fetchMessagesPage(id, params), userIdRef.current)
     },
     [fetchMessagesPage],
   )
@@ -686,6 +837,10 @@ export function Chat() {
   const openConversation = useCallback(
     async (id) => {
       setActiveId(id)
+      // Mobile: painel do contato fechado por padrão (abre pelo ⋮). Desktop inalterado.
+      if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+        setShowPanel(false)
+      }
       // Passar o id cru: o router codifica uma vez. encodeURIComponent duplo quebrava o ?c=
       setSearchParams(
         (prev) => {
@@ -727,18 +882,52 @@ export function Chat() {
         try {
           const { data } = await getCrmConversation(id)
           if (activeIdRef.current !== id) return
-          if (data?.conversation) {
+          const convo = data?.conversation
+          // Conta trocada / URL de outra inbox: não abre thread alheia.
+          const ownerId = convo?.userId || convo?.contact?.userId || null
+          if (ownerId && userIdRef.current && ownerId !== userIdRef.current) {
+            const allowed = scopeRef.current.orgUserIds || []
+            const ok =
+              scopeRef.current.isOrgOwner && allowed.length > 0 && allowed.includes(ownerId)
+            if (!ok) {
+              setActiveId(null)
+              setSearchParams(
+                (prev) => {
+                  const next = new URLSearchParams(prev)
+                  next.delete('c')
+                  return next
+                },
+                { replace: true },
+              )
+              return
+            }
+          }
+          if (convo) {
             setConversations((prev) => {
               if (prev.some((c) => c.id === id)) return prev
-              return [data.conversation, ...prev]
+              return [convo, ...prev]
             })
           }
         } catch {
-          /* mensagens ainda tentam carregar; se 404 o toast abaixo cobre */
+          // 404 = conversa de outra conta ou apagada — limpa URL residual.
+          if (activeIdRef.current === id) {
+            setActiveId(null)
+            setMessages([])
+            setSearchParams(
+              (prev) => {
+                const next = new URLSearchParams(prev)
+                next.delete('c')
+                return next
+              },
+              { replace: true },
+            )
+          }
+          return
         }
       }
 
-      const cached = getCachedConversationMessages(id)
+      const cacheUserId = userIdRef.current
+      const cached = getCachedConversationMessages(id, cacheUserId)
       if (cached?.messages?.length) {
         setMessages(cached.messages)
         setHasMore(cached.hasMore)
@@ -757,8 +946,10 @@ export function Chat() {
           (convId, params) => fetchMessagesPage(convId, params),
           {
             force: true,
+            userId: cacheUserId,
             onUpdated: (entry) => {
               if (activeIdRef.current !== id) return
+              if (cacheUserId !== userIdRef.current) return
               setMessages(entry.messages)
               setHasMore(entry.hasMore)
             },
@@ -863,7 +1054,7 @@ export function Chat() {
         const ids = new Set(prev.map((m) => m.id))
         const unique = result.messages.filter((m) => !ids.has(m.id))
         const next = [...unique, ...prev]
-        setCachedConversationMessages(activeId, { messages: next, hasMore: result.hasMore })
+        setCachedConversationMessages(activeId, { messages: next, hasMore: result.hasMore }, userIdRef.current)
         return next
       })
       setHasMore(result.hasMore)
@@ -898,7 +1089,7 @@ export function Chat() {
             next[idx] = { ...next[idx], ...message }
             return next
           }
-          appendCachedMessage(conversationId, message)
+          appendCachedMessage(conversationId, message, userIdRef.current)
           return [...prev, message]
         })
         markReadDebounced(conversationId)
@@ -932,6 +1123,15 @@ export function Chat() {
         toastRef.current.success('Sincronização concluída.')
         loadConversationsRef.current()
         runBackgroundAvatarSweep(conversationsRef.current)
+      } else if (job?.status === 'partial' && job?.discoveryStatus === 'empty_store') {
+        toastRef.current.info(
+          job.error ||
+            'Sessão sem histórico na API. Se o CRM continuar atrasado, use Reconectar na tela Conectar.',
+        )
+        loadConversationsRef.current()
+      } else if (job?.status === 'partial' && job?.finishedAt) {
+        toastRef.current.info('Sincronização parcial concluída — você pode continuar depois.')
+        loadConversationsRef.current()
       }
     })
     const offHandoff = onSocketEvent('crm:handoff', () => {
@@ -958,6 +1158,19 @@ export function Chat() {
         setMessages([])
       }
     })
+    const offReconnect = onSocketReconnect(() => {
+      loadConversationsRef.current()
+      const id = activeIdRef.current
+      if (!id || isGroupChatId(id)) return
+      fetchMessagesPage(id, { limit: 50 })
+        .then((result) => {
+          if (activeIdRef.current !== id) return
+          setMessages(result.messages)
+          setHasMore(result.hasMore)
+          setCachedConversationMessages(id, { messages: result.messages, hasMore: result.hasMore }, userIdRef.current)
+        })
+        .catch(() => {})
+    })
     return () => {
       offMessage()
       offStatus()
@@ -966,8 +1179,9 @@ export function Chat() {
       offSync()
       offHandoff()
       offRemoved()
+      offReconnect()
     }
-  }, [markReadDebounced])
+  }, [markReadDebounced, fetchMessagesPage])
 
   useEffect(() => {
     scrollToEndRef.current = true
@@ -988,13 +1202,14 @@ export function Chat() {
 
   // ------------------------------------------------ ações
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(async (attachmentOverride = null) => {
     const body = draft.trim()
-    if ((!body && !attachment) || !activeId || sending) return
+    const activeAttachment = attachmentOverride || attachment
+    if ((!body && !activeAttachment) || !activeId || sending) return
 
     if (isGroupChatId(activeId)) {
       const groupJid = parseGroupChatId(activeId)
-      if (attachment && !['image', 'video', 'audio', 'document'].includes(attachment.type)) {
+      if (activeAttachment && !['image', 'video', 'audio', 'document'].includes(activeAttachment.type)) {
         toastRef.current.error('Tipo de arquivo não suportado no grupo.')
         return
       }
@@ -1003,25 +1218,25 @@ export function Chat() {
       const optimistic = {
         id: tempId,
         fromMe: true,
-        type: attachment?.type || 'text',
-        mediaKind: attachment?.type || null,
-        mediaMime: attachment?.mime || null,
-        body: body || attachment?.name || '',
+        type: activeAttachment?.type || 'text',
+        mediaKind: activeAttachment?.type || null,
+        mediaMime: activeAttachment?.mime || null,
+        body: body || activeAttachment?.name || '',
         timestamp: new Date().toISOString(),
         source: 'group',
       }
 
-      if (attachment?.base64) {
-        primeCrmMessageMediaCache(tempId, attachment.mime, attachment.base64)
+      if (activeAttachment?.base64) {
+        primeCrmMessageMediaCache(tempId, activeAttachment.mime, activeAttachment.base64)
       }
 
       scrollToEndRef.current = true
       setMessages((prev) => [...prev, optimistic])
 
       const savedDraft = draft
-      const savedAttachment = attachment
+      const savedAttachment = activeAttachment
       setDraft('')
-      if (attachment) revokeAudioPreview(attachment)
+      if (activeAttachment) revokeAudioPreview(activeAttachment)
       setAttachment(null)
       setSending(true)
 
@@ -1029,7 +1244,7 @@ export function Chat() {
         await sendMessage({
           groupIds: [groupJid],
           body,
-          mediaType: attachment?.type || 'none',
+          mediaType: savedAttachment?.type || 'none',
           mediaBase64: savedAttachment?.base64,
           mediaMime: savedAttachment?.mime,
           mediaName: savedAttachment?.name,
@@ -1065,22 +1280,22 @@ export function Chat() {
       id: tempId,
       conversationId: activeId,
       fromMe: true,
-      type: attachment?.type || 'text',
-      mediaKind: attachment?.type || null,
-      body: body || attachment?.name || '',
-      mediaMime: attachment?.mime || null,
+      type: activeAttachment?.type || 'text',
+      mediaKind: activeAttachment?.type || null,
+      body: body || activeAttachment?.name || '',
+      mediaMime: activeAttachment?.mime || null,
       status: 'pending',
       timestamp: new Date().toISOString(),
     }
 
     scrollToEndRef.current = true
     setMessages((prev) => [...prev, optimistic])
-    appendCachedMessage(activeId, optimistic)
+    appendCachedMessage(activeId, optimistic, userIdRef.current)
 
     const savedDraft = draft
-    const savedAttachment = attachment
+    const savedAttachment = activeAttachment
     setDraft('')
-    if (attachment) revokeAudioPreview(attachment)
+    if (activeAttachment) revokeAudioPreview(activeAttachment)
     setAttachment(null)
     setSending(true)
 
@@ -1100,12 +1315,12 @@ export function Chat() {
         setMessages((prev) => {
           const withoutTemp = prev.filter((m) => m.id !== tempId)
           if (withoutTemp.some((m) => m.id === data.message.id)) return withoutTemp
-          replaceCachedMessage(activeId, tempId, data.message)
+          replaceCachedMessage(activeId, tempId, data.message, userIdRef.current)
           return [...withoutTemp, data.message]
         })
       } else {
         setMessages((prev) => prev.filter((m) => m.id !== tempId))
-        removeCachedMessage(activeId, tempId)
+        removeCachedMessage(activeId, tempId, userIdRef.current)
       }
       if (data.conversation) {
         setConversations((prev) => {
@@ -1115,7 +1330,7 @@ export function Chat() {
       }
     } catch (err) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId))
-      removeCachedMessage(activeId, tempId)
+      removeCachedMessage(activeId, tempId, userIdRef.current)
       setDraft(savedDraft)
       if (savedAttachment) setAttachment(savedAttachment)
       toastRef.current.error(err?.response?.data?.message || 'Falha ao enviar mensagem.')
@@ -1125,31 +1340,44 @@ export function Chat() {
     }
   }, [draft, attachment, activeId, sending, fetchGroupMessagesPage, refreshGroupInList])
 
-  const handleFile = useCallback(
-    (file) => {
-      if (!file) return
-      const type = mediaTypeFromMime(file.type, file.name)
-      if (type === 'none') {
-        toastRef.current.error('Envie imagem, vídeo MP4, áudio ou PDF.')
+  const handleSendRef = useRef(handleSend)
+  handleSendRef.current = handleSend
+
+  const handleFile = useCallback((file, options = {}) => {
+    if (!file) return
+    const type = mediaTypeFromMime(file.type, file.name)
+    if (type === 'none') {
+      toastRef.current.error('Envie imagem, vídeo MP4, áudio ou PDF.')
+      return
+    }
+    if (type === 'video') {
+      const mime = String(file.type || '').toLowerCase()
+      const name = String(file.name || '')
+      if (mime && mime !== 'video/mp4' && mime !== 'application/mp4' && !/\.mp4$/i.test(name)) {
+        toastRef.current.error('Use vídeo em formato MP4.')
         return
       }
-      if (type === 'video' && file.size > VIDEO_MAX_BYTES) {
+      if (file.size > VIDEO_MAX_BYTES) {
         toastRef.current.error(`Vídeo grande demais. Limite: ${videoMaxLabel}.`)
         return
       }
-      if (type === 'audio' && file.size > AUDIO_MAX_BYTES) {
-        toastRef.current.error(`Áudio grande demais. Limite: ${audioMaxLabel}.`)
+    }
+    if (type === 'audio' && file.size > AUDIO_MAX_BYTES) {
+      toastRef.current.error(`Áudio grande demais. Limite: ${audioMaxLabel}.`)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const base64 = stripBase64Payload(reader.result)
+      const next = { base64, mime: file.type || (type === 'image' ? 'image/jpeg' : file.type), name: file.name, type }
+      if (options.autoSend) {
+        void handleSendRef.current(next)
         return
       }
-      const reader = new FileReader()
-      reader.onload = () => {
-        const base64 = stripBase64Payload(reader.result)
-        setAttachment({ base64, mime: file.type, name: file.name, type })
-      }
-      reader.readAsDataURL(file)
-    },
-    [],
-  )
+      setAttachment(next)
+    }
+    reader.readAsDataURL(file)
+  }, [])
 
   const updateConversation = useCallback(
     async (payload) => {
@@ -1288,7 +1516,7 @@ export function Chat() {
     if (!name) return
     try {
       const { data } = await createCrmTag({ name, color: newTagColor })
-      setTags((prev) => [...prev, data.tag].sort((a, b) => a.name.localeCompare(b.name)))
+      setTags((prev) => mergeCrmTagCatalog(prev, [data.tag]))
       setNewTagModal(false)
       setNewTagName('')
       setNewTagColor('#22c55e')
@@ -1390,6 +1618,23 @@ export function Chat() {
     }
   }, [])
 
+  const handleCancelSync = useCallback(async () => {
+    setSyncCancelling(true)
+    try {
+      const { data } = await cancelCrmSync()
+      if (data.job) setSyncJob(data.job)
+      if (data.cancelled) {
+        toastRef.current.success('Sincronização cancelada.')
+      } else {
+        toastRef.current.info(data.message || 'Nenhuma sincronização em andamento.')
+      }
+    } catch (err) {
+      toastRef.current.error(err?.response?.data?.message || 'Falha ao cancelar a sincronização.')
+    } finally {
+      setSyncCancelling(false)
+    }
+  }, [])
+
   const applyQuickReply = useCallback(
     async (qr) => {
       setQrOpen(false)
@@ -1460,11 +1705,49 @@ export function Chat() {
         user={user}
         onComplete={() => setShowOnboarding(false)}
       />
+      <AddCrmContactModal
+        isOpen={addContactOpen}
+        onClose={() => setAddContactOpen(false)}
+        members={orgMembers}
+        showSellerSelect={isOrgOwner && orgMembers.length > 0}
+        defaultSellerUserId={sellerFilter || ''}
+        onCreated={(data) => {
+          const conversation = data?.conversation
+          if (data?.created === false) {
+            toast.info(data?.message || 'Este contato já existe no CRM.')
+          } else {
+            toast.success(data?.message || 'Contato criado.')
+          }
+          if (conversation?.id) {
+            setConversations((prev) => {
+              const exists = prev.some((c) => c.id === conversation.id)
+              if (!exists) return [conversation, ...prev]
+              return prev.map((c) =>
+                c.id === conversation.id ? mergeIncomingConversation(c, conversation) : c,
+              )
+            })
+            setGroupsOnly(false)
+            setUnidentifiedOnly(false)
+            openConversation(conversation.id)
+          }
+        }}
+      />
       <div
-        className={`-mx-4 -mb-4 flex overflow-hidden border-y border-brand-800/80 bg-brand-900/35 lg:mx-0 lg:mb-0 lg:rounded-2xl lg:border ${
-          isImpersonating
-            ? 'h-[calc(100dvh-9.25rem)] min-h-[420px] lg:h-[calc(100vh-9.75rem)]'
-            : 'h-[calc(100dvh-7.25rem)] min-h-[420px] lg:h-[calc(100vh-7.5rem)]'
+        className={`flex overflow-hidden border-y border-brand-800/80 bg-brand-900/35 max-lg:border-y-0 lg:mx-0 lg:mb-0 lg:rounded-2xl lg:border ${
+          // Mobile: main já é p-0. Desktop: margem do layout original.
+          isMobileLayout ? '' : '-mx-4 -mb-4'
+        } ${
+          isMobileLayout
+            ? activeId
+              ? isImpersonating
+                ? 'h-[calc(100dvh-2.75rem)] min-h-[320px]'
+                : 'h-[100dvh] min-h-[320px]'
+              : isImpersonating
+                ? 'h-[calc(100dvh-6.75rem)] min-h-[320px]'
+                : 'h-[calc(100dvh-4rem)] min-h-[320px]'
+            : isImpersonating
+              ? 'h-[calc(100dvh-9.25rem)] min-h-[420px] lg:h-[calc(100vh-9.75rem)]'
+              : 'h-[calc(100dvh-7.25rem)] min-h-[420px] lg:h-[calc(100vh-7.5rem)]'
         }`}
       >
       {/* Lista de conversas */}
@@ -1473,13 +1756,41 @@ export function Chat() {
           activeId ? 'hidden lg:flex' : 'flex'
         }`}
       >
-        <ChatSyncBar job={syncJob} onStartSync={handleStartSync} syncStarting={syncStarting} />
+        <ChatSyncBar
+          job={syncJob}
+          onStartSync={handleStartSync}
+          onCancelSync={handleCancelSync}
+          syncStarting={syncStarting}
+          syncCancelling={syncCancelling}
+        />
+        <div className="shrink-0 border-b border-brand-800/80 px-3 py-2">
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full justify-center gap-1.5 text-xs"
+            onClick={() => setAddContactOpen(true)}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Adicionar contato
+          </Button>
+        </div>
         {!waConnected && (
           <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-100">
             <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
             <span className="min-w-0 flex-1">WhatsApp desconectado — reconecte para fotos e mídia.</span>
             <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
               Conectar
+            </Link>
+          </div>
+        )}
+        {waConnected && waSyncStale && (
+          <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-100">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+            <span className="min-w-0 flex-1">
+              WhatsApp sem sincronizar — mensagens novas podem não aparecer. Tentando recuperar automaticamente.
+            </span>
+            <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
+              Ver conexão
             </Link>
           </div>
         )}
@@ -1575,19 +1886,37 @@ export function Chat() {
               </p>
             </div>
           ) : (
-            displayedConversations.map((c) => (
-              <ConversationListItem
-                key={c.kind === 'group' ? `${c.id}:${c.ownerUserId || 'self'}` : c.id}
-                conversation={c}
-                active={activeId}
-                onOpen={openConversation}
-                onPrefetch={prefetchConversation}
-                onRefreshAvatar={refreshAvatar}
-                selectable={c.kind !== 'group' && Boolean(c.contact?.id)}
-                selected={c.contact?.id ? selectedContactIds.has(c.contact.id) : false}
-                onToggleSelect={toggleContactSelect}
-              />
-            ))
+            <>
+              {displayedConversations.map((c) => (
+                <ConversationListItem
+                  key={c.kind === 'group' ? `${c.id}:${c.ownerUserId || 'self'}` : c.id}
+                  conversation={c}
+                  active={activeId}
+                  onOpen={openConversation}
+                  onPrefetch={prefetchConversation}
+                  onRefreshAvatar={refreshAvatar}
+                  selectable={c.kind !== 'group' && Boolean(c.contact?.id)}
+                  selected={c.contact?.id ? selectedContactIds.has(c.contact.id) : false}
+                  onToggleSelect={toggleContactSelect}
+                />
+              ))}
+              {!groupsOnly && hasMoreConversations && (
+                <div className="flex justify-center px-2 py-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={loadMoreConversations}
+                    disabled={loadingMoreConversations}
+                  >
+                    {loadingMoreConversations ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      'Carregar mais conversas'
+                    )}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1606,57 +1935,65 @@ export function Chat() {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 border-b border-brand-800/80 bg-brand-950/30 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
+            <div className="flex items-center gap-2 border-b border-brand-800/80 bg-brand-950/95 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3 max-lg:bg-brand-900/95 max-lg:pt-[max(0.5rem,env(safe-area-inset-top))]">
               <button
                 type="button"
                 onClick={closeMobileThread}
-                className="lg:hidden shrink-0 rounded-xl p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+                className="lg:hidden shrink-0 rounded-xl p-2.5 text-stone-300 transition hover:bg-white/5 hover:text-stone-100"
                 aria-label="Voltar para conversas"
               >
                 <ArrowLeft className="h-5 w-5" />
               </button>
-              <UserAvatar
-                name={contactTitle(active.contact)}
-                src={active.contact?.avatarUrl}
-                size="sm"
-                contactId={activeIsGroup ? undefined : active.contact?.id}
-                onRefreshAvatar={activeIsGroup ? undefined : refreshAvatar}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
-                {activeIsGroup ? (
-                  <p className="flex items-center gap-1 text-xs text-stone-500">
-                    <Users className="h-3 w-3 shrink-0" />
-                    {active.contact?.memberCount || 0} membros
-                  </p>
-                ) : (
-                  <p className="text-xs text-stone-500">
-                    {(() => {
-                      const phone = resolveContactPhone(active.contact)
-                      if (phone) return formatPhoneBr(phone)
-                      if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
-                      return active.remoteJid.split('@')[0]
-                    })()}
-                  </p>
-                )}
-              </div>
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-3 text-left lg:pointer-events-none"
+                onClick={() => {
+                  if (isMobileLayout) setShowPanel(true)
+                }}
+              >
+                <UserAvatar
+                  name={contactTitle(active.contact)}
+                  src={active.contact?.avatarUrl}
+                  size="sm"
+                  contactId={activeIsGroup ? undefined : active.contact?.id}
+                  onRefreshAvatar={activeIsGroup ? undefined : refreshAvatar}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
+                  {activeIsGroup ? (
+                    <p className="flex items-center gap-1 text-xs text-stone-500">
+                      <Users className="h-3 w-3 shrink-0" />
+                      {active.contact?.memberCount || 0} membros
+                    </p>
+                  ) : (
+                    <p className="text-xs text-stone-500">
+                      {(() => {
+                        const phone = resolveContactPhone(active.contact)
+                        if (phone) return formatPhoneBr(phone)
+                        if (active.contact?.isLid) return `ID ${active.remoteJid.split('@')[0]}`
+                        return active.remoteJid.split('@')[0]
+                      })()}
+                    </p>
+                  )}
+                </div>
+              </button>
               {activeIsGroup && (
                 <Link
                   to={`/dashboard/groups/${encodeURIComponent(active.groupJid)}`}
-                  className="shrink-0 rounded-lg border border-brand-700 px-2.5 py-1 text-xs text-stone-300 transition hover:bg-white/5"
+                  className="shrink-0 rounded-lg border border-brand-700 px-2.5 py-1 text-xs text-stone-300 transition hover:bg-white/5 max-lg:hidden"
                 >
                   Detalhes
                 </Link>
               )}
               {!activeIsGroup && active.aiEnabled && (
-                <Badge variant="default" className="border-sky-500/30 bg-sky-500/10 text-sky-300">
+                <Badge variant="default" className="border-sky-500/30 bg-sky-500/10 text-sky-300 max-lg:hidden">
                   <Bot className="mr-1 h-3 w-3" /> IA ativa
                 </Badge>
               )}
               <button
                 type="button"
                 onClick={() => setShowPanel((v) => !v)}
-                className={`rounded-lg p-2 transition hover:bg-white/5 ${
+                className={`rounded-lg p-2.5 transition hover:bg-white/5 ${
                   showPanel ? 'text-accent-300' : 'text-stone-400 hover:text-stone-100'
                 }`}
                 title={showPanel ? 'Ocultar painel (histórico, orçamento, compra)' : 'Abrir painel do contato'}
@@ -1666,7 +2003,12 @@ export function Chat() {
               </button>
             </div>
 
-            <div ref={threadRef} className="flex-1 space-y-1 overflow-y-auto vg-scrollbar px-3 py-3 sm:px-4">
+            <div
+              ref={threadRef}
+              className={`flex-1 space-y-1 overflow-y-auto vg-scrollbar px-3 py-3 sm:px-4 ${
+                isMobileLayout ? 'vg-chat-wallpaper' : ''
+              }`}
+            >
               {refreshingMessages && !loadingMessages && (
                 <div className="flex justify-center pb-1">
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-800/80 px-2.5 py-0.5 text-[10px] text-stone-500">
@@ -1697,10 +2039,10 @@ export function Chat() {
                   ) : (
                     <div key={item.id} className={`flex ${item.msg.fromMe ? 'justify-end' : 'justify-start'}`}>
                       <div
-                        className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow ${
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] ${
                           item.msg.fromMe
-                            ? 'rounded-br-md bg-accent-500/20 text-stone-100'
-                            : 'rounded-bl-md bg-brand-800 text-stone-200'
+                            ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
+                            : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
                         }`}
                       >
                         {!item.msg.fromMe && activeIsGroup && item.msg.senderName && (
@@ -1722,9 +2064,9 @@ export function Chat() {
             </div>
 
             {/* Composer */}
-            <div className="relative border-t border-brand-800 p-3">
+            <div className="relative border-t border-brand-800 bg-brand-950/90 p-3 max-lg:border-brand-800/60 max-lg:bg-brand-900/95 max-lg:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
               {qrOpen && filteredQuickReplies.length > 0 && (
-                <div className="absolute bottom-full left-3 z-20 mb-1 max-h-56 w-80 overflow-y-auto rounded-xl border border-brand-700 bg-brand-900 shadow-2xl">
+                <div className="absolute bottom-full left-3 z-20 mb-1 max-h-56 w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-brand-700 bg-brand-900 shadow-2xl">
                   {filteredQuickReplies.map((qr) => (
                     <button
                       key={qr.id}
@@ -1759,6 +2101,13 @@ export function Chat() {
                         preload="auto"
                       />
                     )}
+                    {attachment.type === 'image' && attachment.base64 && (
+                      <img
+                        src={`data:${attachment.mime};base64,${attachment.base64}`}
+                        alt=""
+                        className="mt-1 max-h-28 rounded-lg object-cover"
+                      />
+                    )}
                   </div>
                   <button
                     type="button"
@@ -1772,14 +2121,16 @@ export function Chat() {
                   </button>
                 </div>
               )}
-              <div className="flex min-h-[42px] items-end gap-2">
+              <div className="flex min-h-[44px] items-end gap-1.5 sm:gap-2">
                 {!isRecording && (
-                  <ChatQuickRepliesMenu
-                    quickReplies={quickReplies}
-                    onQuickRepliesChange={setQuickReplies}
-                    onApply={applyQuickReply}
-                    draft={draft}
-                  />
+                  <div className="max-lg:hidden">
+                    <ChatQuickRepliesMenu
+                      quickReplies={quickReplies}
+                      onQuickRepliesChange={setQuickReplies}
+                      onApply={applyQuickReply}
+                      draft={draft}
+                    />
+                  </div>
                 )}
                 {!isRecording && (
                   <>
@@ -1793,50 +2144,120 @@ export function Chat() {
                         e.target.value = ''
                       }}
                     />
+                    <input
+                      ref={galleryRef}
+                      type="file"
+                      accept="image/*,video/mp4,.mp4"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleFile(e.target.files?.[0])
+                        e.target.value = ''
+                      }}
+                    />
+                    <input
+                      ref={documentRef}
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleFile(e.target.files?.[0])
+                        e.target.value = ''
+                      }}
+                    />
+                    {/* Desktop: clip clássico. Mobile: + abre sheet (câmera/galeria/PDF). */}
                     <button
                       type="button"
-                      onClick={() => fileRef.current?.click()}
+                      onClick={() => {
+                        if (isMobileLayout) setAttachSheetOpen(true)
+                        else fileRef.current?.click()
+                      }}
                       disabled={Boolean(attachment)}
-                      className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40"
-                      title="Anexar imagem, vídeo, áudio ou PDF"
+                      className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:text-accent-300"
+                      title={isMobileLayout ? 'Anexar ou câmera' : 'Anexar imagem, vídeo, áudio ou PDF'}
                     >
-                      <Paperclip className="h-5 w-5" />
+                      {isMobileLayout ? <Plus className="h-6 w-6" /> : <Paperclip className="h-5 w-5" />}
                     </button>
                   </>
                 )}
-                <AudioRecorderButton
-                  disabled={sending || (!isRecording && Boolean(attachment))}
-                  onRecorded={setAttachment}
-                  onError={(msg) => toastRef.current.error(msg)}
-                  onRecordingChange={setIsRecording}
-                />
                 {!isRecording && (
-                  <>
-                    <textarea
-                      ref={inputRef}
-                      value={draft}
-                      onChange={(e) => onDraftChange(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault()
-                          handleSend()
-                        }
-                        if (e.key === 'Escape') setQrOpen(false)
-                      }}
-                      rows={1}
-                      placeholder="Digite uma mensagem… (use / para atalhos)"
-                      className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60"
-                    />
-                    <Button onClick={handleSend} disabled={sending || (!draft.trim() && !attachment)}>
-                      {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                    </Button>
-                  </>
+                  <textarea
+                    ref={inputRef}
+                    value={draft}
+                    onChange={(e) => onDraftChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault()
+                        void handleSend()
+                      }
+                      if (e.key === 'Escape') setQrOpen(false)
+                    }}
+                    rows={1}
+                    placeholder={isMobileLayout ? 'Mensagem' : 'Digite uma mensagem… (use / para atalhos)'}
+                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:bg-brand-950/70"
+                  />
                 )}
+                {/* Mic: desktop = click; mobile = segurar. Some com texto no mobile. */}
+                {(isMobileLayout ? !draft.trim() && !attachment : true) && (
+                  <AudioRecorderButton
+                    disabled={sending || (!isRecording && Boolean(attachment))}
+                    mode={isMobileLayout ? 'hold' : 'click'}
+                    onRecorded={(att, meta) => {
+                      if (meta?.autoSend) {
+                        void handleSend(att)
+                        return
+                      }
+                      setAttachment(att)
+                    }}
+                    onError={(msg) => toastRef.current.error(msg)}
+                    onRecordingChange={setIsRecording}
+                  />
+                )}
+                {/* Mobile WA: send circular só com texto/anexo. Desktop: Button original. */}
+                {isMobileLayout && !isRecording && (draft.trim() || attachment) ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleSend()}
+                    disabled={sending || (!draft.trim() && !attachment)}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-500 text-brand-950 transition hover:bg-accent-400 disabled:opacity-40"
+                    aria-label="Enviar"
+                  >
+                    {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                  </button>
+                ) : null}
+                {!isMobileLayout && !isRecording ? (
+                  <Button onClick={() => void handleSend()} disabled={sending || (!draft.trim() && !attachment)}>
+                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                ) : null}
               </div>
+              {isMobileLayout && !isRecording && (
+                <div className="mt-1.5 flex justify-center lg:hidden">
+                  <ChatQuickRepliesMenu
+                    quickReplies={quickReplies}
+                    onQuickRepliesChange={setQuickReplies}
+                    onApply={applyQuickReply}
+                    draft={draft}
+                  />
+                </div>
+              )}
             </div>
+            <ChatAttachSheet
+              open={attachSheetOpen}
+              onClose={() => setAttachSheetOpen(false)}
+              onCamera={() => setCameraOpen(true)}
+              onGallery={() => galleryRef.current?.click()}
+              onDocument={() => documentRef.current?.click()}
+            />
+            <ChatCameraCapture
+              open={cameraOpen}
+              onClose={() => setCameraOpen(false)}
+              onCapture={(file) => handleFile(file, { autoSend: true })}
+              onError={(msg) => toastRef.current.error(msg)}
+            />
           </>
         )}
       </div>
+
 
       {/* Painel do contato — lg+ coluna fixa; abaixo disso drawer sobre o chat */}
       {active && showPanel && (
@@ -1938,14 +2359,8 @@ export function Chat() {
                 setConversations((prev) =>
                   prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, ...contact } } : c)),
                 )
-                setTags((prev) => {
-                  const ids = new Set(prev.map((t) => t.id))
-                  const merged = [...prev]
-                  for (const t of contact.tags || []) {
-                    if (!ids.has(t.id)) merged.push(t)
-                  }
-                  return merged.sort((a, b) => a.name.localeCompare(b.name))
-                })
+                // Dedupa por nome: tags do contato podem ter outro id (vendedor ≠ dono).
+                setTags((prev) => mergeCrmTagCatalog(prev, contact.tags || []))
               }}
               onConversationUpdate={(conversation) => {
                 setConversations((prev) => prev.map((c) => (c.id === conversation.id ? conversation : c)))

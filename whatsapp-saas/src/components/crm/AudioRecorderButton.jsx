@@ -19,11 +19,24 @@ function RecordingBar({ children, className = '' }) {
   )
 }
 
-export function AudioRecorderButton({ disabled, onRecorded, onError, onRecordingChange }) {
+/**
+ * @param {'click'|'hold'} [mode='click'] — desktop: click start/stop; mobile WA: hold to record.
+ * @param {boolean} [autoSendOnStop=false] — se true, onRecorded e o pai pode enviar na hora (hold).
+ */
+export function AudioRecorderButton({
+  disabled,
+  onRecorded,
+  onError,
+  onRecordingChange,
+  mode = 'click',
+  autoSendOnStop = false,
+}) {
+  const holdMode = mode === 'hold'
   const [recording, setRecording] = useState(false)
   const [starting, setStarting] = useState(false)
   const [seconds, setSeconds] = useState(0)
   const [processing, setProcessing] = useState(false)
+  const [slideHint, setSlideHint] = useState(false)
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
   const chunksRef = useRef([])
@@ -32,6 +45,9 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
   const secondsRef = useRef(0)
   const cancelledRef = useRef(false)
   const startingUiTimerRef = useRef(null)
+  const holdPointerIdRef = useRef(null)
+  const holdStartXRef = useRef(0)
+  const holdActiveRef = useRef(false)
 
   useEffect(() => {
     secondsRef.current = seconds
@@ -81,7 +97,10 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
     setRecording(false)
     setStarting(false)
     setSeconds(0)
+    setSlideHint(false)
     setComposerRecording(false)
+    holdActiveRef.current = false
+    holdPointerIdRef.current = null
   }
 
   async function startRecording() {
@@ -130,13 +149,15 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
           const blob = new Blob(chunksRef.current, { type: baseMime })
           const elapsed = secondsRef.current
           if (elapsed < 1 && blob.size < 400) {
-            throw new Error('Grave pelo menos 1 segundo e clique em parar.')
+            throw new Error(
+              holdMode ? 'Segure o microfone para gravar.' : 'Grave pelo menos 1 segundo e clique em parar.',
+            )
           }
           if (blob.size < 100) {
             throw new Error('Não captamos áudio. Verifique o microfone e tente de novo.')
           }
           const attachment = await blobToAudioAttachment(blob, { durationSeconds: Math.max(elapsed, 1) })
-          onRecorded?.(attachment)
+          onRecorded?.(attachment, { autoSend: autoSendOnStop || holdMode })
         } catch (err) {
           onError?.(err?.message || 'Falha ao processar áudio.')
         } finally {
@@ -196,6 +217,78 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
     }
   }
 
+  function finishHoldGesture(clientX) {
+    if (!holdActiveRef.current) return
+    const dx = clientX - holdStartXRef.current
+    holdActiveRef.current = false
+    holdPointerIdRef.current = null
+    if (dx < -56) {
+      cancelRecording()
+      return
+    }
+    // Pode ainda estar em "starting" — para quando o recorder existir.
+    const tryStop = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        stopRecording()
+        return true
+      }
+      return false
+    }
+    if (!tryStop()) {
+      // Microfone ainda abrindo: aguarda e para (ou cancela se falhar).
+      const startedAt = Date.now()
+      const wait = setInterval(() => {
+        if (tryStop() || Date.now() - startedAt > 4000) {
+          clearInterval(wait)
+          if (!mediaRecorderRef.current) {
+            cleanupStream()
+            exitRecordingMode()
+          }
+        }
+      }, 50)
+    }
+  }
+
+  useEffect(() => {
+    if (!holdMode) return undefined
+    const onMove = (e) => {
+      if (!holdActiveRef.current || e.pointerId !== holdPointerIdRef.current) return
+      const dx = e.clientX - holdStartXRef.current
+      setSlideHint(dx < -56)
+    }
+    const onUp = (e) => {
+      if (!holdActiveRef.current) return
+      if (holdPointerIdRef.current != null && e.pointerId !== holdPointerIdRef.current) return
+      finishHoldGesture(e.clientX)
+    }
+    const onCancel = () => {
+      if (!holdActiveRef.current) return
+      holdActiveRef.current = false
+      holdPointerIdRef.current = null
+      cancelRecording()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listeners estáveis via refs
+  }, [holdMode])
+
+  function onHoldPointerDown(e) {
+    if (disabled || processing) return
+    if (e.button != null && e.button !== 0) return
+    e.preventDefault()
+    holdActiveRef.current = true
+    holdPointerIdRef.current = e.pointerId
+    holdStartXRef.current = e.clientX
+    setSlideHint(false)
+    void startRecording()
+  }
+
   if (processing) {
     return (
       <RecordingBar className="border-brand-700 bg-brand-900/40">
@@ -208,20 +301,24 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
   if (starting) {
     return (
       <RecordingBar>
-        <button
-          type="button"
-          onClick={() => {
-            cleanupStream()
-            exitRecordingMode()
-          }}
-          className="shrink-0 rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
-          title="Cancelar"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        {!holdMode && (
+          <button
+            type="button"
+            onClick={() => {
+              cleanupStream()
+              exitRecordingMode()
+            }}
+            className="shrink-0 rounded-lg p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
+            title="Cancelar"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
         <div className="flex flex-1 items-center justify-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin text-red-300/80" />
-          <span className="text-xs text-stone-400">Preparando microfone…</span>
+          <span className="text-xs text-stone-400">
+            {holdMode ? 'Segure para gravar…' : 'Preparando microfone…'}
+          </span>
         </div>
         <span className="shrink-0 min-w-[2.75rem] text-xs tabular-nums text-red-300/60">0:00</span>
         <div className="shrink-0 rounded-xl bg-red-500/15 p-2.5 text-red-300/50">
@@ -232,6 +329,22 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
   }
 
   if (recording) {
+    if (holdMode) {
+      return (
+        <RecordingBar className={slideHint ? 'border-red-400/50 bg-red-500/15' : ''}>
+          <span className={`shrink-0 text-[10px] ${slideHint ? 'text-red-300' : 'text-stone-500'}`}>
+            {slideHint ? 'Solte p/ cancelar' : '← Deslize p/ cancelar'}
+          </span>
+          <AudioWaveform stream={streamRef.current} active={recording} />
+          <span className="shrink-0 min-w-[2.75rem] text-xs tabular-nums text-red-300">
+            {formatRecordSeconds(seconds)}
+          </span>
+          <div className="shrink-0 rounded-xl bg-red-500/35 p-2.5 text-red-100 ring-2 ring-red-400/40">
+            <Mic className="h-4 w-4" />
+          </div>
+        </RecordingBar>
+      )
+    }
     return (
       <RecordingBar>
         <button
@@ -254,6 +367,23 @@ export function AudioRecorderButton({ disabled, onRecorded, onError, onRecording
           <Mic className="h-4 w-4" />
         </button>
       </RecordingBar>
+    )
+  }
+
+  if (holdMode) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onPointerEnter={handleMicPointerEnter}
+        onPointerDown={onHoldPointerDown}
+        onContextMenu={(e) => e.preventDefault()}
+        className="shrink-0 touch-none select-none rounded-full bg-accent-500/15 p-3 text-accent-300 transition active:bg-accent-500/30 disabled:opacity-40"
+        title="Segure para gravar áudio"
+        aria-label="Segure para gravar áudio"
+      >
+        <Mic className="h-5 w-5" />
+      </button>
     )
   }
 

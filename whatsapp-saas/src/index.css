@@ -50,8 +50,34 @@
   }
 }
 
+@keyframes vg-sheet-up {
+  from {
+    opacity: 0.6;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .vg-toast {
   animation: vg-toast-in 0.28s ease-out;
+}
+
+/* Fundo estilo app de chat — só aplicado no Chat mobile */
+.vg-chat-wallpaper {
+  background-color: #0a1612;
+  background-image:
+    radial-gradient(ellipse at 20% 10%, rgb(45 107 79 / 0.18), transparent 45%),
+    radial-gradient(ellipse at 80% 90%, rgb(201 162 39 / 0.06), transparent 40%),
+    repeating-linear-gradient(
+      -18deg,
+      transparent,
+      transparent 11px,
+      rgb(255 255 255 / 0.015) 11px,
+      rgb(255 255 255 / 0.015) 12px
+    );
 }
 
 @layer components {
@@ -110,6 +136,14 @@
     text-decoration: none;
     padding: 0;
     margin: 0;
+  }
+  .mention-editor-tag {
+    @apply text-amber-200;
+    font-weight: 600;
+  }
+  .mention-editor-stage {
+    @apply text-sky-300;
+    font-weight: 600;
   }
 
   .mention-chip-all {

@@ -16,6 +16,7 @@ const titles = {
   '/dashboard/groups': 'Grupos',
   '/dashboard/chat': 'Conversas',
   '/dashboard/crm': 'CRM',
+  '/dashboard/sales': 'Vendas',
   '/dashboard/analysis': 'Análise IA',
   '/dashboard/messages': 'Mensagens',
   '/dashboard/automations': 'Automações',
@@ -26,10 +27,10 @@ const titles = {
 }
 
 export function DashboardLayout() {
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
   const navigate = useNavigate()
-  const { width } = useSidebar()
-  const { isImpersonating, impersonation, exitImpersonation } = useAuth()
+  const { width, isMobile } = useSidebar()
+  const { user, isImpersonating, impersonation, exitImpersonation } = useAuth()
   const demoMode = !resolveUseRealApi()
 
   const title = useMemo(() => {
@@ -40,8 +41,14 @@ export function DashboardLayout() {
     return titles[pathname] || 'Painel'
   }, [pathname])
 
+  const isChatRoute = pathname.startsWith('/dashboard/chat')
+  const chatThreadOpen = isChatRoute && new URLSearchParams(search).has('c')
+  // No mobile, esconde o header da página quando a thread está aberta (header do Chat assume).
+  const hideHeaderForMobileThread = isMobile && isChatRoute && chatThreadOpen
+
   return (
-    <ReminderAlertsProvider>
+    // Remonta lembretes + páginas ao trocar de conta (impersonação) — zero residual.
+    <ReminderAlertsProvider key={user?.id || 'anon'}>
       <MetaPixelLoader />
       <div className="min-h-screen bg-brand-950">
         <DashboardSidebar />
@@ -71,9 +78,9 @@ export function DashboardLayout() {
             </Button>
           </div>
         )}
-        <DashboardHeader title={title} />
-        <main className="p-4 lg:p-6">
-          <Outlet />
+        <DashboardHeader title={title} hideOnMobileChatThread={hideHeaderForMobileThread} />
+        <main className={`p-4 lg:p-6 ${isChatRoute ? 'max-lg:p-0' : ''}`}>
+          <Outlet key={user?.id || 'anon'} />
         </main>
         </div>
       </div>

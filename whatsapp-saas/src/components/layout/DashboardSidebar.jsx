@@ -14,6 +14,7 @@ import {
   Plug,
   Receipt,
   Brain,
+  X,
 } from 'lucide-react'
 import { useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
@@ -62,7 +63,7 @@ const navSections = [
 ]
 
 export function DashboardSidebar() {
-  const { collapsed, setCollapsed } = useSidebar()
+  const { collapsed, setCollapsed, isMobile, mobileOpen, closeMobile } = useSidebar()
   const { isAdmin, isOrgOwner, isOrgSeller, canAccessAnalysis } = useAuth()
 
   const visibleSections = useMemo(() => {
@@ -78,87 +79,123 @@ export function DashboardSidebar() {
       .filter((section) => section.items.length > 0)
   }, [isOrgOwner, canAccessAnalysis])
 
+  // Mobile: drawer overlay. Desktop: sidebar fixa (comportamento original).
+  const asideWidthClass = isMobile ? 'w-60' : collapsed ? 'w-[72px]' : 'w-60'
+  const asideMobileClass = isMobile
+    ? mobileOpen
+      ? 'translate-x-0 shadow-2xl'
+      : '-translate-x-full pointer-events-none'
+    : 'translate-x-0'
+  const showLabels = isMobile || !collapsed
+
   return (
-    <aside
-      className={`fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-brand-800 bg-brand-900/98 backdrop-blur-md transition-[width] duration-300 ${
-        collapsed ? 'w-[72px]' : 'w-60'
-      }`}
-    >
-      <div className="flex h-16 items-center justify-between gap-2 border-b border-brand-800 px-2">
-        {!collapsed && (
-          <NavLink to="/dashboard" className="flex min-w-0 items-center px-1 py-1">
-            <BrandLogo />
-          </NavLink>
-        )}
-        {collapsed && (
-          <NavLink to="/dashboard" className="mx-auto flex justify-center py-1" title="Vesto Group">
-            <BrandLogo collapsed />
-          </NavLink>
-        )}
-      </div>
-      {isOrgSeller && !collapsed && (
-        <div className="mx-2 mt-2 rounded-lg border border-brand-800 bg-brand-950/50 px-2 py-1.5 text-[10px] text-stone-500">
-          Conta de vendedor — você vê apenas seus dados.
-        </div>
-      )}
-      <nav className="flex-1 space-y-3 overflow-y-auto p-2">
-        {visibleSections.map((section) => (
-          <div key={section.label}>
-            {!collapsed && (
-              <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-stone-600">
-                {section.label}
-              </p>
-            )}
-            <div className="space-y-1">
-              {section.items.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  title={item.title || item.label}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                      isActive
-                        ? 'bg-accent-500/10 text-accent-400 border border-accent-500/25 shadow-sm shadow-accent-900/20'
-                        : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'
-                    }`
-                  }
-                >
-                  <item.icon className="h-5 w-5 shrink-0" />
-                  {!collapsed && <span className="truncate">{item.label}</span>}
-                </NavLink>
-              ))}
-            </div>
-          </div>
-        ))}
-        {isAdmin && (
-          <NavLink
-            to="/dashboard/admin"
-            title="Administração"
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                isActive
-                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25 shadow-sm'
-                  : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'
-              }`
-            }
-          >
-            <Shield className="h-5 w-5 shrink-0 text-amber-400/90" />
-            {!collapsed && <span className="truncate">Administração</span>}
-          </NavLink>
-        )}
-      </nav>
-      <div className="border-t border-brand-800 p-2">
+    <>
+      {isMobile && mobileOpen ? (
         <button
           type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-stone-400 hover:bg-white/5 hover:text-stone-100 transition"
-          aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
-        >
-          {collapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
-          {!collapsed && <span className="text-xs">Recolher</span>}
-        </button>
-      </div>
-    </aside>
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          aria-label="Fechar menu"
+          onClick={closeMobile}
+        />
+      ) : null}
+      <aside
+        className={`fixed left-0 top-0 z-50 flex h-screen flex-col border-r border-brand-800 bg-brand-900/98 backdrop-blur-md transition-[width,transform] duration-300 ${asideWidthClass} ${asideMobileClass}`}
+      >
+        <div className="flex h-16 items-center justify-between gap-2 border-b border-brand-800 px-2">
+          {showLabels && (
+            <NavLink to="/dashboard" className="flex min-w-0 items-center px-1 py-1" onClick={closeMobile}>
+              <BrandLogo />
+            </NavLink>
+          )}
+          {!showLabels && (
+            <NavLink
+              to="/dashboard"
+              className="mx-auto flex justify-center py-1"
+              title="Vesto Group"
+              onClick={closeMobile}
+            >
+              <BrandLogo collapsed />
+            </NavLink>
+          )}
+          {isMobile && (
+            <button
+              type="button"
+              onClick={closeMobile}
+              className="rounded-lg p-2 text-stone-400 hover:bg-white/5 hover:text-stone-100"
+              aria-label="Fechar menu"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
+        </div>
+        {isOrgSeller && showLabels && (
+          <div className="mx-2 mt-2 rounded-lg border border-brand-800 bg-brand-950/50 px-2 py-1.5 text-[10px] text-stone-500">
+            Conta de vendedor — você vê apenas seus dados.
+          </div>
+        )}
+        <nav className="flex-1 space-y-3 overflow-y-auto p-2">
+          {visibleSections.map((section) => (
+            <div key={section.label}>
+              {showLabels && (
+                <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-stone-600">
+                  {section.label}
+                </p>
+              )}
+              <div className="space-y-1">
+                {section.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    title={item.title || item.label}
+                    onClick={closeMobile}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                        isActive
+                          ? 'bg-accent-500/10 text-accent-400 border border-accent-500/25 shadow-sm shadow-accent-900/20'
+                          : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'
+                      }`
+                    }
+                  >
+                    <item.icon className="h-5 w-5 shrink-0" />
+                    {showLabels && <span className="truncate">{item.label}</span>}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
+          ))}
+          {isAdmin && (
+            <NavLink
+              to="/dashboard/admin"
+              title="Administração"
+              onClick={closeMobile}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                  isActive
+                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25 shadow-sm'
+                    : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'
+                }`
+              }
+            >
+              <Shield className="h-5 w-5 shrink-0 text-amber-400/90" />
+              {showLabels && <span className="truncate">Administração</span>}
+            </NavLink>
+          )}
+        </nav>
+        {!isMobile && (
+          <div className="border-t border-brand-800 p-2">
+            <button
+              type="button"
+              onClick={() => setCollapsed((c) => !c)}
+              className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-stone-400 hover:bg-white/5 hover:text-stone-100 transition"
+              aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
+            >
+              {collapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+              {!collapsed && <span className="text-xs">Recolher</span>}
+            </button>
+          </div>
+        )}
+      </aside>
+    </>
   )
 }
