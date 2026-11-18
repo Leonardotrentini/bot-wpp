@@ -936,6 +936,24 @@ export async function patchCrmContact(id, payload) {
   return mockResponse({ contact: null })
 }
 
+
+export async function createCrmContact({ phone, name, notes, sellerUserId } = {}) {
+  if (resolveUseRealApi()) {
+    return apiClient.post('/crm/contacts', {
+      phone,
+      ...(name != null ? { name } : {}),
+      ...(notes != null ? { notes } : {}),
+      ...(sellerUserId ? { sellerUserId } : {}),
+    })
+  }
+  return mockResponse({
+    created: true,
+    message: 'Contato criado (simulado).',
+    contact: { id: 'mock-contact', phone, name: name || null },
+    conversation: { id: 'mock-convo', contact: { id: 'mock-contact', phone, name: name || null } },
+  })
+}
+
 export async function saveCrmContact(id, { name, saveOnWhatsapp = false }) {
   if (resolveUseRealApi()) {
     return apiClient.post(`/crm/contacts/${encodeURIComponent(id)}/save`, {
