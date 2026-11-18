@@ -1,10 +1,16 @@
-/** Cache em memória das mensagens recentes por conversa (stale-while-revalidate). */
+/** Cache em memória das mensagens recentes por conversa (stale-while-revalidate).
+ * Chaves incluem userId para não exibir thread de outra conta.
+ */
 
 const MAX_CONVERSATIONS = 40
 const FRESH_MS = 2 * 60 * 1000
 
 const cache = new Map()
 const inflight = new Map()
+
+function msgKey(conversationId, userId) {
+  return `${userId || '_anon'}::${conversationId}`
+}
 
 function trimCache() {
   while (cache.size > MAX_CONVERSATIONS) {
@@ -14,80 +20,101 @@ function trimCache() {
   }
 }
 
-export function getCachedConversationMessages(conversationId) {
-  if (!conversationId) return null
-  return cache.get(conversationId) || null
+export function getCachedConversationMessages(conversationId, userId) {
+  if (!conversationId || !userId) return null
+  return cache.get(msgKey(conversationId, userId)) || null
 }
 
-export function setCachedConversationMessages(conversationId, { messages, hasMore }) {
-  if (!conversationId) return
-  cache.set(conversationId, {
+export function setCachedConversationMessages(conversationId, { messages, hasMore }, userId) {
+  if (!conversationId || !userId) return
+  cache.set(msgKey(conversationId, userId), {
     messages: messages || [],
     hasMore: Boolean(hasMore),
     fetchedAt: Date.now(),
+    userId,
   })
   trimCache()
 }
 
-export function patchCachedConversationMessages(conversationId, patchFn) {
-  const entry = cache.get(conversationId)
+export function patchCachedConversationMessages(conversationId, patchFn, userId) {
+  if (!userId) return null
+  const key = msgKey(conversationId, userId)
+  const entry = cache.get(key)
   if (!entry) return null
   const next = patchFn(entry)
   if (!next) return entry
-  cache.set(conversationId, { ...entry, ...next, fetchedAt: Date.now() })
-  return cache.get(conversationId)
+  cache.set(key, { ...entry, ...next, fetchedAt: Date.now(), userId })
+  return cache.get(key)
 }
 
-export function appendCachedMessage(conversationId, message) {
-  if (!conversationId || !message) return
-  if (!cache.has(conversationId)) {
-    setCachedConversationMessages(conversationId, { messages: [message], hasMore: false })
+export function appendCachedMessage(conversationId, message, userId) {
+  if (!conversationId || !message || !userId) return
+  if (!cache.has(msgKey(conversationId, userId))) {
+    setCachedConversationMessages(conversationId, { messages: [message], hasMore: false }, userId)
     return
   }
-  patchCachedConversationMessages(conversationId, (entry) => {
-    if (entry.messages.some((m) => m.id === message.id || (message.messageId && m.messageId === message.messageId))) {
-      return entry
-    }
-    return { messages: [...entry.messages, message] }
-  })
+  patchCachedConversationMessages(
+    conversationId,
+    (entry) => {
+      if (entry.messages.some((m) => m.id === message.id || (message.messageId && m.messageId === message.messageId))) {
+        return entry
+      }
+      return { messages: [...entry.messages, message] }
+    },
+    userId,
+  )
 }
 
-export function replaceCachedMessage(conversationId, tempId, message) {
-  if (!conversationId || !message) return
-  patchCachedConversationMessages(conversationId, (entry) => ({
-    messages: entry.messages.map((m) => (m.id === tempId ? message : m)),
-  }))
+export function replaceCachedMessage(conversationId, tempId, message, userId) {
+  if (!conversationId || !message || !userId) return
+  patchCachedConversationMessages(
+    conversationId,
+    (entry) => ({
+      messages: entry.messages.map((m) => (m.id === tempId ? message : m)),
+    }),
+    userId,
+  )
 }
 
-export function removeCachedMessage(conversationId, messageId) {
-  if (!conversationId || !messageId) return
-  patchCachedConversationMessages(conversationId, (entry) => ({
-    messages: entry.messages.filter((m) => m.id !== messageId),
-  }))
+export function removeCachedMessage(conversationId, messageId, userId) {
+  if (!conversationId || !messageId || !userId) return
+  patchCachedConversationMessages(
+    conversationId,
+    (entry) => ({
+      messages: entry.messages.filter((m) => m.id !== messageId),
+    }),
+    userId,
+  )
 }
 
-export function prependCachedMessages(conversationId, olderMessages, hasMore) {
-  if (!conversationId || !olderMessages?.length) return
-  patchCachedConversationMessages(conversationId, (entry) => {
-    const ids = new Set(entry.messages.map((m) => m.id))
-    const unique = olderMessages.filter((m) => !ids.has(m.id))
-    return {
-      messages: [...unique, ...entry.messages],
-      hasMore: hasMore ?? entry.hasMore,
-    }
-  })
+export function prependCachedMessages(conversationId, olderMessages, hasMore, userId) {
+  if (!conversationId || !olderMessages?.length || !userId) return
+  patchCachedConversationMessages(
+    conversationId,
+    (entry) => {
+      const ids = new Set(entry.messages.map((m) => m.id))
+      const unique = olderMessages.filter((m) => !ids.has(m.id))
+      return {
+        messages: [...unique, ...entry.messages],
+        hasMore: hasMore ?? entry.hasMore,
+      }
+    },
+    userId,
+  )
 }
 
-async function fetchAndStore(conversationId, fetchFn) {
+async function fetchAndStore(conversationId, fetchFn, userId) {
   const result = await fetchFn(conversationId, { limit: 50 })
+  const key = msgKey(conversationId, userId)
   const entry = {
     messages: result.messages || [],
     hasMore: Boolean(result.hasMore),
     fetchedAt: Date.now(),
+    userId,
   }
-  cache.set(conversationId, entry)
+  cache.set(key, entry)
   trimCache()
-  inflight.delete(conversationId)
+  inflight.delete(key)
   return entry
 }
 
@@ -99,11 +126,12 @@ async function fetchAndStore(conversationId, fetchFn) {
 export async function fetchConversationMessagesCached(
   conversationId,
   fetchFn,
-  { force = false, onUpdated } = {},
+  { force = false, onUpdated, userId } = {},
 ) {
-  if (!conversationId) return { messages: [], hasMore: false, fetchedAt: Date.now() }
+  if (!conversationId || !userId) return { messages: [], hasMore: false, fetchedAt: Date.now() }
 
-  const cached = cache.get(conversationId)
+  const key = msgKey(conversationId, userId)
+  const cached = cache.get(key)
   const age = cached ? Date.now() - cached.fetchedAt : Infinity
 
   if (!force && cached && age < FRESH_MS) {
@@ -111,40 +139,41 @@ export async function fetchConversationMessagesCached(
   }
 
   if (!force && cached) {
-    if (!inflight.has(conversationId)) {
-      const promise = fetchAndStore(conversationId, fetchFn)
+    if (!inflight.has(key)) {
+      const promise = fetchAndStore(conversationId, fetchFn, userId)
         .then((entry) => {
           onUpdated?.(entry)
           return entry
         })
         .catch((err) => {
-          inflight.delete(conversationId)
+          inflight.delete(key)
           throw err
         })
-      inflight.set(conversationId, promise)
+      inflight.set(key, promise)
     }
     return cached
   }
 
-  if (inflight.has(conversationId)) {
-    return inflight.get(conversationId)
+  if (inflight.has(key)) {
+    return inflight.get(key)
   }
 
-  const promise = fetchAndStore(conversationId, fetchFn).catch((err) => {
-    inflight.delete(conversationId)
+  const promise = fetchAndStore(conversationId, fetchFn, userId).catch((err) => {
+    inflight.delete(key)
     throw err
   })
-  inflight.set(conversationId, promise)
+  inflight.set(key, promise)
   return promise
 }
 
 /** Prefetch silencioso ao passar o mouse na lista de conversas. */
-export function prefetchConversationMessages(conversationId, fetchFn) {
-  if (!conversationId) return
-  const cached = cache.get(conversationId)
+export function prefetchConversationMessages(conversationId, fetchFn, userId) {
+  if (!conversationId || !userId) return
+  const key = msgKey(conversationId, userId)
+  const cached = cache.get(key)
   if (cached && Date.now() - cached.fetchedAt < FRESH_MS) return
-  if (inflight.has(conversationId)) return
-  fetchConversationMessagesCached(conversationId, fetchFn).catch(() => {})
+  if (inflight.has(key)) return
+  fetchConversationMessagesCached(conversationId, fetchFn, { userId }).catch(() => {})
 }
 
 export function clearConversationMessagesCache() {

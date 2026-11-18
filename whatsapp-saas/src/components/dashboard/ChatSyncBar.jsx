@@ -7,6 +7,7 @@ import {
   User,
   Shield,
   AlertTriangle,
+  Square,
 } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
 import { Modal } from '../common/Modal.jsx'
@@ -147,28 +148,49 @@ function ChatSyncModal({ isOpen, onClose, onConfirm, syncStarting, lastJob }) {
   )
 }
 
-export function ChatSyncBar({ job, onStartSync, syncStarting }) {
+export function ChatSyncBar({ job, onStartSync, onCancelSync, syncStarting, syncCancelling }) {
   const [modalOpen, setModalOpen] = useState(false)
-  const idle = !job || ['done', 'error', 'cancelled'].includes(job.status)
+  const idle = !job || ['done', 'error', 'cancelled', 'partial'].includes(job.status)
+  const emptyStore = job?.discoveryStatus === 'empty_store'
 
   const handleConfirm = (days) => onStartSync(days)
 
   if (idle) {
     const statusText = syncStarting
       ? 'Iniciando sincronização…'
-      : job?.status === 'done'
-        ? `Sync ${formatSyncTime(job.finishedAt)} · ${job.totalMessages} msgs`
-        : job?.status === 'error'
-          ? job.error
-            ? `Última sync falhou: ${job.error}`
-            : 'Última sync falhou'
-          : 'Histórico e perfis do WhatsApp'
+      : emptyStore
+        ? job?.error ||
+          'Sessão sem histórico na API — use Reconectar se o CRM continuar atrasado'
+        : job?.status === 'done'
+          ? `Sync ${formatSyncTime(job.finishedAt)} · ${job.totalMessages} msgs`
+          : job?.status === 'partial'
+            ? `Sync parcial ${formatSyncTime(job.finishedAt)} · ${job.totalMessages || 0} msgs — continue se precisar`
+            : job?.status === 'cancelled'
+              ? `Sync cancelada ${formatSyncTime(job.finishedAt)} · ${job.doneChats || 0}/${job.totalChats || 0} conversas`
+              : job?.status === 'error'
+                ? job.error
+                  ? `Última sync falhou: ${job.error}`
+                  : 'Última sync falhou'
+                : 'Histórico e perfis do WhatsApp'
 
     return (
       <>
-        <div className="flex items-center gap-2 border-b border-brand-800/80 bg-brand-950/30 px-3 py-2">
-          <RefreshCw className="h-3.5 w-3.5 shrink-0 text-stone-500" aria-hidden />
-          <p className="min-w-0 flex-1 truncate text-[11px] text-stone-500" title={statusText}>
+        <div
+          className={`flex items-center gap-2 border-b px-3 py-2 ${
+            emptyStore
+              ? 'border-amber-500/30 bg-amber-500/10'
+              : 'border-brand-800/80 bg-brand-950/30'
+          }`}
+        >
+          {emptyStore ? (
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5 shrink-0 text-stone-500" aria-hidden />
+          )}
+          <p
+            className={`min-w-0 flex-1 truncate text-[11px] ${emptyStore ? 'text-amber-100' : 'text-stone-500'}`}
+            title={statusText}
+          >
             {statusText}
           </p>
           <Button
@@ -213,6 +235,23 @@ export function ChatSyncBar({ job, onStartSync, syncStarting }) {
           {!rateLimited && formatEta(job.etaSeconds) ? ` · ${formatEta(job.etaSeconds)}` : ''}
         </span>
         <span className="shrink-0 text-stone-500">{pct}%</span>
+        {typeof onCancelSync === 'function' && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onCancelSync}
+            disabled={syncCancelling}
+            className="h-7 shrink-0 px-2 text-[11px] text-stone-300 hover:text-red-200"
+            title="Parar sincronização"
+          >
+            {syncCancelling ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Square className="h-3 w-3 fill-current" />
+            )}
+            Parar
+          </Button>
+        )}
       </div>
       {!rateLimited && (
         <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-brand-800">

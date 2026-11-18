@@ -114,7 +114,7 @@ export function ChatConversationFilters({
               unidentifiedOnly ? 'border-amber-500/40 bg-amber-500/15 text-amber-100' : ''
             }
           >
-            Sem identificação ({unidentifiedCount})
+            Sem telefone / LID ({unidentifiedCount})
           </FilterChip>
         )}
       </div>

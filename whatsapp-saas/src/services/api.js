@@ -509,13 +509,26 @@ export async function getTemplates() {
   return mockResponse({ templates: [] })
 }
 
+export async function getTemplate(id) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(`/messages/templates/${encodeURIComponent(id)}`, { timeout: 120000 })
+  }
+  return mockResponse({ template: { id, name: '', body: '', mediaType: 'none' } })
+}
+
 export async function createTemplate(payload) {
-  if (resolveUseRealApi()) return apiClient.post('/messages/templates', payload)
+  if (resolveUseRealApi()) {
+    return apiClient.post('/messages/templates', payload, { timeout: payload?.mediaBase64 ? 600000 : 120000 })
+  }
   return mockResponse({ template: { id: `tpl-${Date.now()}`, ...payload } })
 }
 
 export async function updateTemplate(id, payload) {
-  if (resolveUseRealApi()) return apiClient.put(`/messages/templates/${encodeURIComponent(id)}`, payload)
+  if (resolveUseRealApi()) {
+    return apiClient.put(`/messages/templates/${encodeURIComponent(id)}`, payload, {
+      timeout: payload?.mediaBase64 ? 600000 : 120000,
+    })
+  }
   return mockResponse({ template: { id, ...payload } })
 }
 
@@ -535,7 +548,11 @@ export async function deleteAutomation(id) {
 }
 
 export async function putAutomation(id, payload) {
-  if (resolveUseRealApi()) return apiClient.put(`/automations/${encodeURIComponent(id)}`, payload)
+  if (resolveUseRealApi()) {
+    return apiClient.put(`/automations/${encodeURIComponent(id)}`, payload, {
+      timeout: payload?.mediaBase64 ? 600000 : 120000,
+    })
+  }
   return mockResponse({ automation: { id, ...payload } })
 }
 
@@ -585,7 +602,9 @@ export async function getGroupMessageActivity(limit = 40) {
 }
 
 export async function createAutomation(payload) {
-  if (resolveUseRealApi()) return apiClient.post('/automations', payload)
+  if (resolveUseRealApi()) {
+    return apiClient.post('/automations', payload, { timeout: payload?.mediaBase64 ? 600000 : 120000 })
+  }
   await delay()
   return mockResponse({ automation: { id: `auto-${Date.now()}`, status: 'ativa', ...payload } })
 }
@@ -593,6 +612,13 @@ export async function createAutomation(payload) {
 export async function getAutomations() {
   if (resolveUseRealApi()) return apiClient.get('/automations')
   return mockResponse({ automations: [] })
+}
+
+export async function getAutomation(id) {
+  if (resolveUseRealApi()) {
+    return apiClient.get(`/automations/${encodeURIComponent(id)}`, { timeout: 120000 })
+  }
+  return mockResponse({ automation: { id, name: '', mediaType: 'none' } })
 }
 
 export async function getMembers(params = {}, config = {}) {
@@ -809,6 +835,20 @@ export async function testMetaIntegration() {
   return mockResponse({ ok: true, message: 'Eventos de teste enviados (simulado).' })
 }
 
+/** Valida WABA + token + dataset WhatsApp (CTWA / campanhas de mensagem). */
+export async function validateMetaCtwa(payload = {}) {
+  if (resolveUseRealApi()) return apiClient.post('/integrations/meta/validate-ctwa', payload)
+  return mockResponse({
+    ok: false,
+    overall: 'warn',
+    summary: 'Validação CTWA simulada (API real desligada).',
+    readyForMessagingCampaigns: false,
+    checks: [],
+    nextSteps: [],
+    wabaResults: [],
+  })
+}
+
 export async function getMetaAdsDashboard(period = '7d') {
   if (resolveUseRealApi()) return apiClient.get('/integrations/meta/ads', { params: { period } })
   return mockResponse({
@@ -861,11 +901,11 @@ export async function testMetaAdsConnection(payload = {}) {
   })
 }
 
-export async function connectWhatsApp() {
-  if (resolveUseRealApi()) return apiClient.post('/whatsapp/connect')
+export async function connectWhatsApp(payload = {}) {
+  if (resolveUseRealApi()) return apiClient.post('/whatsapp/connect', payload || {})
   await delay(600)
   whatsappConnected = true
-  return mockResponse({ connected: true, qr: null })
+  return mockResponse({ connected: true, qr: null, pairingCode: null })
 }
 
 export async function disconnectWhatsApp() {
@@ -936,7 +976,6 @@ export async function patchCrmContact(id, payload) {
   return mockResponse({ contact: null })
 }
 
-
 export async function createCrmContact({ phone, name, notes, sellerUserId } = {}) {
   if (resolveUseRealApi()) {
     return apiClient.post('/crm/contacts', {
@@ -951,6 +990,18 @@ export async function createCrmContact({ phone, name, notes, sellerUserId } = {}
     message: 'Contato criado (simulado).',
     contact: { id: 'mock-contact', phone, name: name || null },
     conversation: { id: 'mock-convo', contact: { id: 'mock-contact', phone, name: name || null } },
+  })
+}
+
+export async function createCrmSale(payload = {}) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/sales', payload)
+  return mockResponse({
+    ok: true,
+    contactCreated: Boolean(payload.phone && !payload.contactId),
+    message: 'Venda registrada (simulada).',
+    contact: { id: payload.contactId || 'mock-contact' },
+    conversation: null,
+    tracking: null,
   })
 }
 
@@ -1043,7 +1094,7 @@ export async function updateCrmContactActivity(contactId, activityId, payload) {
   return mockResponse({ activity: { id: activityId, ...payload }, contact: { id: contactId } })
 }
 
-export async function getCrmSales({ from, to, q, page, limit, sellerUserId, tagId } = {}) {
+export async function getCrmSales({ from, to, q, page, limit, sellerUserId, tagId, customerType } = {}) {
   if (resolveUseRealApi()) {
     return apiClient.get('/crm/sales', {
       params: {
@@ -1052,6 +1103,7 @@ export async function getCrmSales({ from, to, q, page, limit, sellerUserId, tagI
         ...(q ? { q } : {}),
         ...(sellerUserId ? { sellerUserId } : {}),
         ...(tagId ? { tagId } : {}),
+        ...(customerType === 'new' || customerType === 'returning' ? { customerType } : {}),
         ...(page ? { page } : {}),
         ...(limit ? { limit } : {}),
       },
@@ -1358,7 +1410,27 @@ export async function testCrmFlowDraft(flow, conversationId) {
 
 export async function getCrmAgents() {
   if (resolveUseRealApi()) return apiClient.get('/crm/agents')
-  return mockResponse({ agents: [], aiConfigured: false })
+  return mockResponse({ agents: [], aiConfigured: false, aiKeyLast4: null })
+}
+
+export async function getCrmAiSettings() {
+  if (resolveUseRealApi()) return apiClient.get('/crm/ai/settings')
+  return mockResponse({ configured: false, last4: null, baseUrl: 'https://api.openai.com/v1' })
+}
+
+export async function saveCrmAiSettings({ apiKey, baseUrl }) {
+  if (resolveUseRealApi()) return apiClient.put('/crm/ai/settings', { apiKey, baseUrl })
+  return mockResponse({ configured: true, last4: String(apiKey || '').slice(-4), baseUrl: baseUrl || 'https://api.openai.com/v1' })
+}
+
+export async function generateCrmAgentPrompt({ brief, name }) {
+  if (resolveUseRealApi()) return apiClient.post('/crm/ai/generate-prompt', { brief, name }, { timeout: 90000 })
+  return mockResponse({ systemPrompt: 'Você é {{NOME}} da {{MARCA}}.\n\nBASE DE CONHECIMENTO\n{{KNOWLEDGE}}' })
+}
+
+export async function deleteCrmAiSettings() {
+  if (resolveUseRealApi()) return apiClient.delete('/crm/ai/settings')
+  return mockResponse({ configured: false, last4: null })
 }
 
 export async function createCrmAgent(payload) {
@@ -1380,7 +1452,7 @@ export async function testCrmAgent(id, message, history = []) {
   if (resolveUseRealApi()) {
     return apiClient.post(`/crm/agents/${encodeURIComponent(id)}/test`, { message, history }, { timeout: 90000 })
   }
-  return mockResponse({ reply: 'Resposta de teste (modo demonstração).' })
+  return mockResponse({ reply: 'Resposta de teste (modo demonstração).', actions: [] })
 }
 
 export async function getCrmAiStatus() {
@@ -1400,6 +1472,13 @@ export async function addCrmAgentKnowledge(agentId, payload) {
   return mockResponse({ item: { id: `k-${Date.now()}`, name: payload.name, type: payload.type } })
 }
 
+export async function reorderCrmAgentKnowledge(agentId, ids) {
+  if (resolveUseRealApi()) {
+    return apiClient.put(`/crm/agents/${encodeURIComponent(agentId)}/knowledge/order`, { ids })
+  }
+  return mockResponse({ ok: true })
+}
+
 export async function deleteCrmAgentKnowledge(agentId, kid) {
   if (resolveUseRealApi()) {
     return apiClient.delete(`/crm/agents/${encodeURIComponent(agentId)}/knowledge/${encodeURIComponent(kid)}`)
@@ -1415,6 +1494,11 @@ export async function startCrmSync(payload = {}) {
 export async function getCrmSyncStatus() {
   if (resolveUseRealApi()) return apiClient.get('/crm/sync/status')
   return mockResponse({ job: null })
+}
+
+export async function cancelCrmSync() {
+  if (resolveUseRealApi()) return apiClient.post('/crm/sync/cancel')
+  return mockResponse({ ok: true, cancelled: true, job: null })
 }
 
 export async function refreshCrmContactAvatar(contactId) {
