@@ -72,9 +72,20 @@ export function getAudioConstraints() {
   return AUDIO_CONSTRAINTS
 }
 
+function isAppleMobile() {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  if (/iPad|iPhone|iPod/.test(ua)) return true
+  // iPadOS reporta como Mac com touch
+  return navigator.platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1
+}
+
 export function pickAudioMimeType() {
   if (typeof MediaRecorder === 'undefined') return null
-  const candidates = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
+  // iOS/Safari: webm/ogg não reproduzem — prioriza mp4/aac
+  const candidates = isAppleMobile()
+    ? ['audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav', 'audio/webm']
+    : ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
   return candidates.find((t) => MediaRecorder.isTypeSupported(t)) || null
 }
 

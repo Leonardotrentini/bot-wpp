@@ -43,12 +43,32 @@ export function ChatAudioBubble({ src, fromMe = false, durationHint }) {
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(durationHint > 0 ? durationHint : 0)
   const [failed, setFailed] = useState(false)
+  const [useRawSrc, setUseRawSrc] = useState(false)
+  const blobRef = useRef(null)
 
-  const playbackSrc = useMemo(() => (src ? mediaSrcForPlayback(src) : null), [src])
+  const playbackSrc = useMemo(() => {
+    if (!src) return null
+    if (useRawSrc) return src
+    if (String(src).startsWith('blob:')) return src
+    try {
+      const next = mediaSrcForPlayback(src)
+      return next || src
+    } catch {
+      return src
+    }
+  }, [src, useRawSrc])
 
   useEffect(() => {
+    const prev = blobRef.current
+    if (prev && prev !== src && prev !== playbackSrc && String(prev).startsWith('blob:')) {
+      revokeMediaPreviewUrl(prev)
+    }
+    blobRef.current = playbackSrc?.startsWith('blob:') && playbackSrc !== src ? playbackSrc : null
     return () => {
-      if (playbackSrc?.startsWith('blob:') && playbackSrc !== src) revokeMediaPreviewUrl(playbackSrc)
+      if (blobRef.current) {
+        revokeMediaPreviewUrl(blobRef.current)
+        blobRef.current = null
+      }
     }
   }, [playbackSrc, src])
 
@@ -56,15 +76,26 @@ export function ChatAudioBubble({ src, fromMe = false, durationHint }) {
     setPlaying(false)
     setCurrent(0)
     setFailed(false)
+    setUseRawSrc(false)
     if (durationHint > 0) setDuration(durationHint)
-  }, [playbackSrc, durationHint])
+  }, [src, durationHint])
+
+  function handleAudioError() {
+    // 1ª falha com blob: tenta data URL original (alguns iOS falham só no blob)
+    if (!useRawSrc && src && playbackSrc !== src) {
+      setUseRawSrc(true)
+      setFailed(false)
+      return
+    }
+    setFailed(true)
+  }
 
   function togglePlay(e) {
     e.stopPropagation()
     const el = audioRef.current
     if (!el || failed) return
     if (el.paused) {
-      void el.play().catch(() => setFailed(true))
+      void el.play().catch(() => handleAudioError())
     } else {
       el.pause()
     }
@@ -80,7 +111,7 @@ export function ChatAudioBubble({ src, fromMe = false, durationHint }) {
     setCurrent(el.currentTime)
   }
 
-  if (!playbackSrc || failed) {
+  if (!src) {
     return (
       <div className="flex min-w-[200px] items-center gap-2 py-1 text-sm text-stone-400">
         <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25">
@@ -91,15 +122,41 @@ export function ChatAudioBubble({ src, fromMe = false, durationHint }) {
     )
   }
 
+  if (failed) {
+    return (
+      <div className="flex min-w-[200px] items-center gap-2 py-1 text-sm text-stone-400">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25">
+          <Play className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <p className="italic">Áudio indisponível</p>
+          <button
+            type="button"
+            className="text-[11px] text-brand-300 underline"
+            onClick={(e) => {
+              e.stopPropagation()
+              setFailed(false)
+              setUseRawSrc((v) => !v)
+            }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const progress = duration > 0 ? Math.min(1, current / duration) : 0
   const timeLabel = playing || current > 0 ? formatAudioTime(current) : formatAudioTime(duration)
 
   return (
     <div className="flex min-w-[220px] max-w-[280px] items-center gap-2.5 py-0.5">
       <audio
+        key={playbackSrc || src}
         ref={audioRef}
-        src={playbackSrc}
+        src={playbackSrc || src}
         preload="metadata"
+        playsInline
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => {
@@ -111,7 +168,7 @@ export function ChatAudioBubble({ src, fromMe = false, durationHint }) {
           const d = audioRef.current?.duration
           if (Number.isFinite(d) && d > 0) setDuration(d)
         }}
-        onError={() => setFailed(true)}
+        onError={handleAudioError}
       />
       <button
         type="button"

@@ -1260,6 +1260,7 @@ export function Chat() {
         type: activeAttachment?.type || 'text',
         mediaKind: activeAttachment?.type || null,
         mediaMime: activeAttachment?.mime || null,
+        mediaDuration: activeAttachment?.durationSeconds || null,
         body: body || activeAttachment?.name || '',
         timestamp: new Date().toISOString(),
         source: 'group',
@@ -1323,8 +1324,14 @@ export function Chat() {
       mediaKind: activeAttachment?.type || null,
       body: body || activeAttachment?.name || '',
       mediaMime: activeAttachment?.mime || null,
+      mediaDuration: activeAttachment?.durationSeconds || null,
       status: 'pending',
       timestamp: new Date().toISOString(),
+    }
+
+    // Pré-carrega áudio/mídia na bolha otimista (evita “Áudio indisponível” no iPhone)
+    if (activeAttachment?.base64) {
+      primeCrmMessageMediaCache(tempId, activeAttachment.mime, activeAttachment.base64)
     }
 
     scrollToEndRef.current = true
