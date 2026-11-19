@@ -175,11 +175,11 @@ export function Connect() {
           <QrCode className="h-5 w-5 text-accent-400" /> QR Code
         </h3>
         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-          <div className="flex h-72 w-72 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-brand-600 bg-white">
+          <div className="flex h-[min(18rem,calc(100vw-4rem))] w-[min(18rem,calc(100vw-4rem))] max-w-full shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-brand-600 bg-white">
             {connected ? (
               <span className="text-xs text-stone-500 text-center px-6">Sessão ativa — QR não necessário</span>
             ) : status?.qr ? (
-              <img src={status.qr} alt="QR Code do WhatsApp" className="h-64 w-64 rounded-md bg-white p-3" />
+              <img src={status.qr} alt="QR Code do WhatsApp" className="h-[90%] w-[90%] max-h-64 max-w-64 rounded-md bg-white p-3" />
             ) : (
               <div className="text-center p-2">
                 <QrCode className="h-16 w-16 mx-auto text-stone-600 mb-2" />

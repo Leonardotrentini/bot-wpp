@@ -182,7 +182,7 @@ function CrmTabHeader({
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {showSellerFilter ? (
-          <div className="min-w-[160px] sm:w-48">
+          <div className="w-full min-w-0 sm:w-48">
             <Select
               value={sellerFilter || ''}
               onChange={(e) => onSellerFilterChange?.(e.target.value)}
@@ -2296,10 +2296,10 @@ export function Crm() {
       {tab === 'kanban' && (
         <>
           {!waConnected && (
-            <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-100">
+            <div className="flex flex-col gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-100 sm:flex-row sm:items-center">
               <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
-              <span className="flex-1">WhatsApp desconectado — reconecte para sincronizar fotos, mídia e envios.</span>
-              <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
+              <span className="min-w-0 flex-1">WhatsApp desconectado — reconecte para sincronizar fotos, mídia e envios.</span>
+              <Link to="/dashboard/connect" className="w-full font-medium text-accent-300 underline hover:text-accent-200 sm:w-auto sm:shrink-0">
                 Conectar WhatsApp
               </Link>
             </div>
@@ -2494,11 +2494,12 @@ export function Crm() {
               agentes — eles começam a responder assim que a chave for adicionada.
             </div>
           )}
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-stone-400">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="min-w-0 text-sm text-stone-400">
               Agentes respondem conversas automaticamente (ative a IA por conversa na aba Conversas).
             </p>
             <Button
+              className="w-full sm:w-auto"
               onClick={() => {
                 setAgentEditing(null)
                 setAgentModal(true)

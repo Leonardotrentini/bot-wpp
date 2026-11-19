@@ -499,7 +499,7 @@ export function Sales() {
             </div>
 
             {isOrgOwner && members.length > 0 ? (
-              <div className="min-w-[160px] sm:w-44">
+              <div className="w-full min-w-0 sm:w-44">
                 <Select
                   value={sellerUserId}
                   onChange={(e) => setSellerUserId(e.target.value)}
@@ -516,7 +516,7 @@ export function Sales() {
               </div>
             ) : null}
 
-            <div className="min-w-[140px] sm:w-40">
+            <div className="w-full min-w-0 sm:w-40">
               <Select value={tagId} onChange={(e) => setTagId(e.target.value)} aria-label="Filtrar por tag">
                 <option value="">Tag: todas</option>
                 {tags.map((t) => (
@@ -527,14 +527,14 @@ export function Sales() {
               </Select>
             </div>
 
-            <div className="relative min-w-[180px] flex-1 sm:max-w-xs">
+            <div className="relative w-full min-w-0 flex-1 sm:max-w-xs">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-500" />
               <input
                 type="search"
                 placeholder="Cliente, telefone ou ticket…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                className="w-full rounded-xl border border-brand-700 bg-brand-950/50 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/50"
+                className="w-full rounded-xl border border-brand-700 bg-brand-950/50 py-2 pl-9 pr-3 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/50 max-lg:min-h-11 max-lg:text-base"
               />
             </div>
 

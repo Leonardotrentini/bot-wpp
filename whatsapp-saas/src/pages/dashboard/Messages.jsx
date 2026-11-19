@@ -1760,17 +1760,17 @@ export function Messages({ defaultTab = 'criar' }) {
             <Card className="space-y-4">
               <div>
                 <p className="mb-1.5 text-sm font-medium text-stone-300">Nome da cadência</p>
-                <div className="flex gap-2">
-                  <Input value={cadNameDraft} onChange={(e) => setCadNameDraft(e.target.value)} />
-                  <Button variant="secondary" onClick={saveCadName}>Salvar</Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input className="min-w-0 flex-1" value={cadNameDraft} onChange={(e) => setCadNameDraft(e.target.value)} />
+                  <Button variant="secondary" className="w-full sm:w-auto" onClick={saveCadName}>Salvar</Button>
                 </div>
               </div>
 
-              <div className="flex gap-2 rounded-xl border border-brand-800 p-1">
-                <button type="button" onClick={() => setAddMode('new')} className={`flex-1 rounded-lg px-3 py-2 text-sm ${addMode === 'new' ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 hover:bg-white/5'}`}>
+              <div className="flex flex-col gap-1 rounded-xl border border-brand-800 p-1 sm:flex-row sm:gap-2">
+                <button type="button" onClick={() => setAddMode('new')} className={`flex-1 rounded-lg px-3 py-2.5 text-sm max-lg:min-h-11 ${addMode === 'new' ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 hover:bg-white/5'}`}>
                   Criar novo disparo
                 </button>
-                <button type="button" onClick={() => setAddMode('existing')} className={`flex-1 rounded-lg px-3 py-2 text-sm ${addMode === 'existing' ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 hover:bg-white/5'}`}>
+                <button type="button" onClick={() => setAddMode('existing')} className={`flex-1 rounded-lg px-3 py-2.5 text-sm max-lg:min-h-11 ${addMode === 'existing' ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 hover:bg-white/5'}`}>
                   Adicionar existente
                 </button>
               </div>
