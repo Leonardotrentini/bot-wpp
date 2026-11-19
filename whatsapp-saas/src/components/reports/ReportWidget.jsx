@@ -1,4 +1,4 @@
-import { ChevronUp, ChevronDown, X } from 'lucide-react'
+import { ChevronUp, ChevronDown, GripVertical, X } from 'lucide-react'
 import { Card } from '../common/Card.jsx'
 import {
   getMetricDef,
@@ -11,14 +11,14 @@ import { ChartWidget } from './widgets/ChartWidget.jsx'
 import { TableWidget, ListWidget } from './widgets/TableWidget.jsx'
 import { FunnelWidget, ConversionsWidget } from './widgets/FunnelWidget.jsx'
 
-function WidgetBody({ def, payload, editing, funnelSteps, onFunnelStepsChange }) {
+function WidgetBody({ def, payload, editing, funnelSteps, onFunnelStepsChange, compact = false }) {
   if (payload?.empty) {
-    return <p className="text-sm text-stone-500 py-4">Métrica não disponível.</p>
+    return <p className="py-4 text-sm text-stone-500">Métrica não disponível.</p>
   }
 
   switch (def.chartType) {
     case 'kpi':
-      return <KpiWidget payload={payload} format={def.format} />
+      return <KpiWidget payload={payload} format={def.format} compact={compact} />
     case 'area':
     case 'bar':
     case 'bar_horizontal':
@@ -88,6 +88,13 @@ export function ReportWidget({
   isLast,
   funnelSteps,
   onFunnelStepsChange,
+  draggable = false,
+  dragging = false,
+  dragOver = false,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }) {
   const def = getMetricDef(widget.metricId)
   if (!def) return null
@@ -99,10 +106,17 @@ export function ReportWidget({
   if (variant === 'kpi') {
     return (
       <div
-        className={`group relative h-full rounded-2xl border ${border} bg-gradient-to-br from-brand-900/50 to-brand-950/80 p-5 transition hover:border-brand-700/80`}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        className={`group relative rounded-2xl border ${border} bg-gradient-to-br from-brand-900/55 to-brand-950/85 transition hover:border-brand-700/80 max-lg:min-h-0 max-lg:p-3.5 lg:h-full lg:min-h-[148px] lg:p-5 ${
+          draggable ? 'cursor-grab active:cursor-grabbing' : ''
+        } ${dragging ? 'opacity-40' : ''} ${dragOver ? 'ring-2 ring-accent-400/70' : ''}`}
       >
         {editing && (
-          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition">
+          <div className="absolute right-2 top-2 z-10 opacity-100 transition lg:opacity-0 lg:group-hover:opacity-100">
             <EditControls
               onMoveUp={onMoveUp}
               onMoveDown={onMoveDown}
@@ -112,22 +126,51 @@ export function ReportWidget({
             />
           </div>
         )}
-        <div className="flex items-start justify-between gap-3">
-          <div className={`rounded-xl border ${border} ${bg} p-2.5`}>
+
+        {/* Mobile: linha horizontal (ícone + label | valor) */}
+        <div className="flex items-center gap-3 lg:hidden">
+          {draggable && editing ? <GripVertical className="h-4 w-4 shrink-0 text-stone-600" /> : null}
+          <div className={`shrink-0 rounded-xl border ${border} ${bg} p-2`}>
             <Icon className={`h-4 w-4 ${accent}`} />
           </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-medium leading-snug text-stone-400 line-clamp-2">{def.label}</p>
+            {sourceNote && editing ? (
+              <p className="mt-0.5 text-[10px] text-stone-600 line-clamp-1">{sourceNote}</p>
+            ) : null}
+          </div>
+          <div className="shrink-0 pl-1">
+            <WidgetBody
+              def={def}
+              payload={payload}
+              editing={editing}
+              funnelSteps={funnelSteps}
+              onFunnelStepsChange={onFunnelStepsChange}
+              compact
+            />
+          </div>
         </div>
-        <p className="mt-4 text-xs font-medium uppercase tracking-wide text-stone-500">{def.label}</p>
-        <WidgetBody
-          def={def}
-          payload={payload}
-          editing={editing}
-          funnelSteps={funnelSteps}
-          onFunnelStepsChange={onFunnelStepsChange}
-        />
-        {sourceNote && editing ? (
-          <p className="mt-2 text-[10px] text-stone-600">{sourceNote}</p>
-        ) : null}
+
+        {/* Desktop: tile vertical (inalterado) */}
+        <div className="hidden lg:block">
+          <div className="flex items-center gap-2">
+            {draggable ? <GripVertical className="h-4 w-4 shrink-0 text-stone-600" /> : null}
+            <div className={`rounded-xl border ${border} ${bg} p-2.5`}>
+              <Icon className={`h-4 w-4 ${accent}`} />
+            </div>
+          </div>
+          <p className="mt-4 text-xs font-medium uppercase tracking-wide text-stone-500">{def.label}</p>
+          <WidgetBody
+            def={def}
+            payload={payload}
+            editing={editing}
+            funnelSteps={funnelSteps}
+            onFunnelStepsChange={onFunnelStepsChange}
+          />
+          {sourceNote && editing ? (
+            <p className="mt-2 text-[10px] text-stone-600">{sourceNote}</p>
+          ) : null}
+        </div>
       </div>
     )
   }
