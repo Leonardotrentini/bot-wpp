@@ -424,7 +424,7 @@ export function Chat() {
     }
   }, [isMobileLayout, activeId])
 
-  // Teclado abriu (só na transição): rola pro fim uma vez — não a cada px do resize (causa tremor).
+  // Teclado abriu: rola pro fim só depois do settle (evita “sobe e volta” no meio da animação).
   const prevKeyboardOpenRef = useRef(false)
   useEffect(() => {
     if (!isMobileLayout || !activeId) {
@@ -436,8 +436,11 @@ export function Chat() {
     if (!justOpened) return
     const t = window.setTimeout(() => {
       const el = threadRef.current
-      if (el) el.scrollTop = el.scrollHeight
-    }, 80)
+      if (!el) return
+      // Só mexe se ainda não estiver perto do fim
+      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+      if (dist > 24) el.scrollTop = el.scrollHeight
+    }, 260)
     return () => window.clearTimeout(t)
   }, [isMobileLayout, activeId, vvKeyboardOpen])
 
@@ -2327,11 +2330,7 @@ export function Chat() {
 
             {/* Composer */}
             <div
-              className={`relative shrink-0 border-t border-brand-800 bg-brand-950/90 p-3 max-lg:border-brand-800/50 max-lg:bg-[#0c1814] max-lg:px-2 max-lg:pt-2 ${
-                isMobileLayout && vvKeyboardOpen
-                  ? 'max-lg:pb-2'
-                  : 'max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))]'
-              }`}
+              className="relative shrink-0 border-t border-brand-800 bg-brand-950/90 p-3 max-lg:border-brand-800/50 max-lg:bg-[#0c1814] max-lg:px-2 max-lg:pt-2 max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))]"
             >
               {replyTo && !isRecording ? (
                 <div className="mb-2 flex items-start gap-2 rounded-xl border border-brand-700/70 bg-brand-900/70 px-3 py-2">

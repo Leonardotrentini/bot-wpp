@@ -54,14 +54,13 @@ export function useVisualViewportHeight(enabled = true, shellRef = null) {
     }
 
     const schedule = () => {
-      if (raf) return
-      raf = window.requestAnimationFrame(apply)
-      // Reaplica ao final da animação do teclado (valores finais do Safari)
+      // Durante a animação do teclado, só agenda o settle final —
+      // aplicar a cada rAF + settle gerava “sobe e volta”.
       window.clearTimeout(settleTimer)
       settleTimer = window.setTimeout(() => {
-        applyToDom()
-        apply()
-      }, 180)
+        if (raf) window.cancelAnimationFrame(raf)
+        raf = window.requestAnimationFrame(apply)
+      }, 120)
     }
 
     apply()
@@ -69,8 +68,7 @@ export function useVisualViewportHeight(enabled = true, shellRef = null) {
     // scroll do VV é necessário p/ offsetTop (grudar no teclado); DOM direto evita tremor do React
     vv.addEventListener('scroll', schedule)
     window.addEventListener('orientationchange', schedule)
-    // Foco no input: iOS desloca o VV — reaplica já na hora
-    window.addEventListener('focusin', schedule)
+    // Foco: não sincroniza no focusin (Safari ainda está animando) — só no settle via resize/scroll
     window.addEventListener('focusout', schedule)
 
     return () => {
