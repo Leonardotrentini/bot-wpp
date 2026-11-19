@@ -8,6 +8,29 @@ import { DEFAULT_FUNNEL_STEPS, normalizeFunnelSteps } from './reportFunnelConfig
 
 const STORAGE_VERSION = 4
 
+const NEW_METRIC_IDS = new Set([
+  'crm.sales_new_count',
+  'crm.sales_new_revenue',
+  'crm.sales_new_ticket',
+  'attr.cost_per_new_sale',
+  'crm.roas_new',
+])
+
+const RETURNING_METRIC_IDS = new Set([
+  'crm.sales_returning_count',
+  'crm.sales_returning_revenue',
+  'crm.sales_returning_ticket',
+  'crm.sales_returning_share',
+])
+
+/** Agrupa KPIs do dashboard (main / clientes novos / recorrentes). */
+export function inferWidgetGroup(widget) {
+  if (widget?.group === 'main' || widget?.group === 'new' || widget?.group === 'returning') return widget.group
+  if (NEW_METRIC_IDS.has(widget?.metricId)) return 'new'
+  if (RETURNING_METRIC_IDS.has(widget?.metricId)) return 'returning'
+  return 'main'
+}
+
 const LEGACY_DEFAULT_METRIC_IDS = [
   'groups.active',
   'crm.conversations_started',
