@@ -1,22 +1,25 @@
 import { AUDIO_MAX_BYTES, stripBase64Payload } from './mediaLimits.js'
+import { hasMicPermissionMemory, rememberMicPermission } from './mediaPermissions.js'
 
-const AUDIO_CONSTRAINTS = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-}
+/** Constraints simples — no iOS muda menos e evita re-prompt por constraints novas. */
+const AUDIO_CONSTRAINTS = { audio: true }
 
 let warmPromise = null
 let micReady = false
 
 async function microphonePermissionGranted() {
+  if (hasMicPermissionMemory() || micReady) return true
   try {
     if (navigator.permissions?.query) {
       const status = await navigator.permissions.query({ name: 'microphone' })
-      return status.state === 'granted'
+      if (status.state === 'granted') {
+        rememberMicPermission()
+        return true
+      }
+      if (status.state === 'denied') return false
     }
   } catch {
-    /* Permissions API indisponível (Safari) */
+    /* Safari: Permissions API costuma falhar para mic */
   }
   return false
 }
@@ -29,10 +32,12 @@ export function warmUpAudioRecording() {
   warmPromise = (async () => {
     try {
       if (!navigator.mediaDevices?.getUserMedia) return
-      const granted = await microphonePermissionGranted()
-      if (!granted) return
+      // No Safari só aquece se já liberou antes (evita prompt surpresa)
+      const known = await microphonePermissionGranted()
+      if (!known && !hasMicPermissionMemory()) return
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS })
+      const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS)
+      rememberMicPermission()
       stream.getTracks().forEach((t) => t.stop())
 
       try {
@@ -56,14 +61,15 @@ export function warmUpAudioRecording() {
 
 export function markMicrophoneReady() {
   micReady = true
+  rememberMicPermission()
 }
 
 export function isMicrophoneWarmed() {
-  return micReady
+  return micReady || hasMicPermissionMemory()
 }
 
 export async function openRecordingStream() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS })
+  const stream = await navigator.mediaDevices.getUserMedia(AUDIO_CONSTRAINTS)
   markMicrophoneReady()
   return stream
 }

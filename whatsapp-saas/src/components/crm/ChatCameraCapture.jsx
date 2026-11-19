@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Camera, Loader2, SwitchCamera, Video, X } from 'lucide-react'
 import { Button } from '../common/Button.jsx'
+import { rememberCamPermission } from '../../lib/mediaPermissions.js'
 
 function pickVideoRecorderMime() {
   if (typeof MediaRecorder === 'undefined') return null
@@ -87,6 +88,7 @@ export function ChatCameraCapture({ open, onClose, onCapture, onError }) {
           },
         })
         streamRef.current = stream
+        rememberCamPermission()
         if (videoRef.current) {
           videoRef.current.srcObject = stream
           await videoRef.current.play().catch(() => {})

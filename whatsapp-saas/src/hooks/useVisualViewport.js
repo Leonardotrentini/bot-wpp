@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
 /**
- * Espelho do visualViewport (iOS Safari com teclado).
- * Usar com position:fixed + top/height para grudar o chat acima do teclado.
+ * Espelho estável do visualViewport (iOS Safari + teclado).
+ * Evita “tremor”: não reage a scroll do VV, só resize; top fixo em 0 no Chat.
  */
 export function useVisualViewportHeight(enabled = true) {
   const [height, setHeight] = useState(null)
@@ -18,29 +18,41 @@ export function useVisualViewportHeight(enabled = true) {
     }
 
     const vv = window.visualViewport
-    const sync = () => {
-      // iOS: teclado/scroll do visualViewport desloca a página — zera pra não abrir buraco preto
-      if (window.scrollY !== 0) window.scrollTo(0, 0)
+    let raf = 0
+    let lastH = -1
+    let lastOpen = false
+
+    const apply = () => {
+      raf = 0
       const nextHeight = Math.max(1, Math.round(vv.height))
+      // Teclado: viewport bem menor que a janela (folga p/ URL bar).
+      const open = nextHeight < window.innerHeight * 0.78
+
+      // Só atualiza se mudou de verdade — evita re-render a cada frame do teclado
+      if (Math.abs(nextHeight - lastH) >= 2 || open !== lastOpen) {
+        lastH = nextHeight
+        lastOpen = open
+        setHeight(nextHeight)
+        setKeyboardOpen(open)
+      }
+      // offsetTop: reporta mas o Chat mobile usa top:0 (offset causa tremor no iOS)
       const nextOffset = Math.max(0, Math.round(vv.offsetTop || 0))
-      // Teclado: viewport visual bem menor que a janela (com folga p/ URL bar).
-      const open = nextHeight < window.innerHeight * 0.75
-      setHeight(nextHeight)
-      setOffsetTop(nextOffset)
-      setKeyboardOpen(open)
+      setOffsetTop((prev) => (prev === nextOffset ? prev : nextOffset))
     }
-    sync()
-    vv.addEventListener('resize', sync)
-    vv.addEventListener('scroll', sync)
-    window.addEventListener('focusin', sync)
-    window.addEventListener('focusout', sync)
-    window.addEventListener('orientationchange', sync)
+
+    const schedule = () => {
+      if (raf) return
+      raf = window.requestAnimationFrame(apply)
+    }
+
+    apply()
+    // NÃO escutar vv.scroll — no iOS dispara em loop com o teclado e treme a UI
+    vv.addEventListener('resize', schedule)
+    window.addEventListener('orientationchange', schedule)
     return () => {
-      vv.removeEventListener('resize', sync)
-      vv.removeEventListener('scroll', sync)
-      window.removeEventListener('focusin', sync)
-      window.removeEventListener('focusout', sync)
-      window.removeEventListener('orientationchange', sync)
+      if (raf) window.cancelAnimationFrame(raf)
+      vv.removeEventListener('resize', schedule)
+      window.removeEventListener('orientationchange', schedule)
     }
   }, [enabled])
 

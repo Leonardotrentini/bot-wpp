@@ -265,8 +265,7 @@ export function Chat() {
   const { user, isImpersonating, isOrgOwner } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobileLayout = useMobileLayout()
-  const { height: vvHeight, offsetTop: vvOffsetTop, keyboardOpen: vvKeyboardOpen } =
-    useVisualViewportHeight(isMobileLayout)
+  const { height: vvHeight, keyboardOpen: vvKeyboardOpen } = useVisualViewportHeight(isMobileLayout)
   const [selectionMode, setSelectionMode] = useState(false)
   const [listToolsOpen, setListToolsOpen] = useState(false)
 
@@ -421,14 +420,22 @@ export function Chat() {
     }
   }, [isMobileLayout, activeId])
 
-  // Teclado abriu: mantém última mensagem visível acima do composer.
+  // Teclado abriu (só na transição): rola pro fim uma vez — não a cada px do resize (causa tremor).
+  const prevKeyboardOpenRef = useRef(false)
   useEffect(() => {
-    if (!isMobileLayout || !activeId || !vvKeyboardOpen) return
+    if (!isMobileLayout || !activeId) {
+      prevKeyboardOpenRef.current = false
+      return
+    }
+    const justOpened = vvKeyboardOpen && !prevKeyboardOpenRef.current
+    prevKeyboardOpenRef.current = vvKeyboardOpen
+    if (!justOpened) return
     const t = window.setTimeout(() => {
-      listEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-    }, 50)
+      const el = threadRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    }, 80)
     return () => window.clearTimeout(t)
-  }, [isMobileLayout, activeId, vvKeyboardOpen, vvHeight])
+  }, [isMobileLayout, activeId, vvKeyboardOpen])
 
   useEffect(() => {
     conversationsRef.current = conversations
@@ -1821,9 +1828,9 @@ export function Chat() {
         style={
           isMobileLayout && activeId
             ? {
-                // iOS Safari: fixa no visualViewport — composer cola no teclado, sem buraco preto
+                // iOS Safari: top fixo 0 + altura do visualViewport (offsetTop treme o teclado)
                 position: 'fixed',
-                top: vvOffsetTop || 0,
+                top: 0,
                 left: 0,
                 right: 0,
                 height: vvHeight ? `${vvHeight}px` : '100dvh',
