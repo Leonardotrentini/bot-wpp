@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, memo } from 'react'
 import { Loader2, Mic, Film, ImageIcon, FileText } from 'lucide-react'
 import { getCrmMessageMedia, getGroupMessageMedia } from '../../services/api.js'
 import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview } from '../common/MediaPreview.jsx'
+import { ChatAudioBubble } from './ChatAudioBubble.jsx'
 
 const mediaCache = new Map()
 
@@ -175,6 +176,8 @@ export const ChatMessageContent = memo(function ChatMessageContent({ message }) 
   const { kind, loading, error, src, retry, mimetype, shouldLoad } = useCrmMessageMedia(message, inView)
   const fileName = kind === 'document' ? documentDisplayName(message) : null
   const body = kind === 'document' ? documentCaption(message) : String(message?.body || '').trim()
+  const fromMe = Boolean(message?.fromMe)
+  const durationHint = Number(message?.mediaDuration || message?.durationSeconds || 0) || undefined
 
   if (!kind) {
     return body ? <p className="whitespace-pre-wrap break-words">{message.body}</p> : null
@@ -202,7 +205,7 @@ export const ChatMessageContent = memo(function ChatMessageContent({ message }) 
           </button>
         </div>
       ) : kind === 'audio' ? (
-        <audio src={src} controls preload="metadata" className="h-9 w-full min-w-[220px] max-w-sm" />
+        <ChatAudioBubble src={src} fromMe={fromMe} durationHint={durationHint} />
       ) : kind === 'video' ? (
         <VideoMediaPreview src={src} className="max-h-56 w-full rounded-lg border border-brand-700/80 object-contain" compact />
       ) : kind === 'image' ? (
