@@ -7,7 +7,7 @@ export function MessageDeliveryIcon({ status, className = '' }) {
     return <AlertCircle className={`h-3 w-3 text-red-400 ${className}`} aria-label="Falha no envio" />
   }
   if (s === 'read' || s === 'lido') {
-    return <CheckCheck className={`h-3 w-3 text-sky-400 ${className}`} aria-label="Lido" />
+    return <CheckCheck className={`h-3.5 w-3.5 ${className}`} style={{ color: '#53bdeb' }} aria-label="Lido" />
   }
   if (s === 'delivered' || s === 'entregue') {
     return <CheckCheck className={`h-3 w-3 text-stone-400 ${className}`} aria-label="Entregue" />

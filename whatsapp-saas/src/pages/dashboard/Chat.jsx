@@ -54,6 +54,8 @@ import { AddCrmContactModal } from '../../components/crm/AddCrmContactModal.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
 import { ChatAttachSheet } from '../../components/crm/ChatAttachSheet.jsx'
 import { ChatCameraCapture } from '../../components/crm/ChatCameraCapture.jsx'
+import { ChatMessageActionSheet } from '../../components/crm/ChatMessageActionSheet.jsx'
+import { ChatForwardModal } from '../../components/crm/ChatForwardModal.jsx'
 import { useMobileLayout } from '../../hooks/useMediaQuery.js'
 import { useVisualViewportHeight } from '../../hooks/useVisualViewport.js'
 import {
@@ -62,6 +64,9 @@ import {
   getCrmConversationMessages,
   sendCrmMessage,
   markCrmConversationRead,
+  editCrmMessage,
+  deleteCrmMessage,
+  forwardCrmMessage,
   patchCrmConversation,
   patchCrmContact,
   saveCrmContact,
@@ -324,6 +329,15 @@ export function Chat() {
   const [sending, setSending] = useState(false)
   const [attachment, setAttachment] = useState(null) // { base64, mime, name, type }
   const [isRecording, setIsRecording] = useState(false)
+  const [replyTo, setReplyTo] = useState(null)
+  const [actionMessage, setActionMessage] = useState(null)
+  const [forwardMessage, setForwardMessage] = useState(null)
+  const [forwarding, setForwarding] = useState(false)
+  const [editMessage, setEditMessage] = useState(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [deleteConfirmMsg, setDeleteConfirmMsg] = useState(null)
+  const longPressTimerRef = useRef(null)
 
   const [tags, setTags] = useState([])
   const [stages, setStages] = useState([])
@@ -379,6 +393,11 @@ export function Chat() {
   useEffect(() => {
     activeIdRef.current = activeId
     scrollToEndRef.current = true
+    setReplyTo(null)
+    setActionMessage(null)
+    setForwardMessage(null)
+    setEditMessage(null)
+    setDeleteConfirmMsg(null)
   }, [activeId])
 
   // Trava scroll do body no iOS enquanto a thread está full-screen (evita buraco preto / bounce).
@@ -1316,6 +1335,7 @@ export function Chat() {
     }
 
     const tempId = `temp-${Date.now()}`
+    const quotedSnapshot = replyTo
     const optimistic = {
       id: tempId,
       conversationId: activeId,
@@ -1327,6 +1347,13 @@ export function Chat() {
       mediaDuration: activeAttachment?.durationSeconds || null,
       status: 'pending',
       timestamp: new Date().toISOString(),
+      quoted: quotedSnapshot
+        ? {
+            messageId: quotedSnapshot.messageId || quotedSnapshot.id,
+            fromMe: Boolean(quotedSnapshot.fromMe),
+            body: String(quotedSnapshot.body || '').slice(0, 200) || 'Mensagem',
+          }
+        : null,
     }
 
     // Pré-carrega áudio/mídia na bolha otimista (evita “Áudio indisponível” no iPhone)
@@ -1340,7 +1367,9 @@ export function Chat() {
 
     const savedDraft = draft
     const savedAttachment = activeAttachment
+    const savedQuotedId = quotedSnapshot?.id || quotedSnapshot?.messageId || null
     setDraft('')
+    setReplyTo(null)
     if (activeAttachment) revokeAudioPreview(activeAttachment)
     setAttachment(null)
     setSending(true)
@@ -1353,6 +1382,7 @@ export function Chat() {
         payload.mediaMime = savedAttachment.mime
         payload.mediaName = savedAttachment.name
       }
+      if (savedQuotedId) payload.quotedMessageId = savedQuotedId
       const { data } = await sendCrmMessage(activeId, payload)
       if (data.message) {
         if (savedAttachment?.base64) {
@@ -2205,17 +2235,69 @@ export function Chat() {
                     ) : (
                       <div key={item.id} className={`flex ${item.msg.fromMe ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
+                          role="button"
+                          tabIndex={0}
+                          onContextMenu={(e) => {
+                            if (activeIsGroup || item.msg.deleted) return
+                            e.preventDefault()
+                            setActionMessage(item.msg)
+                          }}
+                          onPointerDown={(e) => {
+                            if (activeIsGroup || item.msg.deleted || e.button === 2) return
+                            if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                            longPressTimerRef.current = window.setTimeout(() => {
+                              longPressTimerRef.current = null
+                              setActionMessage(item.msg)
+                            }, 480)
+                          }}
+                          onPointerUp={() => {
+                            if (longPressTimerRef.current) {
+                              clearTimeout(longPressTimerRef.current)
+                              longPressTimerRef.current = null
+                            }
+                          }}
+                          onPointerLeave={() => {
+                            if (longPressTimerRef.current) {
+                              clearTimeout(longPressTimerRef.current)
+                              longPressTimerRef.current = null
+                            }
+                          }}
+                          onPointerCancel={() => {
+                            if (longPressTimerRef.current) {
+                              clearTimeout(longPressTimerRef.current)
+                              longPressTimerRef.current = null
+                            }
+                          }}
+                          className={`max-w-[85%] select-none rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
                             item.msg.fromMe
                               ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
                               : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
-                          }`}
+                          } ${actionMessage?.id === item.msg.id ? 'ring-2 ring-accent-400/50' : ''}`}
                         >
                           {!item.msg.fromMe && activeIsGroup && item.msg.senderName && (
                             <p className="mb-0.5 text-[10px] font-semibold text-accent-400/90">{item.msg.senderName}</p>
                           )}
-                          <ChatMessageContent message={item.msg} />
+                          {item.msg.quoted ? (
+                            <div
+                              className={`mb-1.5 rounded-lg border-l-2 px-2 py-1 text-[11px] ${
+                                item.msg.fromMe
+                                  ? 'border-emerald-300/70 bg-black/20 text-stone-300'
+                                  : 'border-sky-400/70 bg-black/25 text-stone-300'
+                              }`}
+                            >
+                              <p className="font-semibold text-stone-200">
+                                {item.msg.quoted.fromMe ? 'Você' : contactTitle(active?.contact) || 'Contato'}
+                              </p>
+                              <p className="line-clamp-2 opacity-90">{item.msg.quoted.body || 'Mensagem'}</p>
+                            </div>
+                          ) : null}
+                          {item.msg.deleted || item.msg.type === 'deleted' ? (
+                            <p className="italic text-stone-400">Mensagem apagada</p>
+                          ) : (
+                            <ChatMessageContent message={item.msg} />
+                          )}
                           <div className="mt-1 flex items-center justify-end gap-1">
+                            {item.msg.edited ? <span className="text-[10px] text-stone-500">editada</span> : null}
                             {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
                             {item.msg.source === 'flow' && <Zap className="h-3 w-3 text-amber-400" />}
                             <span className="text-[10px] text-stone-500">{formatMsgTime(item.msg.timestamp)}</span>
@@ -2238,6 +2320,26 @@ export function Chat() {
                   : 'max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))]'
               }`}
             >
+              {replyTo && !isRecording ? (
+                <div className="mb-2 flex items-start gap-2 rounded-xl border border-brand-700/70 bg-brand-900/70 px-3 py-2">
+                  <div className="min-w-0 flex-1 border-l-2 border-accent-400 pl-2">
+                    <p className="text-[11px] font-semibold text-accent-300">
+                      {replyTo.fromMe ? 'Você' : contactTitle(active?.contact) || 'Contato'}
+                    </p>
+                    <p className="truncate text-xs text-stone-400">
+                      {replyTo.deleted ? 'Mensagem apagada' : String(replyTo.body || replyTo.type || 'Mensagem')}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo(null)}
+                    className="shrink-0 rounded-lg p-1 text-stone-500 hover:bg-white/5 hover:text-stone-200"
+                    aria-label="Cancelar resposta"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : null}
               {qrOpen && filteredQuickReplies.length > 0 && (
                 <div className="absolute bottom-full left-2 z-20 mb-1 max-h-56 w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border border-brand-700 bg-brand-900 shadow-2xl">
                   {filteredQuickReplies.map((qr) => (
@@ -2413,6 +2515,116 @@ export function Chat() {
               onClose={() => setCameraOpen(false)}
               onCapture={(file) => handleFile(file, { autoSend: true })}
               onError={(msg) => toastRef.current.error(msg)}
+            />
+            <ChatMessageActionSheet
+              open={Boolean(actionMessage)}
+              message={actionMessage}
+              onClose={() => setActionMessage(null)}
+              onReply={(msg) => {
+                setReplyTo(msg)
+                inputRef.current?.focus()
+              }}
+              onForward={(msg) => setForwardMessage(msg)}
+              onEdit={(msg) => {
+                setEditMessage(msg)
+                setEditDraft(String(msg.body || ''))
+              }}
+              onDelete={(msg) => setDeleteConfirmMsg(msg)}
+              onCopy={async (msg) => {
+                try {
+                  await navigator.clipboard.writeText(String(msg.body || ''))
+                  toastRef.current.success('Texto copiado.')
+                } catch {
+                  toastRef.current.error('Não foi possível copiar.')
+                }
+              }}
+            />
+            <ChatForwardModal
+              open={Boolean(forwardMessage)}
+              conversations={conversations.filter((c) => c.id !== activeId)}
+              forwarding={forwarding}
+              onClose={() => setForwardMessage(null)}
+              onConfirm={async (ids) => {
+                if (!forwardMessage || !activeId) return
+                setForwarding(true)
+                try {
+                  const { data } = await forwardCrmMessage(activeId, forwardMessage.id, ids)
+                  const n = data?.forwarded || 0
+                  if (n > 0) toastRef.current.success(`Encaminhada para ${n} conversa${n === 1 ? '' : 's'}.`)
+                  else toastRef.current.error('Não foi possível encaminhar.')
+                  setForwardMessage(null)
+                } catch (err) {
+                  toastRef.current.error(err?.response?.data?.message || 'Falha ao encaminhar.')
+                } finally {
+                  setForwarding(false)
+                }
+              }}
+            />
+            <Modal
+              isOpen={Boolean(editMessage)}
+              onClose={() => {
+                if (!editSaving) setEditMessage(null)
+              }}
+              title="Editar mensagem"
+            >
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={4}
+                className="mb-3 w-full resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-base text-stone-100 outline-none focus:border-accent-500/60"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" disabled={editSaving} onClick={() => setEditMessage(null)}>
+                  Cancelar
+                </Button>
+                <Button
+                  disabled={editSaving || !editDraft.trim()}
+                  onClick={async () => {
+                    if (!editMessage || !activeId) return
+                    setEditSaving(true)
+                    try {
+                      const { data } = await editCrmMessage(activeId, editMessage.id, editDraft.trim())
+                      if (data?.message) {
+                        setMessages((prev) =>
+                          prev.map((m) => (m.id === editMessage.id || m.id === data.message.id ? { ...m, ...data.message } : m)),
+                        )
+                      }
+                      setEditMessage(null)
+                      toastRef.current.success('Mensagem editada.')
+                    } catch (err) {
+                      toastRef.current.error(err?.response?.data?.message || 'Falha ao editar.')
+                    } finally {
+                      setEditSaving(false)
+                    }
+                  }}
+                >
+                  {editSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Salvar'}
+                </Button>
+              </div>
+            </Modal>
+            <ConfirmModal
+              isOpen={Boolean(deleteConfirmMsg)}
+              onClose={() => setDeleteConfirmMsg(null)}
+              title="Apagar mensagem"
+              message="Apagar esta mensagem para todos no WhatsApp?"
+              onConfirm={async () => {
+                if (!deleteConfirmMsg || !activeId) return
+                try {
+                  const { data } = await deleteCrmMessage(activeId, deleteConfirmMsg.id)
+                  if (data?.message) {
+                    setMessages((prev) =>
+                      prev.map((m) =>
+                        m.id === deleteConfirmMsg.id || m.id === data.message.id ? { ...m, ...data.message } : m,
+                      ),
+                    )
+                  }
+                  toastRef.current.success('Mensagem apagada.')
+                } catch (err) {
+                  toastRef.current.error(err?.response?.data?.message || 'Falha ao apagar.')
+                } finally {
+                  setDeleteConfirmMsg(null)
+                }
+              }}
             />
           </>
         )}

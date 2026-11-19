@@ -237,24 +237,43 @@ function extractAltPhoneFromRecord(record, remoteJid) {
     key.participantAlt,
     record?.remoteJidAlt,
     key.senderPn,
-    key.senderLid,
     key.participant,
     record?.senderPn,
     record?.participant,
     record?.participantAlt,
   ]
   for (const alt of candidates) {
+    // Nunca tratar @lid como telefone.
+    if (isLidJid(alt)) continue
     const phone = phoneFromJid(alt) || phoneDigitsFromValue(alt)
     if (phone) return phone
   }
   return phoneFromJid(remoteJid) || phoneDigitsFromJid(remoteJid)
 }
 
+/** LID associado ao registro (quando o remoteJid é telefone ou o alt é LID). */
+function extractLidJidFromRecord(record, remoteJid) {
+  if (isLidJid(remoteJid)) return String(remoteJid).trim()
+  const key = record?.key || {}
+  const candidates = [
+    key.senderLid,
+    key.remoteJidAlt,
+    record?.senderLid,
+    record?.remoteJidAlt,
+    key.participant,
+  ]
+  for (const alt of candidates) {
+    if (isLidJid(alt)) return String(alt).trim()
+  }
+  return null
+}
+
 function extractIdentityHintsFromRecord(record, remoteJid) {
   const phoneDigits = phoneFromJid(remoteJid) || phoneDigitsFromJid(remoteJid)
   const pushName = sanitizePushName(record?.pushName, phoneDigits)
   const phone = extractAltPhoneFromRecord(record, remoteJid)
-  return { pushName, phone }
+  const lidJid = extractLidJidFromRecord(record, remoteJid)
+  return { pushName, phone, lidJid }
 }
 
 function parseContactCommerceField(customFields, key) {
@@ -360,21 +379,27 @@ function normalizeMessageMediaKind(type) {
 function formatMessageRow(msg) {
   if (!msg) return null
   const mediaKind = normalizeMessageMediaKind(msg.type)
+  const { extractQuoteMeta } = require("./crmMessageActions")
+  const meta = extractQuoteMeta(msg)
+  const deleted = Boolean(meta.deleted)
   return {
     id: msg.id,
     conversationId: msg.conversationId,
     messageId: msg.messageId,
     fromMe: Boolean(msg.fromMe),
     senderJid: msg.senderJid || null,
-    type: msg.type || "text",
-    mediaKind,
-    hasMedia: Boolean(mediaKind),
-    body: msg.body || "",
-    mediaMime: msg.mediaMime || null,
-    mediaName: extractMediaFileName(msg),
+    type: deleted ? "deleted" : msg.type || "text",
+    mediaKind: deleted ? null : mediaKind,
+    hasMedia: deleted ? false : Boolean(mediaKind),
+    body: deleted ? "" : msg.body || "",
+    mediaMime: deleted ? null : msg.mediaMime || null,
+    mediaName: deleted ? null : extractMediaFileName(msg),
     status: msg.status,
     source: msg.source,
     timestamp: msg.timestamp ? msg.timestamp.toISOString() : null,
+    deleted,
+    edited: Boolean(meta.edited),
+    quoted: meta.quoted || null,
   }
 }
 
@@ -447,43 +472,68 @@ async function promoteLidContactToPhoneJid(prisma, contact, { phoneJid, phone })
 }
 
 /** Garante contato + conversa para um JID individual (reusa LID↔telefone da mesma inbox). */
-async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint } = {}) {
+async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint, lidJid: lidHint } = {}) {
   const jid = String(remoteJid).trim()
   const phone = phoneHint || phoneFromJid(jid) || phoneDigitsFromJid(jid)
   const incomingIsLid = isLidJid(jid)
+  const lidJid = incomingIsLid ? jid : lidHint && isLidJid(lidHint) ? String(lidHint).trim() : null
   const { unifyContactSiblings } = require("./crmContactMerge")
 
   let contact = await lookupExistingContact(prisma, { userId, jid, phone })
+  // Inbound @lid sem phone hint: ainda tenta achar pelo lidJid antes de criar órfão.
+  if (!contact && incomingIsLid) {
+    const { findContactByLidJid } = require("./crmContactMerge")
+    contact = await findContactByLidJid(prisma, { userId, lidJid: jid })
+  }
+  // Outbound/webhook telefone com lidHint: amarra ao contato phone existente.
+  if (!contact && !incomingIsLid && lidJid) {
+    const { findContactByLidJid } = require("./crmContactMerge")
+    contact = await findContactByLidJid(prisma, { userId, lidJid })
+  }
   let shouldInheritName = false
 
   if (!contact) {
+    // Inbound @lid com telefone no payload: cria já no JID canônico (evita órfão).
+    const createAsPhone = Boolean(phone && incomingIsLid)
+    const createJid = createAsPhone ? `${phone}@s.whatsapp.net` : jid
     try {
       contact = await prisma.crmContact.create({
         data: {
           userId,
-          remoteJid: jid,
-          lidJid: incomingIsLid ? jid : null,
+          remoteJid: createJid,
+          lidJid: incomingIsLid ? jid : lidJid || null,
           pushName: pushName || null,
           avatarUrl: avatarUrl || null,
           phone,
-          isLid: incomingIsLid,
+          isLid: createAsPhone ? false : incomingIsLid,
         },
       })
       shouldInheritName = true
     } catch (err) {
       if (err?.code !== "P2002") throw err
       contact = await prisma.crmContact.findUnique({
-        where: { userId_remoteJid: { userId, remoteJid: jid } },
+        where: { userId_remoteJid: { userId, remoteJid: createJid } },
       })
+      if (!contact && createJid !== jid) {
+        contact = await prisma.crmContact.findUnique({
+          where: { userId_remoteJid: { userId, remoteJid: jid } },
+        })
+      }
       if (!contact) throw err
     }
   } else {
     const data = {}
-    if (pushName && contact.pushName !== pushName) data.pushName = pushName
+    // Nunca sobrescrever um pushName bom com outro (ex.: sync gravando nome do dono da sessão).
+    const incomingPush = sanitizePushName(pushName, phone)
+    const existingPush = sanitizePushName(contact.pushName, phone || contact.phone)
+    if (incomingPush && !existingPush) data.pushName = incomingPush
     if (avatarUrl && contact.avatarUrl !== avatarUrl) data.avatarUrl = avatarUrl
     if (!contact.phone && phone) {
       data.phone = phone
       shouldInheritName = isGenericSavedName(contact.name)
+    }
+    if (lidJid && !contact.lidJid && !isLidJid(contact.remoteJid)) {
+      data.lidJid = lidJid
     }
     if (incomingIsLid && !contact.lidJid && !isLidJid(contact.remoteJid)) {
       data.lidJid = jid
@@ -496,7 +546,8 @@ async function ensureContactAndConversation(prisma, userId, remoteJid, { pushNam
     }
   }
 
-  if (!incomingIsLid && phone && isLidJid(contact.remoteJid)) {
+  // Qualquer phone conhecido em contato ainda @lid → promove na hora (webhook/sync).
+  if (phone && isLidJid(contact.remoteJid)) {
     contact = await promoteLidContactToPhoneJid(prisma, contact, {
       phoneJid: `${phone}@s.whatsapp.net`,
       phone,
@@ -620,6 +671,7 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
   const { conversation, unification } = await ensureContactAndConversation(prisma, userId, remoteJid, {
     pushName: pushName || (!mapped.fromMe ? hints.pushName : null),
     phone: hints.phone,
+    lidJid: hints.lidJid,
   })
   const { emitUnificationEvents, unifyContactSiblings } = require("./crmContactMerge")
   emitUnificationEvents(emitCrmEvent, deps.io, userId, unification)

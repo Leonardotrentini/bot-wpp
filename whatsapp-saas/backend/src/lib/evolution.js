@@ -1,5 +1,7 @@
 const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_TIMEOUT_MS || 25000)
 const GROUPS_TIMEOUT_MS = Number(process.env.EVOLUTION_GROUPS_TIMEOUT_MS || 180000)
+/** Probe leve de status — evita 2× timeout de 25s quando a Evo está morta. */
+const STATUS_PROBE_TIMEOUT_MS = Number(process.env.EVOLUTION_STATUS_TIMEOUT_MS || 8000)
 const QRCode = require("qrcode")
 const {
   resolveCreds,
@@ -208,14 +210,26 @@ async function fetchInstanceInfo(instanceName) {
   return null
 }
 
-async function createInstance(instanceName, webhookInput, { hostId } = {}) {
+/** Dígitos com DDI; BR sem 55 ganha prefixo 55. */
+function normalizeWhatsappNumber(input) {
+  let digits = String(input || "").replace(/\D/g, "")
+  if (!digits) return ""
+  if (digits.length >= 10 && digits.length <= 11 && !digits.startsWith("55")) {
+    digits = `55${digits}`
+  }
+  return digits
+}
+
+async function createInstance(instanceName, webhookInput, { hostId, number } = {}) {
   const resolvedHost = normalizeHostId(hostId || getDefaultHostForNewConnections())
   bindInstanceHost(instanceName, resolvedHost)
   const webhook = normalizeWebhook(webhookInput)
+  const phone = normalizeWhatsappNumber(number)
   const body = {
     instanceName,
     integration: "WHATSAPP-BAILEYS",
     qrcode: true,
+    ...(phone ? { number: phone } : {}),
     ...(webhook ? { webhook } : {}),
   }
   return requestEvolution("/instance/create", {
@@ -246,18 +260,114 @@ async function setInstanceWebhook(instanceName, webhookInput) {
   ])
 }
 
+/** URL padrão do webhook CRM (mesmo contrato do server.js). */
+function buildDefaultWebhookUrl() {
+  const explicit = process.env.EVOLUTION_WEBHOOK_URL?.trim()
+  if (explicit) return explicit
+  const publicUrl = process.env.BACKEND_PUBLIC_URL?.trim()?.replace(/\/+$/, "")
+  if (!publicUrl) return null
+  const base = `${publicUrl}/api/evolution/webhook`
+  const secret = process.env.EVOLUTION_WEBHOOK_SECRET?.trim()
+  return secret ? `${base}?secret=${encodeURIComponent(secret)}` : base
+}
+
+/** Regrava webhook na Evolution após soft-restart (evita sessão viva sem delivery). */
+async function reassertInstanceWebhook(instanceName) {
+  const url = buildDefaultWebhookUrl()
+  if (!url) return { skipped: true, reason: "no_webhook_url" }
+  try {
+    await setInstanceWebhook(instanceName, url)
+    return { ok: true, url: url.split("?")[0] }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) }
+  }
+}
+
 function isInstanceAlreadyExistsError(err) {
   const message = (err?.details?.message || err?.message || "").toString().toLowerCase()
   return message.includes("already") || message.includes("exist") || message.includes("in use")
 }
 
-async function connectInstance(instanceName) {
+async function connectInstance(instanceName, { number } = {}) {
+  const phone = normalizeWhatsappNumber(number)
+  const query = phone ? `?number=${encodeURIComponent(phone)}` : ""
   return firstSuccess([
-    () => requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}`, { method: "GET" }),
-    () => requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}`),
-    () => requestEvolution(`/instance/qr/${encodeURIComponent(instanceName)}`, { method: "GET" }),
-    () => requestEvolution(`/instance/qrcode/${encodeURIComponent(instanceName)}`, { method: "GET" }),
+    () =>
+      requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
+        method: "GET",
+      }),
+    () => requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}${query}`),
+    ...(phone
+      ? []
+      : [
+          () => requestEvolution(`/instance/qr/${encodeURIComponent(instanceName)}`, { method: "GET" }),
+          () => requestEvolution(`/instance/qrcode/${encodeURIComponent(instanceName)}`, { method: "GET" }),
+        ]),
   ])
+}
+
+function pickPairingCode(data) {
+  const raw = data?.pairingCode ?? data?.pairing_code ?? data?.qrcode?.pairingCode ?? null
+  if (raw == null) return null
+  const code = String(raw).trim().toUpperCase()
+  return code.length >= 6 ? code : null
+}
+
+/**
+ * Gera pairing code (Conectar com número). Se a sessão estiver em connecting
+ * sem código, reinicia só esta instância para sair do estado preso.
+ */
+async function recoverPairingCode(instanceName, number) {
+  const phone = normalizeWhatsappNumber(number)
+  if (phone.length < 12) {
+    const err = new Error("Informe o WhatsApp com DDI e DDD (ex.: 5511985712645).")
+    err.code = "INVALID_PHONE"
+    throw err
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  let stateData = await getConnectionStateForProbe(instanceName).catch(() => null)
+  let state = pickStatus(stateData).toLowerCase()
+
+  if (state === "open") {
+    return { qrData: stateData, pairingCode: null, qrReady: false, alreadyOpen: true }
+  }
+
+  // Evolution não gera pairingCode enquanto state === connecting (devolve QR antigo).
+  if (state === "connecting") {
+    try {
+      await restartInstance(instanceName)
+      await sleep(2000)
+    } catch (err) {
+      console.warn("[evolution] restart antes do pairing:", err?.message || err)
+    }
+    stateData = await getConnectionStateForProbe(instanceName).catch(() => null)
+    state = pickStatus(stateData).toLowerCase()
+    if (state === "connecting" || state === "open") {
+      try {
+        await logoutInstance(instanceName)
+        await sleep(1500)
+      } catch (err) {
+        console.warn("[evolution] logout antes do pairing:", err?.message || err)
+      }
+    }
+  }
+
+  let qrData = await connectInstance(instanceName, { number: phone })
+  let pairingCode = pickPairingCode(qrData)
+  if (!pairingCode) {
+    try {
+      await restartInstance(instanceName)
+      await sleep(2000)
+    } catch (err) {
+      console.warn("[evolution] restart retry pairing:", err?.message || err)
+    }
+    qrData = await connectInstance(instanceName, { number: phone })
+    pairingCode = pickPairingCode(qrData)
+  }
+
+  const qrReady = Boolean(await resolveQrForStorage(qrData))
+  return { qrData, pairingCode, qrReady, alreadyOpen: false, phone }
 }
 
 async function getConnectionState(instanceName) {
@@ -267,6 +377,52 @@ async function getConnectionState(instanceName) {
       method: "GET",
     }),
   ])
+}
+
+/** Só connectionState, timeout curto — para status/reconcile (não busca ownerJid). */
+async function getConnectionStateForProbe(instanceName, { timeoutMs = STATUS_PROBE_TIMEOUT_MS } = {}) {
+  return requestEvolution(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
+    method: "GET",
+    timeoutMs,
+    instanceName,
+  })
+}
+
+function isEvolutionUnreachableError(err) {
+  const code = String(err?.code || "")
+  const status = Number(err?.status || 0)
+  const msg = String(err?.message || "").toLowerCase()
+  const name = String(err?.name || "")
+  if (code === "EVOLUTION_TIMEOUT") return true
+  if (name === "AbortError") return true
+  if (status === 502 || status === 503 || status === 504) return true
+  if (
+    msg.includes("fetch failed") ||
+    msg.includes("econnrefused") ||
+    msg.includes("enotfound") ||
+    msg.includes("econnreset") ||
+    msg.includes("socket hang up") ||
+    msg.includes("network")
+  ) {
+    return true
+  }
+  return false
+}
+
+/** Connect; se vier sem QR, restart e tenta de novo (sessão presa em connecting). */
+async function recoverQrIfStuck(instanceName) {
+  let qrData = await connectInstance(instanceName)
+  let qrReady = await resolveQrForStorage(qrData)
+  if (qrReady) return { qrData, qrReady: true }
+  try {
+    await restartInstance(instanceName)
+    await new Promise((r) => setTimeout(r, 1500))
+    qrData = await connectInstance(instanceName)
+    qrReady = await resolveQrForStorage(qrData)
+  } catch (err) {
+    console.warn("[evolution] recoverQrIfStuck:", err?.message || err)
+  }
+  return { qrData, qrReady: Boolean(qrReady) }
 }
 
 async function fetchAllGroups(instanceName, { getParticipants = false } = {}) {
@@ -281,6 +437,82 @@ async function fetchGroupParticipants(instanceName, groupJid) {
     `/group/participants/${encodeURIComponent(instanceName)}?groupJid=${encodeURIComponent(groupJid)}`,
     { method: "GET" },
   )
+}
+
+/**
+ * Verifica se número(s) existem no WhatsApp (Evolution: /chat/whatsappNumbers).
+ * Retorno normalizado: [{ number, exists, jid }].
+ */
+async function checkWhatsappNumbers(instanceName, numbers) {
+  const list = (Array.isArray(numbers) ? numbers : [numbers])
+    .map((n) => String(n || "").replace(/\D/g, ""))
+    .filter(Boolean)
+  if (!list.length) return []
+
+  const data = await firstSuccess([
+    () =>
+      requestEvolution(`/chat/whatsappNumbers/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: { numbers: list },
+        instanceName,
+        timeoutMs: Math.min(DEFAULT_TIMEOUT_MS, 15000),
+      }),
+    () =>
+      requestEvolution(`/chat/whatsappNumbers/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: { number: list[0], numbers: list },
+        instanceName,
+        timeoutMs: Math.min(DEFAULT_TIMEOUT_MS, 15000),
+      }),
+  ])
+
+  const rows = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.numbers)
+      ? data.numbers
+      : Array.isArray(data?.response)
+        ? data.response
+        : data && typeof data === "object"
+          ? [data]
+          : []
+
+  return rows.map((row) => {
+    const number =
+      String(row?.number || row?.phone || "").replace(/\D/g, "") ||
+      String(row?.jid || "")
+        .split("@")[0]
+        .replace(/\D/g, "")
+    let exists = false
+    if (typeof row?.exists === "boolean") {
+      exists = row.exists
+    } else if (row?.jid) {
+      exists = true
+    }
+    return {
+      number,
+      exists,
+      jid: row?.jid || (number ? `${number}@s.whatsapp.net` : null),
+      raw: row,
+    }
+  })
+}
+
+/** true se o número tem conta WhatsApp; false se não; null se não deu para verificar. */
+async function numberExistsOnWhatsapp(instanceName, phoneDigits) {
+  const digits = String(phoneDigits || "").replace(/\D/g, "")
+  if (!digits) return { ok: false, exists: false, reason: "empty" }
+  try {
+    const rows = await checkWhatsappNumbers(instanceName, [digits])
+    const hit =
+      rows.find((r) => r.number === digits) ||
+      rows.find((r) => r.number && (digits.endsWith(r.number) || r.number.endsWith(digits))) ||
+      rows[0]
+    if (!hit) return { ok: true, exists: false, reason: "not_found" }
+    if (hit.exists === false) return { ok: true, exists: false, reason: "not_on_whatsapp", jid: hit.jid || null }
+    return { ok: true, exists: true, jid: hit.jid || `${digits}@s.whatsapp.net` }
+  } catch (err) {
+    return { ok: false, exists: null, reason: "check_failed", error: err?.message || String(err) }
+  }
 }
 
 /** Perfil do contato (nome exibido no WhatsApp). Aceita dígitos ou JID completo (@lid / @s.whatsapp.net). */
@@ -424,12 +656,74 @@ async function fetchGroupMessages(instanceName, groupJid, { page = 1, pageSize =
 }
 
 /** Lista chats da instância (Evolution v2 `POST /chat/findChats/{instance}`). */
-async function findChats(instanceName, { limit } = {}) {
-  const body = limit ? { where: {}, take: limit } : { where: {} }
-  return firstSuccess([
-    () => requestEvolution(`/chat/findChats/${encodeURIComponent(instanceName)}`, { method: "POST", body, timeoutMs: GROUPS_TIMEOUT_MS }),
-    () => requestEvolution(`/chat/findChats/${encodeURIComponent(instanceName)}`, { method: "POST", body: {}, timeoutMs: GROUPS_TIMEOUT_MS }),
-  ])
+async function findChats(instanceName, { limit, offset = 0 } = {}) {
+  const take = limit || undefined
+  const skip = Number(offset) > 0 ? Number(offset) : 0
+  const page = take ? Math.floor(skip / take) + 1 : 1
+  const bodies = []
+  if (take) {
+    bodies.push({ where: {}, take, skip })
+    bodies.push({ where: {}, take, offset: skip })
+    bodies.push({ where: {}, take, page })
+    bodies.push({ where: {}, take })
+  } else {
+    bodies.push({ where: {} })
+  }
+  const attempts = bodies.map(
+    (body) => () =>
+      requestEvolution(`/chat/findChats/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body,
+        timeoutMs: GROUPS_TIMEOUT_MS,
+      }),
+  )
+  attempts.push(() =>
+    requestEvolution(`/chat/findChats/${encodeURIComponent(instanceName)}`, {
+      method: "POST",
+      body: {},
+      timeoutMs: GROUPS_TIMEOUT_MS,
+    }),
+  )
+  return firstSuccess(attempts)
+}
+
+/**
+ * Varre findChats em páginas até esgotar ou atingir maxTotal.
+ * Evolution nem sempre pagina — se uma página repetir/zerar, para.
+ */
+async function findChatsPaginated(instanceName, { pageSize = 500, maxTotal = 10000 } = {}) {
+  const all = []
+  const seen = new Set()
+  let offset = 0
+  let pages = 0
+  const maxPages = Math.ceil(maxTotal / pageSize) + 2
+  while (pages < maxPages && all.length < maxTotal) {
+    pages += 1
+    let payload
+    try {
+      payload = await findChats(instanceName, { limit: pageSize, offset })
+    } catch (err) {
+      if (pages === 1) throw err
+      break
+    }
+    const list = Array.isArray(payload)
+      ? payload
+      : payload?.records || payload?.chats || payload?.data || payload?.response || []
+    if (!Array.isArray(list) || !list.length) break
+    let added = 0
+    for (const row of list) {
+      const jid = String(row?.remoteJid || row?.id || row?.jid || row?.key?.remoteJid || "").trim()
+      if (!jid || seen.has(jid)) continue
+      seen.add(jid)
+      all.push(row)
+      added += 1
+      if (all.length >= maxTotal) break
+    }
+    if (added === 0) break
+    if (list.length < pageSize) break
+    offset += pageSize
+  }
+  return all
 }
 
 /** Histórico paginado de um chat 1:1 (mesmo findMessages usado para grupos). */
@@ -495,26 +789,66 @@ async function sendPresence(instanceName, number, { presence = "recording", dela
   ])
 }
 
+function mentionedForEvolution(mentioned) {
+  if (!Array.isArray(mentioned) || !mentioned.length) return null
+  // Teto duro: a Evolution coloca cada item em mentionedJid. Lista grande vira "@" solto.
+  return mentioned.slice(0, 2)
+}
+
 async function sendText(instanceName, number, text, options = {}) {
-  const { linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest } = options
+  const { linkPreview, mentionsEveryOne: _mentionsEveryOne, mentioned, mentionAll: _mentionAll, quoted, ...rest } = options
   const body = {
     number,
     text,
     ...rest,
   }
-  if (mentionsEveryOne === true) body.mentionsEveryOne = true
-  if (Array.isArray(mentioned) && mentioned.length) body.mentioned = mentioned
+  const safeMentioned = mentionedForEvolution(mentioned)
+  if (safeMentioned) body.mentioned = safeMentioned
   if (linkPreview === true) body.linkPreview = true
-  // Campo experimental — Evolution/Baileys recentes podem repassar mentionAll (nonJidMentions)
-  if (mentionAll === true) body.mentionAll = true
+  if (quoted) body.quoted = quoted
   return requestEvolution(`/message/sendText/${encodeURIComponent(instanceName)}`, {
     method: "POST",
     body,
   })
 }
 
+/** Apaga mensagem para todos (Evolution / Baileys). */
+async function deleteMessageForEveryone(instanceName, { id, remoteJid, fromMe = true, participant } = {}) {
+  const body = { id, remoteJid, fromMe: Boolean(fromMe) }
+  if (participant) body.participant = participant
+  return requestEvolution(`/chat/deleteMessageForEveryone/${encodeURIComponent(instanceName)}`, {
+    method: "DELETE",
+    body,
+  })
+}
+
+/** Edita texto de mensagem própria. */
+async function updateMessageText(instanceName, { number, text, key } = {}) {
+  return requestEvolution(`/chat/updateMessage/${encodeURIComponent(instanceName)}`, {
+    method: "POST",
+    body: { number, text, key },
+  })
+}
+
+/** Marca mensagens como lidas no WhatsApp (ticks do contato). */
+async function markMessagesAsRead(instanceName, readMessages = []) {
+  if (!Array.isArray(readMessages) || !readMessages.length) return null
+  return firstSuccess([
+    () =>
+      requestEvolution(`/chat/markMessageAsRead/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: { readMessages },
+      }),
+    () =>
+      requestEvolution(`/chat/markMessageAsRead/${encodeURIComponent(instanceName)}`, {
+        method: "PUT",
+        body: { readMessages },
+      }),
+  ])
+}
+
 /** mediatype: "image" | "video" | "audio" | "document". media: base64 (sem prefixo data:) ou URL. */
-async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, linkPreview, mentionsEveryOne, mentioned, mentionAll, ...rest }) {
+async function sendMedia(instanceName, number, { mediatype, media, mimetype, caption, fileName, linkPreview, mentionsEveryOne: _mentionsEveryOne, mentioned, mentionAll: _mentionAll, ...rest }) {
   const { stripDataUrl } = require("./whatsappAudio")
   let mediaPayload = stripDataUrl(media)
   let mime = mimetype
@@ -537,10 +871,9 @@ async function sendMedia(instanceName, number, { mediatype, media, mimetype, cap
   if (caption) body.caption = caption
   if (name) body.fileName = name
   else if (mediatype === "video") body.fileName = "video.mp4"
-  if (mentionsEveryOne === true) body.mentionsEveryOne = true
-  if (Array.isArray(mentioned) && mentioned.length) body.mentioned = mentioned
+  const safeMentioned = mentionedForEvolution(mentioned)
+  if (safeMentioned) body.mentioned = safeMentioned
   if (linkPreview === true) body.linkPreview = true
-  if (mentionAll === true) body.mentionAll = true
   const timeoutMs = Number(process.env.EVOLUTION_SEND_MEDIA_TIMEOUT_MS || 180000)
   const opts = { method: "POST", body, timeoutMs }
   return firstSuccess([
@@ -653,6 +986,20 @@ async function logoutInstance(instanceName) {
   }
 }
 
+/** Reinicia sessão Baileys (útil quando fica em connecting sem QR). */
+async function restartInstance(instanceName) {
+  return firstSuccess([
+    () =>
+      requestEvolution(`/instance/restart/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+      }),
+    () =>
+      requestEvolution(`/instance/restart/${encodeURIComponent(instanceName)}`, {
+        method: "PUT",
+      }),
+  ])
+}
+
 function isBenignLogoutError(err) {
   const status = Number(err?.status || 0)
   const msg = String(err?.message || "").toLowerCase()
@@ -703,14 +1050,24 @@ async function syncLabels(instanceName) {
 
 /**
  * Adiciona/remove etiqueta num chat.
- * Na Evolution, `name` = id da label; `id` = JID do chat.
+ * Evo2 exige `number` + `labelId`; builds antigas usavam `name`/`id`/`type`.
+ * Enviamos os dois formatos para cobrir primary e secondary.
  */
 async function handleLabel(instanceName, { labelId, chatJid, action = "add" }) {
+  const jid = String(chatJid || "").trim()
+  const label = String(labelId || "").trim()
+  const act = action === "remove" ? "remove" : "add"
+  if (!jid || !label) {
+    throw new Error("handleLabel requer chatJid e labelId")
+  }
   const body = {
-    name: String(labelId),
+    number: jid,
+    labelId: label,
+    action: act,
+    // legado (Evo1 / docs antigas)
+    name: label,
     type: "chat",
-    id: String(chatJid),
-    action: action === "remove" ? "remove" : "add",
+    id: jid,
   }
   return requestEvolution(`/label/handleLabel/${encodeURIComponent(instanceName)}`, {
     method: "POST",
@@ -722,25 +1079,40 @@ async function handleLabel(instanceName, { labelId, chatJid, action = "add" }) {
 module.exports = {
   createInstance,
   setInstanceWebhook,
+  buildDefaultWebhookUrl,
+  reassertInstanceWebhook,
   connectInstance,
   getConnectionState,
+  getConnectionStateForProbe,
+  isEvolutionUnreachableError,
+  recoverQrIfStuck,
+  recoverPairingCode,
+  normalizeWhatsappNumber,
+  pickPairingCode,
   fetchAllGroups,
   fetchGroupParticipants,
   findContacts,
   fetchProfile,
   fetchProfilePictureUrl,
+  checkWhatsappNumbers,
+  numberExistsOnWhatsapp,
   saveContact,
   fetchGroupMessages,
   findChats,
+  findChatsPaginated,
   fetchChatMessages,
   findMessageById,
   sendText,
   sendPresence,
   sendMedia,
   sendWhatsAppAudio,
+  deleteMessageForEveryone,
+  updateMessageText,
+  markMessagesAsRead,
   getBase64FromMediaMessage,
   extractMediaBase64Payload,
   logoutInstance,
+  restartInstance,
   deleteInstance,
   findLabels,
   syncLabels,

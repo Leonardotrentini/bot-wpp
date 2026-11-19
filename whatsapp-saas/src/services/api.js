@@ -1061,6 +1061,35 @@ export async function markCrmConversationRead(id) {
   return mockResponse({ conversation: null })
 }
 
+export async function editCrmMessage(conversationId, messageId, body) {
+  if (resolveUseRealApi()) {
+    return apiClient.patch(
+      `/crm/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+      { body },
+    )
+  }
+  return mockResponse({ message: { id: messageId, body, edited: true } })
+}
+
+export async function deleteCrmMessage(conversationId, messageId) {
+  if (resolveUseRealApi()) {
+    return apiClient.delete(
+      `/crm/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    )
+  }
+  return mockResponse({ message: { id: messageId, deleted: true, type: 'deleted', body: '' } })
+}
+
+export async function forwardCrmMessage(conversationId, messageId, targetConversationIds) {
+  if (resolveUseRealApi()) {
+    return apiClient.post(
+      `/crm/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/forward`,
+      { targetConversationIds },
+    )
+  }
+  return mockResponse({ forwarded: targetConversationIds?.length || 0, results: [] })
+}
+
 export async function patchCrmConversation(id, payload) {
   if (resolveUseRealApi()) return apiClient.patch(`/crm/conversations/${encodeURIComponent(id)}`, payload)
   return mockResponse({ conversation: null })

@@ -14,15 +14,30 @@ const {
   sendWhatsAppAudio,
   sendPresence,
   findChats,
+  findChatsPaginated,
   findContacts,
   fetchChatMessages,
   findMessageById,
   fetchProfile,
   fetchProfilePictureUrl,
+  numberExistsOnWhatsapp,
+  bindInstanceHost,
   saveContact,
   getBase64FromMediaMessage,
   extractMediaBase64Payload,
+  restartInstance,
+  reassertInstanceWebhook,
+  getConnectionStateForProbe,
+  pickConnected,
+  pickStatus,
+  deleteMessageForEveryone,
+  updateMessageText,
+  markMessagesAsRead,
 } = require("../lib/evolution")
+const {
+  buildEvolutionQuotedPayload,
+  mergeVestoRaw,
+} = require("../lib/crmMessageActions")
 const { enqueueUserSend } = require("../lib/sendQueue")
 const { validateMediaContentSize } = require("../lib/mediaLimits")
 const { createSemaphore } = require("../lib/semaphore")
@@ -37,8 +52,9 @@ const {
   normalizeMessageMediaKind,
   resolveEvolutionRecipient,
   propagateSavedNameToPhoneSiblings,
+  ensureContactAndConversation,
 } = require("../lib/crmCore")
-const { startCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
+const { startCrmSync, cancelCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw, stripMediaBase64 } = require("../lib/crmMedia")
 const { onStageChange, notifyTagAddedForContact, testFlowOnConversation, dispatchCrmMessageFlows } = require("../lib/crmFlows")
@@ -46,7 +62,10 @@ const { importCrmPack } = require("../lib/crmPackImport")
 const { processPendingCrmDeliveries, flushCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
 const { pickAvatarFromPicturePayload, pickProfileFields } = require("../lib/crmProfile")
-const { aiConfigured, testAgentReply } = require("../lib/crmAiAgent")
+const { testAgentReply, generateSystemPrompt } = require("../lib/crmAiAgent")
+const { parseKnowledgeUpload, loadKnowledgeChunks } = require("../lib/crmAiKnowledge")
+const { encryptApiKey, last4, publicAiStatus, resolveOrgAiClient } = require("../lib/crmAiCredentials")
+const { normalizeAudience, audienceError, agentCoversMember, agentInOrganization } = require("../lib/crmAiAudience")
 const { registerCrmAnalysisRoutes } = require("./crmAnalysis")
 const {
   logContactActivity,
@@ -68,7 +87,12 @@ const { listCrmSales } = require("../lib/crmSales")
 const { ensureDefaultTags, isQualifiedTagName, resolveTagForContactUser, tagNameKey } = require("../lib/crmDefaults")
 const { trackMetaForContactTag } = require("../lib/metaConversions")
 const { reassignContactToSeller } = require("../lib/crmReassign")
-const { unifyLidPhoneDuplicates, emitUnificationEvents } = require("../lib/crmContactMerge")
+const {
+  unifyLidPhoneDuplicates,
+  emitUnificationEvents,
+  findContactByPhone,
+} = require("../lib/crmContactMerge")
+const { buildConversationSearchClauses, phoneDigitsFromValue } = require("../lib/participantIdentity")
 const { deleteScopedContact, deleteScopedContacts, emitContactDeleted } = require("../lib/crmContactDelete")
 const {
   confirmEvolutionDelivery,
@@ -81,10 +105,25 @@ const {
   mirrorStageChangeToWhatsapp,
   mirrorQualifiedTagToWhatsapp,
 } = require("../lib/crmWhatsappLabels")
+const {
+  resolveStageForConversationUser,
+  buildViewerStageRemap,
+  applyViewerStageRemap,
+} = require("../lib/crmKanbanStages")
 
 function isQuoteTagName(name) {
   const n = String(name || "").trim()
   return n === "Orçamento" || n.startsWith("Orçamento ")
+}
+
+/** Normaliza telefone digitado no CRM (BR): 10/11 dígitos → prefixa 55. */
+function normalizeManualCrmPhone(input) {
+  let digits = String(input || "").replace(/\D/g, "")
+  if (!digits) return null
+  if (digits.length === 10 || digits.length === 11) digits = `55${digits}`
+  if (!digits.startsWith("55")) return null
+  if (digits.length < 12 || digits.length > 13) return null
+  return digits
 }
 
 const DEFAULT_STAGES = [
@@ -136,6 +175,7 @@ function formatFlowRow(flow) {
     id: flow.id,
     name: flow.name,
     enabled: flow.enabled,
+    enabledAt: flow.enabledAt?.toISOString?.() || flow.enabledAt || null,
     trigger: flow.trigger,
     conditions: flow.conditions || [],
     actions: flow.actions,
@@ -143,6 +183,13 @@ function formatFlowRow(flow) {
     quietHours: flow.quietHours || null,
     createdAt: flow.createdAt.toISOString(),
   }
+}
+
+/** Stamp de ativação: só dispara/varre eventos a partir deste instante. */
+function flowEnabledAtData(nextEnabled, previousEnabled) {
+  if (nextEnabled === true && !previousEnabled) return { enabledAt: new Date() }
+  if (nextEnabled === false) return { enabledAt: null }
+  return {}
 }
 
 function validateFlowActions(actions) {
@@ -174,6 +221,18 @@ function formatAgentRow(agent) {
     quietHours: agent.quietHours || null,
     replyDelayMinSec: agent.replyDelayMinSec,
     replyDelayMaxSec: agent.replyDelayMaxSec,
+    activationMode: agent.activationMode || "manual",
+    activationConfig: agent.activationConfig || null,
+    allowedTools: agent.allowedTools || [],
+    allowedTagIds: agent.allowedTagIds || [],
+    knowledgeText: agent.knowledgeText || "",
+    promptTemplateId: agent.promptTemplateId || null,
+    locale: agent.locale || "pt-BR",
+    numberScope: agent.numberScope || "all",
+    numberUserId: agent.numberUserId || null,
+    boardScope: agent.boardScope || "all",
+    boardUserId: agent.boardUserId || null,
+    organizationId: agent.organizationId || null,
     createdAt: agent.createdAt.toISOString(),
   }
 }
@@ -223,7 +282,22 @@ function createCrmRouter({ io }) {
     return { actorUserId: req.user.sub, actorName: user?.name || null }
   }
 
-  const syncDeps = { prisma, io, findChats, findContacts, fetchChatMessages, fetchProfile, fetchProfilePictureUrl }
+  const syncDeps = {
+    prisma,
+    io,
+    findChats,
+    findChatsPaginated,
+    findContacts,
+    fetchChatMessages,
+    fetchProfile,
+    fetchProfilePictureUrl,
+    restartInstance,
+    reassertInstanceWebhook,
+    bindInstanceHost,
+    getConnectionStateForProbe,
+    pickConnected,
+    pickStatus,
+  }
 
   // ------------------------- Conversas -------------------------
 
@@ -274,12 +348,8 @@ function createCrmRouter({ io }) {
     const offset = Math.max(0, parseInt(req.query.offset || "0", 10) || 0)
     if (q && String(q).trim()) {
       const term = String(q).trim()
-      where.OR = [
-        { contact: { name: { contains: term, mode: "insensitive" } } },
-        { contact: { pushName: { contains: term, mode: "insensitive" } } },
-        { contact: { phone: { contains: term.replace(/\D/g, "") || term } } },
-        { lastMessagePreview: { contains: term, mode: "insensitive" } },
-      ]
+      const clauses = buildConversationSearchClauses(term)
+      if (clauses.length) where.OR = clauses
     }
 
     const [total, rows] =
@@ -302,8 +372,17 @@ function createCrmRouter({ io }) {
             }),
           ])
 
+    // Dono vê estágios do próprio board: remapeia ids da equipe pelo nome da coluna.
+    const stageRemap =
+      req.dataScope?.isOwner && (req.dataScope.userIds?.length || 0) > 1
+        ? await buildViewerStageRemap(prisma, {
+            viewerUserId: userId,
+            stageIds: rows.map((r) => r.kanbanStageId),
+          })
+        : new Map()
+
     return res.json({
-      conversations: rows.map(formatConversationRow),
+      conversations: rows.map((r) => applyViewerStageRemap(formatConversationRow(r), stageRemap)),
       total: total ?? rows.length,
       limit,
       offset,
@@ -313,7 +392,15 @@ function createCrmRouter({ io }) {
   router.get("/conversations/:id", async (req, res) => {
     const convo = await findScopedConversation(req, req.params.id)
     if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
-    return res.json({ conversation: formatConversationRow(convo) })
+    let row = formatConversationRow(convo)
+    if (req.dataScope?.isOwner && convo.userId !== req.user.sub && convo.kanbanStageId) {
+      const remap = await buildViewerStageRemap(prisma, {
+        viewerUserId: req.user.sub,
+        stageIds: [convo.kanbanStageId],
+      })
+      row = applyViewerStageRemap(row, remap)
+    }
+    return res.json({ conversation: row })
   })
 
   router.get("/conversations/:id/messages", async (req, res) => {
@@ -421,6 +508,7 @@ function createCrmRouter({ io }) {
       mediaBase64: z.string().optional().nullable(),
       mediaMime: z.string().max(120).optional().nullable(),
       mediaName: z.string().max(255).optional().nullable(),
+      quotedMessageId: z.string().max(120).optional().nullable(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
@@ -444,9 +532,30 @@ function createCrmRouter({ io }) {
       return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
     }
 
+    let quotedRow = null
+    if (content.quotedMessageId) {
+      quotedRow = await prisma.crmMessage.findFirst({
+        where: {
+          conversationId: convo.id,
+          OR: [{ id: content.quotedMessageId }, { messageId: content.quotedMessageId }],
+        },
+      })
+    }
+
     try {
       const resp = await enqueueUserSend(userId, async () => {
         const to = assertOutboundRecipient(convo)
+        const quoted = quotedRow
+          ? buildEvolutionQuotedPayload(
+              {
+                messageId: quotedRow.messageId,
+                fromMe: quotedRow.fromMe,
+                body: quotedRow.body || "",
+                raw: quotedRow.raw,
+              },
+              convo.remoteJid,
+            )
+          : null
         let sendResp
         if (content.mediaType === "audio") {
           const media = stripMediaBase64(content.mediaBase64)
@@ -464,9 +573,10 @@ function createCrmRouter({ io }) {
             mimetype: content.mediaMime || undefined,
             caption: content.body || undefined,
             fileName: content.mediaName || undefined,
+            ...(quoted ? { quoted } : {}),
           })
         } else {
-          sendResp = await sendText(conn.instanceName, to, content.body)
+          sendResp = await sendText(conn.instanceName, to, content.body, quoted ? { quoted } : {})
         }
         const { messageId, crmStatus, ackOk, detail } = await confirmEvolutionDelivery(
           { fetchChatMessages, findMessageById },
@@ -496,7 +606,7 @@ function createCrmRouter({ io }) {
         content.mediaType === "audio"
           ? resp?._vestoAudio?.mimetype || content.mediaMime || "audio/ogg; codecs=opus"
           : content.mediaMime || null
-      const messageRaw = hasMedia
+      let messageRaw = hasMedia
         ? buildOutboundMessageRaw({
             providerMessageId,
             remoteJid: convo.remoteJid,
@@ -506,6 +616,13 @@ function createCrmRouter({ io }) {
             mediaName: content.mediaName,
           })
         : null
+      if (quotedRow) {
+        messageRaw = mergeVestoRaw(messageRaw, {
+          quotedMessageId: quotedRow.messageId,
+          quotedFromMe: Boolean(quotedRow.fromMe),
+          quotedPreview: String(quotedRow.body || "").slice(0, 200) || previewFromBody(quotedRow.body, quotedRow.type),
+        })
+      }
 
       const message = await prisma.crmMessage.upsert({
         where: {
@@ -584,7 +701,282 @@ function createCrmRouter({ io }) {
       include: CONVERSATION_INCLUDE,
     })
     emitCrmEvent(io, convo.userId, "crm:conversation", { conversation: formatConversationRow(updated) })
+
+    // Marca no WhatsApp as inbound recentes como lidas (ticks azuis para o contato)
+    try {
+      const conn = await ensureWhatsAppConnected(prisma, convo.userId)
+      if (conn) {
+        const recentInbound = await prisma.crmMessage.findMany({
+          where: { conversationId: convo.id, fromMe: false },
+          orderBy: { timestamp: "desc" },
+          take: 20,
+          select: { messageId: true },
+        })
+        if (recentInbound.length) {
+          await markMessagesAsRead(
+            conn.instanceName,
+            recentInbound.map((m) => ({
+              remoteJid: convo.remoteJid,
+              id: m.messageId,
+              fromMe: false,
+            })),
+          ).catch(() => {})
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
+
     return res.json({ conversation: formatConversationRow(updated) })
+  })
+
+  /** Editar mensagem própria (texto). */
+  router.patch("/conversations/:id/messages/:messageId", async (req, res) => {
+    const schema = z.object({ body: z.string().min(1).max(4096) })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Texto inválido." })
+
+    const convo = await findScopedConversation(req, req.params.id)
+    if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+    if (!canMutateAsActor(req, convo.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Sem permissão nesta conversa." })
+    }
+
+    const msg = await prisma.crmMessage.findFirst({
+      where: {
+        conversationId: convo.id,
+        OR: [{ id: req.params.messageId }, { messageId: req.params.messageId }],
+      },
+    })
+    if (!msg) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+    if (!msg.fromMe) {
+      return res.status(400).json({ error: "NOT_OWN", message: "Só é possível editar suas mensagens." })
+    }
+    if (String(msg.type || "").toLowerCase() !== "text") {
+      return res.status(400).json({ error: "NOT_TEXT", message: "Só é possível editar mensagens de texto." })
+    }
+    if (msg.raw?._vesto?.deleted) {
+      return res.status(400).json({ error: "DELETED", message: "Mensagem já foi apagada." })
+    }
+
+    const conn = await ensureWhatsAppConnected(prisma, convo.userId)
+    if (!conn) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    try {
+      const to = assertOutboundRecipient(convo)
+      await updateMessageText(conn.instanceName, {
+        number: to,
+        text: parsed.data.body,
+        key: {
+          remoteJid: convo.remoteJid,
+          fromMe: true,
+          id: msg.messageId,
+        },
+      })
+      const updated = await prisma.crmMessage.update({
+        where: { id: msg.id },
+        data: {
+          body: parsed.data.body,
+          raw: mergeVestoRaw(msg.raw, { editedAt: new Date().toISOString() }),
+        },
+      })
+      const formatted = formatMessageRow(updated)
+      emitCrmEvent(io, convo.userId, "crm:message", {
+        conversationId: convo.id,
+        message: formatted,
+      })
+      return res.json({ message: formatted })
+    } catch (err) {
+      console.error("[crm] edit message:", err?.message || err)
+      return res.status(502).json({ error: "EDIT_FAILED", message: "Não foi possível editar a mensagem." })
+    }
+  })
+
+  /** Apagar mensagem para todos. */
+  router.delete("/conversations/:id/messages/:messageId", async (req, res) => {
+    const convo = await findScopedConversation(req, req.params.id)
+    if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+    if (!canMutateAsActor(req, convo.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Sem permissão nesta conversa." })
+    }
+
+    const msg = await prisma.crmMessage.findFirst({
+      where: {
+        conversationId: convo.id,
+        OR: [{ id: req.params.messageId }, { messageId: req.params.messageId }],
+      },
+    })
+    if (!msg) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+    if (!msg.fromMe) {
+      return res.status(400).json({ error: "NOT_OWN", message: "Só é possível apagar suas mensagens." })
+    }
+
+    const conn = await ensureWhatsAppConnected(prisma, convo.userId)
+    if (!conn) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    try {
+      await deleteMessageForEveryone(conn.instanceName, {
+        id: msg.messageId,
+        remoteJid: convo.remoteJid,
+        fromMe: true,
+      })
+      const updated = await prisma.crmMessage.update({
+        where: { id: msg.id },
+        data: {
+          body: "",
+          type: "deleted",
+          mediaMime: null,
+          raw: mergeVestoRaw(msg.raw, { deleted: true, deletedAt: new Date().toISOString() }),
+        },
+      })
+      const formatted = formatMessageRow(updated)
+      emitCrmEvent(io, convo.userId, "crm:message", {
+        conversationId: convo.id,
+        message: formatted,
+      })
+      return res.json({ message: formatted })
+    } catch (err) {
+      console.error("[crm] delete message:", err?.message || err)
+      return res.status(502).json({ error: "DELETE_FAILED", message: "Não foi possível apagar a mensagem." })
+    }
+  })
+
+  /** Encaminhar mensagem para outras conversas (reenvia conteúdo). */
+  router.post("/conversations/:id/messages/:messageId/forward", async (req, res) => {
+    const schema = z.object({
+      targetConversationIds: z.array(z.string().min(1)).min(1).max(10),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione ao menos um destino." })
+    }
+
+    const convo = await findScopedConversation(req, req.params.id)
+    if (!convo) return res.status(404).json({ error: "NOT_FOUND", message: "Conversa não encontrada." })
+    if (!canMutateAsActor(req, convo.userId)) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Sem permissão nesta conversa." })
+    }
+
+    const msg = await prisma.crmMessage.findFirst({
+      where: {
+        conversationId: convo.id,
+        OR: [{ id: req.params.messageId }, { messageId: req.params.messageId }],
+      },
+    })
+    if (!msg) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+    if (msg.raw?._vesto?.deleted || msg.type === "deleted") {
+      return res.status(400).json({ error: "DELETED", message: "Não é possível encaminhar mensagem apagada." })
+    }
+
+    const conn = await ensureWhatsAppConnected(prisma, convo.userId)
+    if (!conn) {
+      return res.status(409).json({ error: "WHATSAPP_DISCONNECTED", message: "WhatsApp não está conectado." })
+    }
+
+    const mediaKind = normalizeMessageMediaKind(msg.type)
+    let mediaBase64 = null
+    let mediaMime = msg.mediaMime || null
+    if (mediaKind) {
+      try {
+        const stored = readStoredMessageMedia(msg)
+        if (stored?.base64) {
+          mediaBase64 = stored.base64
+          mediaMime = stored.mimetype || mediaMime
+        } else {
+          const rawRecord = await ensureMessageRaw({ prisma, fetchChatMessages }, msg)
+          if (rawRecord) {
+            const resp = await getBase64FromMediaMessage(conn.instanceName, rawRecord, {
+              convertToMp4: mediaKind === "video",
+            })
+            const media = extractMediaBase64Payload(resp)
+            mediaBase64 = media?.base64 || null
+            mediaMime = media?.mimetype || mediaMime
+          }
+        }
+      } catch {
+        mediaBase64 = null
+      }
+      if (!mediaBase64) {
+        return res.status(400).json({
+          error: "MEDIA_UNAVAILABLE",
+          message: "Não foi possível carregar a mídia para encaminhar.",
+        })
+      }
+    }
+
+    const results = []
+    for (const targetId of parsed.data.targetConversationIds) {
+      const target = await findScopedConversation(req, targetId)
+      if (!target) {
+        results.push({ conversationId: targetId, ok: false, error: "NOT_FOUND" })
+        continue
+      }
+      if (!canMutateAsActor(req, target.userId)) {
+        results.push({ conversationId: targetId, ok: false, error: "FORBIDDEN" })
+        continue
+      }
+      try {
+        const to = assertOutboundRecipient(target)
+        let sendResp
+        if (mediaKind === "audio") {
+          sendResp = await sendWhatsAppAudio(conn.instanceName, to, {
+            audio: mediaBase64,
+            mimetype: mediaMime || "audio/ogg; codecs=opus",
+            encoding: true,
+          })
+        } else if (mediaKind) {
+          sendResp = await sendMedia(conn.instanceName, to, {
+            mediatype: mediaKind,
+            media: mediaBase64,
+            mimetype: mediaMime || undefined,
+            caption: msg.body || undefined,
+          })
+        } else {
+          sendResp = await sendText(conn.instanceName, to, msg.body || "")
+        }
+        const providerMessageId = sendResp?.key?.id || extractProviderMessageId(sendResp) || `fwd-${Date.now()}`
+        const now = new Date()
+        const created = await prisma.crmMessage.create({
+          data: {
+            userId: target.userId,
+            conversationId: target.id,
+            messageId: providerMessageId,
+            fromMe: true,
+            type: mediaKind || "text",
+            body: msg.body || "",
+            mediaMime: mediaMime,
+            status: "sent",
+            source: "manual",
+            timestamp: now,
+            raw: mergeVestoRaw(null, { forwardedFrom: msg.messageId }),
+          },
+        })
+        await prisma.crmConversation.update({
+          where: { id: target.id },
+          data: {
+            lastMessageAt: now,
+            lastMessagePreview: previewFromBody(msg.body, mediaKind || "text"),
+            lastMessageFromMe: true,
+            noReplySinceAt: now,
+          },
+        })
+        emitCrmEvent(io, target.userId, "crm:message", {
+          conversationId: target.id,
+          message: formatMessageRow(created),
+        })
+        results.push({ conversationId: targetId, ok: true, messageId: created.id })
+      } catch (err) {
+        console.error("[crm] forward:", err?.message || err)
+        results.push({ conversationId: targetId, ok: false, error: "SEND_FAILED" })
+      }
+    }
+
+    const okCount = results.filter((r) => r.ok).length
+    return res.json({ forwarded: okCount, results })
   })
 
   /** Re-dispara fluxos automáticos (mesmo caminho do webhook) — não consome teto global. */
@@ -667,13 +1059,24 @@ function createCrmRouter({ io }) {
 
     const userId = convo.userId
     const data = { ...parsed.data }
-    if (data.kanbanStageId) {
-      const stage = await prisma.crmKanbanStage.findFirst({ where: { id: data.kanbanStageId, userId } })
-      if (!stage) return res.status(400).json({ error: "STAGE_NOT_FOUND", message: "Estágio inválido." })
+    if (Object.prototype.hasOwnProperty.call(parsed.data, "kanbanStageId")) {
+      const resolved = await resolveStageForConversationUser(prisma, {
+        stageId: parsed.data.kanbanStageId,
+        targetUserId: userId,
+        dataScope: req.dataScope,
+      })
+      if (!resolved.ok) {
+        return res.status(400).json({ error: resolved.error, message: resolved.message })
+      }
+      data.kanbanStageId = resolved.stageId
     }
     if (data.aiAgentId) {
-      const agent = await prisma.crmAiAgent.findFirst({ where: { id: data.aiAgentId, userId } })
-      if (!agent) return res.status(400).json({ error: "AGENT_NOT_FOUND", message: "Agente inválido." })
+      const agent = await prisma.crmAiAgent.findFirst({ where: { id: data.aiAgentId } })
+      const visible =
+        agent &&
+        agentInOrganization(agent, req.dataScope) &&
+        agentCoversMember(agent, userId)
+      if (!visible) return res.status(400).json({ error: "AGENT_NOT_FOUND", message: "Agente inválido para este número." })
     }
     if (data.aiEnabled === true) data.assignedTo = "ai"
     if (data.aiEnabled === false && !data.assignedTo) data.assignedTo = "human"
@@ -684,10 +1087,22 @@ function createCrmRouter({ io }) {
       include: CONVERSATION_INCLUDE,
     })
 
-    emitCrmEvent(io, userId, "crm:conversation", { conversation: formatConversationRow(updated) })
+    // Emite com estágio remapeado para o board do ator (dono) quando o lead é da equipe.
+    let emitted = formatConversationRow(updated)
+    if (req.dataScope?.isOwner && updated.userId !== req.user.sub && updated.kanbanStageId) {
+      const remap = await buildViewerStageRemap(prisma, {
+        viewerUserId: req.user.sub,
+        stageIds: [updated.kanbanStageId],
+      })
+      emitted = applyViewerStageRemap(emitted, remap)
+    }
+    emitCrmEvent(io, userId, "crm:conversation", { conversation: emitted })
+    if (req.user.sub !== userId) {
+      emitCrmEvent(io, req.user.sub, "crm:conversation", { conversation: emitted })
+    }
 
     const stagePatched = Object.prototype.hasOwnProperty.call(parsed.data, "kanbanStageId")
-    const nextStageId = stagePatched ? parsed.data.kanbanStageId || null : undefined
+    const nextStageId = stagePatched ? data.kanbanStageId || null : undefined
     const stageChanged =
       stagePatched && (nextStageId || null) !== (convo.kanbanStageId || null)
     if (stageChanged) {
@@ -701,6 +1116,7 @@ function createCrmRouter({ io }) {
         payload: {
           stageId: nextStageId,
           stageName: stage?.name || (nextStageId ? null : "Sem estágio"),
+          source: "crm_ui",
         },
       }).catch((err) => console.error("[crm-activity] stage_changed:", err?.message || err))
 
@@ -716,7 +1132,7 @@ function createCrmRouter({ io }) {
       }).catch((err) => console.warn("[wa-labels] mirror:", err?.message || err))
     }
 
-    return res.json({ conversation: formatConversationRow(updated) })
+    return res.json({ conversation: emitted })
   })
 
   // ------------------------- Contatos -------------------------
@@ -787,6 +1203,136 @@ function createCrmRouter({ io }) {
 
     emitContactDeleted(io, emitCrmEvent, result)
     return res.json({ ok: true, contactId: result.contactId, conversationId: result.conversationId })
+  })
+
+  /** Cria contato/conversa manualmente (ou reabre se o telefone já existir). */
+  router.post("/contacts", async (req, res) => {
+    const schema = z.object({
+      phone: z.string().min(8).max(32),
+      name: z.string().max(120).optional().nullable(),
+      notes: z.string().max(4000).optional().nullable(),
+      sellerUserId: z.string().min(1).optional().nullable(),
+    })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe um telefone válido." })
+    }
+
+    const phone = normalizeManualCrmPhone(parsed.data.phone) || phoneDigitsFromValue(parsed.data.phone)
+    if (!phone) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Telefone inválido. Use DDD + número (ex.: 11987654321).",
+      })
+    }
+
+    let targetUserId = req.user.sub
+    const sellerUserId = parsed.data.sellerUserId ? String(parsed.data.sellerUserId).trim() : ""
+    if (sellerUserId) {
+      if (!req.dataScope?.isOwner) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Apenas o dono da empresa pode atribuir o contato a um vendedor.",
+        })
+      }
+      if (!assertUserInScope(req.dataScope, sellerUserId)) {
+        return res.status(403).json({ error: "FORBIDDEN", message: "Vendedor fora da empresa." })
+      }
+      targetUserId = sellerUserId
+    }
+
+    const remoteJid = `${phone}@s.whatsapp.net`
+    const existing = await findContactByPhone(prisma, { userId: targetUserId, phone })
+    const created = !existing
+
+    const name = parsed.data.name != null ? String(parsed.data.name).trim() || null : null
+    const notes = parsed.data.notes != null ? String(parsed.data.notes).trim() : null
+
+    // Valida se o número existe no WhatsApp antes de criar (contato novo).
+    // Contato já existente: só reabre o chat, sem bloquear.
+    if (created) {
+      const conn = await ensureWhatsAppConnected(prisma, targetUserId)
+      if (!conn?.connected || !conn.instanceName) {
+        return res.status(400).json({
+          error: "WHATSAPP_DISCONNECTED",
+          message: "Conecte o WhatsApp para verificar se o número está correto.",
+        })
+      }
+      bindInstanceHost(conn.instanceName, conn.evolutionHost || "primary")
+      const check = await numberExistsOnWhatsapp(conn.instanceName, phone)
+      if (!check.ok) {
+        return res.status(502).json({
+          error: "WHATSAPP_CHECK_FAILED",
+          message: "Não foi possível verificar o número no WhatsApp. Tente de novo em instantes.",
+        })
+      }
+      if (!check.exists) {
+        return res.status(400).json({
+          error: "INVALID_WHATSAPP_NUMBER",
+          message: "Contato errado: este número não tem WhatsApp (ou está incorreto).",
+        })
+      }
+    }
+
+    try {
+      let { contact, conversation } = await ensureContactAndConversation(prisma, targetUserId, remoteJid, {
+        phone,
+        pushName: created && name ? name : undefined,
+      })
+
+      if (created && (name || notes != null)) {
+        contact = await prisma.crmContact.update({
+          where: { id: contact.id },
+          data: {
+            ...(name ? { name } : {}),
+            ...(notes != null ? { notes } : {}),
+          },
+          include: {
+            tags: { include: { tag: true } },
+            reminders: { where: { status: "pending" }, orderBy: { scheduledAt: "asc" } },
+          },
+        })
+        conversation = await prisma.crmConversation.findFirst({
+          where: { contactId: contact.id, userId: targetUserId },
+          include: CONVERSATION_INCLUDE,
+        })
+      } else if (conversation?.contact) {
+        contact = conversation.contact
+      } else {
+        contact = await prisma.crmContact.findUnique({
+          where: { id: contact.id },
+          include: {
+            tags: { include: { tag: true } },
+            reminders: { where: { status: "pending" }, orderBy: { scheduledAt: "asc" } },
+          },
+        })
+        conversation = await prisma.crmConversation.findFirst({
+          where: { contactId: contact.id, userId: targetUserId },
+          include: CONVERSATION_INCLUDE,
+        })
+      }
+
+      if (conversation) {
+        emitCrmEvent(io, targetUserId, "crm:conversation", {
+          conversation: formatConversationRow(conversation),
+        })
+      }
+
+      return res.status(created ? 201 : 200).json({
+        created,
+        message: created
+          ? "Contato criado. Você já pode enviar mensagem."
+          : "Este contato já existe no CRM.",
+        contact: formatContactRow(contact),
+        conversation: conversation ? formatConversationRow(conversation) : null,
+      })
+    } catch (err) {
+      console.error("[crm] create contact:", err)
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: err?.message || "Falha ao criar contato.",
+      })
+    }
   })
 
   router.patch("/contacts/:id", async (req, res) => {
@@ -1255,6 +1801,10 @@ function createCrmRouter({ io }) {
       q: z.string().max(120).optional().nullable(),
       sellerUserId: z.string().optional().nullable(),
       tagId: z.string().optional().nullable(),
+      customerType: z.preprocess(
+        (value) => (value === "" || value == null ? undefined : value),
+        z.enum(["new", "returning"]).optional(),
+      ),
       page: z.coerce.number().int().min(1).optional().default(1),
       limit: z.coerce.number().int().min(1).max(100).optional().default(50),
     })
@@ -1268,6 +1818,142 @@ function createCrmRouter({ io }) {
     }
     const result = await listCrmSales(prisma, req.dataScope.userIds, parsed.data)
     return res.json(result)
+  })
+
+  /** Registra venda manual: contactId existente ou phone (+ cria contato se preciso). */
+  router.post("/sales", async (req, res) => {
+    const schema = z
+      .object({
+        contactId: z.string().min(1).optional().nullable(),
+        phone: z.string().min(8).max(32).optional().nullable(),
+        name: z.string().max(120).optional().nullable(),
+        amount: z.coerce.number().positive(),
+        ticket: z.string().max(120).optional().nullable(),
+        customerType: z.enum(["new", "returning"]),
+        moveToClosed: z.boolean().optional().default(true),
+        sellerUserId: z.string().min(1).optional().nullable(),
+      })
+      .refine((d) => Boolean(d.contactId) || Boolean(d.phone), {
+        message: "Informe o contato ou o telefone.",
+      })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      const missingType = parsed.error.issues?.some((i) => i.path?.includes("customerType"))
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: missingType
+          ? "Selecione se é Cliente Novo ou Cliente Antigo."
+          : parsed.error.issues?.[0]?.message || "Dados inválidos para registrar a venda.",
+      })
+    }
+
+    let targetUserId = req.user.sub
+    const sellerUserId = parsed.data.sellerUserId ? String(parsed.data.sellerUserId).trim() : ""
+    if (sellerUserId) {
+      if (!req.dataScope?.isOwner) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Apenas o dono da empresa pode atribuir a venda a um vendedor.",
+        })
+      }
+      if (!assertUserInScope(req.dataScope, sellerUserId)) {
+        return res.status(403).json({ error: "FORBIDDEN", message: "Vendedor fora da empresa." })
+      }
+      targetUserId = sellerUserId
+    }
+
+    let contact = null
+    let contactCreated = false
+    let conversation = null
+
+    if (parsed.data.contactId) {
+      contact = await findScopedContact(req, parsed.data.contactId)
+      if (!contact) {
+        return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+      }
+      if (!canMutateAsActor(req, contact.userId)) {
+        return res.status(403).json({
+          error: "FORBIDDEN",
+          message: "Sem permissão para registrar venda neste lead.",
+        })
+      }
+      // Se owner escolheu outro vendedor e o contato não é dele, recusa (evita venda órfã).
+      if (sellerUserId && contact.userId !== targetUserId) {
+        return res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message: "Este contato não pertence ao vendedor selecionado. Use o telefone ou reatribua o lead antes.",
+        })
+      }
+      targetUserId = contact.userId
+    } else {
+      const phone =
+        normalizeManualCrmPhone(parsed.data.phone) || phoneDigitsFromValue(parsed.data.phone)
+      if (!phone) {
+        return res.status(400).json({
+          error: "VALIDATION_ERROR",
+          message: "Telefone inválido. Use DDD + número (ex.: 11987654321).",
+        })
+      }
+      const remoteJid = `${phone}@s.whatsapp.net`
+      const existing = await findContactByPhone(prisma, { userId: targetUserId, phone })
+      contactCreated = !existing
+      const name = parsed.data.name != null ? String(parsed.data.name).trim() || null : null
+      try {
+        const ensured = await ensureContactAndConversation(prisma, targetUserId, remoteJid, {
+          phone,
+          pushName: contactCreated && name ? name : undefined,
+        })
+        contact = ensured.contact
+        conversation = ensured.conversation
+        if (contactCreated && name) {
+          contact = await prisma.crmContact.update({
+            where: { id: contact.id },
+            data: { name },
+          })
+        }
+      } catch (err) {
+        console.error("[crm] create sale contact:", err)
+        return res.status(500).json({
+          error: "INTERNAL_ERROR",
+          message: err?.message || "Falha ao preparar o contato da venda.",
+        })
+      }
+    }
+
+    const actor = await resolveActorProfile(req)
+    const result = await confirmContactPurchase(prisma, io, {
+      userId: targetUserId,
+      contactId: contact.id,
+      amount: parsed.data.amount,
+      ticket: parsed.data.ticket,
+      customerType: parsed.data.customerType,
+      moveToClosed: parsed.data.moveToClosed,
+      actorUserId: actor.actorUserId,
+      actorName: actor.actorName,
+    })
+    if (result.error === "NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Contato não encontrado." })
+    }
+    if (result.error === "INVALID_AMOUNT") {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Valor inválido." })
+    }
+    if (result.error === "INVALID_CUSTOMER_TYPE") {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Selecione se é Cliente Novo ou Cliente Antigo.",
+      })
+    }
+
+    return res.status(201).json({
+      ok: true,
+      contactCreated,
+      contact: result.contact,
+      conversation: result.conversation || (conversation ? formatConversationRow(conversation) : null),
+      tracking: result.tracking || null,
+      message: contactCreated
+        ? "Contato criado e venda registrada."
+        : "Venda registrada.",
+    })
   })
 
   router.delete("/contacts/:id/activity/:activityId", async (req, res) => {
@@ -1754,6 +2440,7 @@ function createCrmRouter({ io }) {
       minutes: z.number().int().min(1).max(43200).optional(),
       delayUnit: z.enum(["hours", "minutes"]).optional(),
       delayValue: z.number().int().min(1).max(43200).optional(),
+      onlyAfterFlowCreated: z.boolean().optional(),
       stageId: z.string().nullable().optional(),
       tagId: z.string().nullable().optional(),
       tagIds: z.array(z.string().min(1)).max(20).optional(),
@@ -1822,7 +2509,13 @@ function createCrmRouter({ io }) {
     }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
-    const flow = await prisma.crmFlow.create({ data: { userId: req.user.sub, ...parsed.data } })
+    const flow = await prisma.crmFlow.create({
+      data: {
+        userId: req.user.sub,
+        ...parsed.data,
+        ...flowEnabledAtData(parsed.data.enabled === true, false),
+      },
+    })
     return res.status(201).json({ flow: formatFlowRow(flow) })
   })
 
@@ -1845,7 +2538,13 @@ function createCrmRouter({ io }) {
     }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
-    const updated = await prisma.crmFlow.update({ where: { id: flow.id }, data: parsed.data })
+    const updated = await prisma.crmFlow.update({
+      where: { id: flow.id },
+      data: {
+        ...parsed.data,
+        ...flowEnabledAtData(parsed.data.enabled === true, flow.enabled),
+      },
+    })
     return res.json({ flow: formatFlowRow(updated) })
   })
 
@@ -1855,7 +2554,13 @@ function createCrmRouter({ io }) {
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados inválidos." })
     const flow = await prisma.crmFlow.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
     if (!flow) return res.status(404).json({ error: "NOT_FOUND", message: "Fluxo não encontrado." })
-    const updated = await prisma.crmFlow.update({ where: { id: flow.id }, data: { enabled: parsed.data.enabled } })
+    const updated = await prisma.crmFlow.update({
+      where: { id: flow.id },
+      data: {
+        enabled: parsed.data.enabled,
+        ...flowEnabledAtData(parsed.data.enabled, flow.enabled),
+      },
+    })
     return res.json({ flow: formatFlowRow(updated) })
   })
 
@@ -1997,6 +2702,17 @@ function createCrmRouter({ io }) {
 
   // ------------------------- Agentes IA -------------------------
 
+  const activationConfigSchema = z
+    .object({
+      keywords: z.array(z.string().max(60)).max(20).optional(),
+      matchMode: z.enum(["contains", "exact"]).optional(),
+      tagIds: z.array(z.string()).max(40).optional(),
+      stageIds: z.array(z.string()).max(40).optional(),
+      autoEnableOnMatch: z.boolean().optional(),
+    })
+    .nullable()
+    .optional()
+
   const agentSchema = z.object({
     name: z.string().min(1).max(80),
     enabled: z.boolean().optional().default(false),
@@ -2009,54 +2725,307 @@ function createCrmRouter({ io }) {
     quietHours: quietHoursSchema,
     replyDelayMinSec: z.number().int().min(1).max(120).optional().default(5),
     replyDelayMaxSec: z.number().int().min(1).max(300).optional().default(20),
+    activationMode: z.enum(["manual", "auto_new", "auto_keyword", "auto_tag", "auto_stage"]).optional().default("manual"),
+    activationConfig: activationConfigSchema,
+    allowedTools: z.array(z.enum(["add_tag", "remove_tag", "move_stage", "handoff"])).max(8).optional().default([]),
+    allowedTagIds: z.array(z.string()).max(40).optional().default([]),
+    knowledgeText: z.string().max(20000).optional().default(""),
+    promptTemplateId: z.string().max(40).optional().nullable(),
+    locale: z.string().max(16).optional().default("pt-BR"),
+    numberScope: z.enum(["all", "member"]).optional().default("all"),
+    numberUserId: z.string().optional().nullable(),
+    boardScope: z.enum(["all", "member"]).optional().default("all"),
+    boardUserId: z.string().optional().nullable(),
+  })
+
+  function agentWriteData(parsed, scope) {
+    const audience = normalizeAudience(parsed)
+    const err = audienceError(audience, scope.userIds || [])
+    if (err) {
+      const e = new Error(err)
+      e.code = "VALIDATION_ERROR"
+      throw e
+    }
+    return {
+      ...parsed,
+      ...audience,
+      knowledgeText: parsed.knowledgeText || null,
+      promptTemplateId: parsed.promptTemplateId || null,
+      organizationId: scope.orgId || null,
+    }
+  }
+
+  function visibleAgents(rows, scope) {
+    return rows.filter((agent) => {
+      if (!agentInOrganization(agent, scope)) return false
+      if (scope.isOwner) return true
+      return agentCoversMember(agent, scope.actorId || scope.userIds?.[0])
+    })
+  }
+
+  async function findOrgAgent(req, id) {
+    const agent = await prisma.crmAiAgent.findFirst({ where: { id } })
+    if (!agent || !agentInOrganization(agent, req.dataScope)) return null
+    if (!req.dataScope.isOwner && !agentCoversMember(agent, req.user.sub)) return null
+    return agent
+  }
+
+  router.get("/ai/settings", async (req, res) => {
+    const row = req.dataScope.orgId
+      ? await prisma.organizationAiConfig.findUnique({ where: { organizationId: req.dataScope.orgId } })
+      : null
+    return res.json(publicAiStatus(row))
+  })
+
+  router.put("/ai/settings", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode conectar a API de IA." })
+    }
+    if (!req.dataScope.orgId) {
+      return res.status(400).json({ error: "NO_ORG", message: "Empresa não encontrada." })
+    }
+    const schema = z.object({
+      apiKey: z.string().min(12).max(300),
+      baseUrl: z.string().url().max(200).optional(),
+    })
+    const parsed = schema.safeParse(req.body || {})
+    if (!parsed.success) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "Informe uma chave de API válida." })
+    }
+    const baseUrl = (parsed.data.baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "")
+    const saved = await prisma.organizationAiConfig.upsert({
+      where: { organizationId: req.dataScope.orgId },
+      create: {
+        organizationId: req.dataScope.orgId,
+        apiKeyEnc: encryptApiKey(parsed.data.apiKey.trim()),
+        apiKeyLast4: last4(parsed.data.apiKey.trim()),
+        baseUrl,
+      },
+      update: {
+        apiKeyEnc: encryptApiKey(parsed.data.apiKey.trim()),
+        apiKeyLast4: last4(parsed.data.apiKey.trim()),
+        baseUrl,
+      },
+    })
+    return res.json(publicAiStatus(saved))
+  })
+
+  router.delete("/ai/settings", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode remover a API de IA." })
+    }
+    if (req.dataScope.orgId) {
+      await prisma.organizationAiConfig.deleteMany({ where: { organizationId: req.dataScope.orgId } })
+    }
+    return res.json({ configured: false, last4: null, baseUrl: "https://api.openai.com/v1" })
+  })
+
+  router.post("/ai/generate-prompt", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode gerar o prompt." })
+    }
+    const brief = String(req.body?.brief || "").trim()
+    if (brief.length < 20) {
+      return res.status(400).json({
+        error: "VALIDATION_ERROR",
+        message: "Explique com um pouco mais de detalhe o que o agente deve fazer.",
+      })
+    }
+    if (brief.length > 4000) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "O texto ficou longo demais. Resuma em até 4000 caracteres." })
+    }
+    const aiClient = await resolveOrgAiClient(prisma, req.dataScope.orgId)
+    if (!aiClient.configured) {
+      return res.status(503).json({
+        error: "AI_NOT_CONFIGURED",
+        message: "Conecte a chave de API da empresa antes de gerar o prompt.",
+      })
+    }
+    try {
+      const systemPrompt = await generateSystemPrompt({
+        apiKey: aiClient.apiKey,
+        baseUrl: aiClient.baseUrl,
+        brief,
+        name: req.body?.name,
+      })
+      if (!systemPrompt || systemPrompt.length < 10) {
+        return res.status(502).json({ error: "AI_ERROR", message: "A IA não devolveu um prompt utilizável." })
+      }
+      return res.json({ systemPrompt })
+    } catch (err) {
+      return res.status(502).json({ error: "AI_ERROR", message: String(err?.message || "Falha ao gerar o prompt.") })
+    }
   })
 
   router.get("/agents", async (req, res) => {
-    const agents = await prisma.crmAiAgent.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "asc" } })
-    return res.json({ agents: agents.map(formatAgentRow), aiConfigured: aiConfigured() })
+    const orgId = req.dataScope.orgId
+    const agents = await prisma.crmAiAgent.findMany({
+      where: orgId
+        ? { OR: [{ organizationId: orgId }, { organizationId: null, userId: { in: req.dataScope.userIds } }] }
+        : { userId: req.user.sub },
+      orderBy: { createdAt: "asc" },
+    })
+    const row = orgId
+      ? await prisma.organizationAiConfig.findUnique({ where: { organizationId: orgId } })
+      : null
+    const status = publicAiStatus(row)
+    return res.json({
+      agents: visibleAgents(agents, { ...req.dataScope, actorId: req.user.sub }).map(formatAgentRow),
+      aiConfigured: Boolean(status.configured),
+      aiKeyLast4: status.last4 || null,
+    })
   })
 
   router.post("/agents", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode criar agentes." })
+    }
     const parsed = agentSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados do agente inválidos." })
-    const agent = await prisma.crmAiAgent.create({ data: { userId: req.user.sub, ...parsed.data } })
+    let data
+    try {
+      data = agentWriteData(parsed.data, req.dataScope)
+    } catch (err) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: err.message })
+    }
+    const agent = await prisma.crmAiAgent.create({ data: { userId: req.user.sub, ...data } })
     return res.status(201).json({ agent: formatAgentRow(agent) })
   })
 
   router.put("/agents/:id", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode editar agentes." })
+    }
     const parsed = agentSchema.safeParse(req.body)
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados do agente inválidos." })
-    const agent = await prisma.crmAiAgent.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+    const agent = await findOrgAgent(req, req.params.id)
     if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
-    const updated = await prisma.crmAiAgent.update({ where: { id: agent.id }, data: parsed.data })
+    let data
+    try {
+      data = agentWriteData(parsed.data, req.dataScope)
+    } catch (err) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: err.message })
+    }
+    const updated = await prisma.crmAiAgent.update({ where: { id: agent.id }, data })
     return res.json({ agent: formatAgentRow(updated) })
   })
 
   router.delete("/agents/:id", async (req, res) => {
-    const agent = await prisma.crmAiAgent.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode remover agentes." })
+    }
+    const agent = await findOrgAgent(req, req.params.id)
     if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
     await prisma.crmConversation.updateMany({
-      where: { userId: req.user.sub, aiAgentId: agent.id },
+      where: { aiAgentId: agent.id },
       data: { aiAgentId: null, aiEnabled: false, assignedTo: "human" },
     })
     await prisma.crmAiAgent.delete({ where: { id: agent.id } })
     return res.json({ ok: true })
   })
 
-  router.post("/agents/:id/test", async (req, res) => {
-    const agent = await prisma.crmAiAgent.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  router.get("/agents/:id/knowledge", async (req, res) => {
+    const agent = await findOrgAgent(req, req.params.id)
     if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
-    if (!aiConfigured()) {
+    const items = await loadKnowledgeChunks(prisma, agent.id)
+    return res.json({
+      items: items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        type: item.type,
+        chars: (item.contentText || "").length,
+        // O editor reabre tag/etapa a partir deste Markdown. O resto da lista fica sem o texto.
+        ...(item.name === "Ferramentas deste agente.md" ? { contentText: item.contentText || "" } : {}),
+      })),
+    })
+  })
+
+  router.post("/agents/:id/knowledge", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode anexar conhecimento." })
+    }
+    const agent = await findOrgAgent(req, req.params.id)
+    if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
+    try {
+      const parsed = await parseKnowledgeUpload(req.body || {})
+      const last = await prisma.crmAiAgentKnowledge.aggregate({
+        where: { agentId: agent.id },
+        _max: { sortOrder: true },
+      })
+      const item = await prisma.crmAiAgentKnowledge.create({
+        data: {
+          userId: req.user.sub,
+          agentId: agent.id,
+          ...parsed,
+          sortOrder: (last._max.sortOrder ?? -1) + 1,
+        },
+      })
+      return res.status(201).json({
+        item: { id: item.id, name: item.name, type: item.type, chars: item.contentText.length },
+      })
+    } catch (err) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: err.message || "Arquivo inválido." })
+    }
+  })
+
+  router.put("/agents/:id/knowledge/order", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode organizar a base." })
+    }
+    const agent = await findOrgAgent(req, req.params.id)
+    if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((id) => String(id)) : []
+    const existing = await prisma.crmAiAgentKnowledge.findMany({
+      where: { agentId: agent.id },
+      select: { id: true },
+    })
+    const known = new Set(existing.map((row) => row.id))
+    if (!ids.length || ids.length !== known.size || ids.some((id) => !known.has(id))) {
+      return res.status(400).json({ error: "VALIDATION_ERROR", message: "A ordem dos documentos não confere." })
+    }
+    await prisma.$transaction(
+      ids.map((id, index) => prisma.crmAiAgentKnowledge.update({ where: { id }, data: { sortOrder: index } })),
+    )
+    return res.json({ ok: true })
+  })
+
+  router.delete("/agents/:id/knowledge/:kid", async (req, res) => {
+    if (!req.dataScope.isOwner) {
+      return res.status(403).json({ error: "FORBIDDEN", message: "Apenas o dono da empresa pode remover conhecimento." })
+    }
+    const agent = await findOrgAgent(req, req.params.id)
+    if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
+    await prisma.crmAiAgentKnowledge.deleteMany({ where: { id: req.params.kid, agentId: agent.id } })
+    return res.json({ ok: true })
+  })
+
+  router.post("/agents/:id/test", async (req, res) => {
+    const agent = await findOrgAgent(req, req.params.id)
+    if (!agent) return res.status(404).json({ error: "NOT_FOUND", message: "Agente não encontrado." })
+    const aiClient = await resolveOrgAiClient(prisma, req.dataScope.orgId)
+    if (!aiClient.configured) {
       return res.status(503).json({
         error: "AI_NOT_CONFIGURED",
-        message: "Chave de IA ainda não configurada no servidor (OPENAI_API_KEY).",
+        message: "Conecte a chave de API da empresa antes de testar o agente.",
       })
     }
     const message = String(req.body?.message || "").trim()
     if (!message) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Escreva uma mensagem de teste." })
     try {
-      const reply = await testAgentReply(agent, message)
-      return res.json({ reply })
+      const chunks = await loadKnowledgeChunks(prisma, agent.id)
+      const scopeUsers = req.dataScope.userIds?.length ? req.dataScope.userIds : [req.user.sub]
+      const tagUsers = agent.numberScope === "member" && agent.numberUserId ? [agent.numberUserId] : scopeUsers
+      const stageUsers = agent.boardScope === "member" && agent.boardUserId ? [agent.boardUserId] : scopeUsers
+      const [tags, stages] = await Promise.all([
+        prisma.crmTag.findMany({ where: { userId: { in: tagUsers } }, select: { id: true, name: true } }),
+        prisma.crmKanbanStage.findMany({
+          where: { userId: { in: stageUsers } },
+          select: { id: true, name: true },
+          orderBy: { sortOrder: "asc" },
+        }),
+      ])
+      const result = await testAgentReply(agent, message, req.body?.history || [], chunks, aiClient, { tags, stages })
+      return res.json(result)
     } catch (err) {
       return res.status(502).json({ error: "AI_ERROR", message: String(err?.message || "Falha ao consultar a IA.") })
     }
@@ -2107,6 +3076,30 @@ function createCrmRouter({ io }) {
   router.get("/sync/status", async (req, res) => {
     const job = await getCrmSyncStatus(prisma, req.user.sub)
     return res.json({ job })
+  })
+
+  router.post("/sync/cancel", async (req, res) => {
+    try {
+      const result = await cancelCrmSync(syncDeps, req.user.sub)
+      if (!result.cancelled) {
+        return res.json({
+          ok: true,
+          cancelled: false,
+          alreadyIdle: true,
+          job: result.job,
+          message: "Nenhuma sincronização em andamento.",
+        })
+      }
+      return res.json({
+        ok: true,
+        cancelled: true,
+        job: result.job,
+        message: "Sincronização cancelada.",
+      })
+    } catch (err) {
+      console.error("[crm] sync cancel:", err?.message || err)
+      return res.status(500).json({ error: "SYNC_CANCEL_FAILED", message: "Falha ao cancelar a sincronização." })
+    }
   })
 
   router.post("/avatars/enqueue", async (req, res) => {
@@ -2177,7 +3170,11 @@ function createCrmRouter({ io }) {
       prisma.crmConversation.count({ where: { ...uf, unreadCount: { gt: 0 } } }),
       prisma.crmContact.count({ where: uf }),
     ])
-    return res.json({ open, pending, resolved, unread, contacts, aiConfigured: aiConfigured() })
+    const aiRow = req.dataScope?.orgId
+      ? await prisma.organizationAiConfig.findUnique({ where: { organizationId: req.dataScope.orgId } })
+      : null
+    const ai = publicAiStatus(aiRow)
+    return res.json({ open, pending, resolved, unread, contacts, aiConfigured: Boolean(ai.configured) })
   })
 
   return router
