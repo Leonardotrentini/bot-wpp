@@ -2282,7 +2282,40 @@ export function Chat() {
                   </button>
                 </div>
               )}
-              <div className="flex min-h-[48px] items-end gap-1.5 sm:gap-2">
+              <div className="flex min-h-[48px] w-full min-w-0 items-end gap-1.5 sm:gap-2">
+                {/* Inputs de arquivo ficam montados mesmo gravando (refs estáveis) */}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleFile(e.target.files?.[0])
+                    e.target.value = ''
+                  }}
+                />
+                <input
+                  ref={galleryRef}
+                  type="file"
+                  accept="image/*,video/mp4,.mp4"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleFile(e.target.files?.[0])
+                    e.target.value = ''
+                  }}
+                />
+                <input
+                  ref={documentRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleFile(e.target.files?.[0])
+                    e.target.value = ''
+                  }}
+                />
+
+                {/* Gravação WA: some zap / + / Mensagem — só a barra de áudio + mic pressionado */}
                 {!isRecording && (
                   <ChatQuickRepliesMenu
                     quickReplies={quickReplies}
@@ -2292,51 +2325,19 @@ export function Chat() {
                   />
                 )}
                 {!isRecording && (
-                  <>
-                    <input
-                      ref={fileRef}
-                      type="file"
-                      accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
-                      className="hidden"
-                      onChange={(e) => {
-                        handleFile(e.target.files?.[0])
-                        e.target.value = ''
-                      }}
-                    />
-                    <input
-                      ref={galleryRef}
-                      type="file"
-                      accept="image/*,video/mp4,.mp4"
-                      className="hidden"
-                      onChange={(e) => {
-                        handleFile(e.target.files?.[0])
-                        e.target.value = ''
-                      }}
-                    />
-                    <input
-                      ref={documentRef}
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      className="hidden"
-                      onChange={(e) => {
-                        handleFile(e.target.files?.[0])
-                        e.target.value = ''
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isMobileLayout) setAttachSheetOpen(true)
-                        else fileRef.current?.click()
-                      }}
-                      disabled={Boolean(attachment)}
-                      className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:h-11 max-lg:w-10 max-lg:text-stone-300"
-                      title={isMobileLayout ? 'Anexar ou câmera' : 'Anexar imagem, vídeo, áudio ou PDF'}
-                      aria-label={isMobileLayout ? 'Anexar ou câmera' : 'Anexar'}
-                    >
-                      {isMobileLayout ? <Plus className="h-6 w-6" /> : <Paperclip className="h-5 w-5" />}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isMobileLayout) setAttachSheetOpen(true)
+                      else fileRef.current?.click()
+                    }}
+                    disabled={Boolean(attachment)}
+                    className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:h-11 max-lg:w-10 max-lg:text-stone-300"
+                    title={isMobileLayout ? 'Anexar ou câmera' : 'Anexar imagem, vídeo, áudio ou PDF'}
+                    aria-label={isMobileLayout ? 'Anexar ou câmera' : 'Anexar'}
+                  >
+                    {isMobileLayout ? <Plus className="h-6 w-6" /> : <Paperclip className="h-5 w-5" />}
+                  </button>
                 )}
                 {!isRecording && (
                   <textarea
@@ -2355,7 +2356,7 @@ export function Chat() {
                     className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-transparent max-lg:bg-[#15241e] max-lg:px-3.5 max-lg:py-2.5 max-lg:text-base max-lg:leading-5 max-lg:focus:border-brand-600/70"
                   />
                 )}
-                {(isMobileLayout ? !draft.trim() && !attachment : true) && (
+                {(isMobileLayout ? isRecording || (!draft.trim() && !attachment) : true) && (
                   <AudioRecorderButton
                     disabled={sending || (!isRecording && Boolean(attachment))}
                     mode={isMobileLayout ? 'hold' : 'click'}
