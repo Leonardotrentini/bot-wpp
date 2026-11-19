@@ -266,10 +266,6 @@ export function Chat() {
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobileLayout = useMobileLayout()
   const chatShellRef = useRef(null)
-  const { keyboardOpen: vvKeyboardOpen } = useVisualViewportHeight(
-    Boolean(isMobileLayout && activeId),
-    chatShellRef,
-  )
   const [selectionMode, setSelectionMode] = useState(false)
   const [listToolsOpen, setListToolsOpen] = useState(false)
 
@@ -320,6 +316,10 @@ export function Chat() {
       return raw
     }
   })
+  const { keyboardOpen: vvKeyboardOpen } = useVisualViewportHeight(
+    Boolean(isMobileLayout && activeId),
+    chatShellRef,
+  )
   /** Evita limpar a thread na 1ª montagem (só ao trocar filtro de membro/tag/estágio). */
   const filtersMountedRef = useRef(false)
   const [messages, setMessages] = useState([])
