@@ -928,7 +928,7 @@ const MOCK_CRM_CONVERSATIONS = [
     remoteJid: '5511999990001@s.whatsapp.net',
     lastMessageAt: new Date(Date.now() - 3600_000).toISOString(),
     lastMessagePreview: 'claro! Segunda cedinho te dou um toque aqui…',
-    lastMessageFromMe: true,
+    lastMessageFromMe: false,
     unreadCount: 2,
     aiEnabled: false,
     contact: {
