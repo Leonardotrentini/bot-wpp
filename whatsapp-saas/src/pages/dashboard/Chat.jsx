@@ -1798,59 +1798,32 @@ export function Chat() {
         </div>
 
         {/* Mobile list toolbar */}
-        {isMobileLayout ? (
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-brand-800/60 px-3 py-2 lg:hidden">
-            <p className="text-sm font-semibold text-stone-100">
-              {selectionMode
-                ? `${selectedContactIds.size} selecionado${selectedContactIds.size === 1 ? '' : 's'}`
-                : 'Conversas'}
-            </p>
-            <div className="flex items-center gap-1">
-              {selectionMode ? (
-                <>
-                  <Button size="sm" variant="ghost" onClick={selectAllVisibleLeads}>
-                    Todos
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    disabled={!selectedContactIds.size || deletingLeads}
-                    onClick={() => setBulkDeleteOpen(true)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setSelectionMode(false)
-                      clearLeadSelection()
-                    }}
-                  >
-                    OK
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="rounded-full p-2.5 text-stone-400 hover:bg-white/5 hover:text-stone-100"
-                    aria-label="Selecionar"
-                    onClick={() => setSelectionMode(true)}
-                  >
-                    <CheckSquare className="h-5 w-5" />
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-full p-2.5 text-stone-400 hover:bg-white/5 hover:text-stone-100"
-                    aria-label="Mais opções"
-                    onClick={() => setListToolsOpen(true)}
-                  >
-                    <MoreVertical className="h-5 w-5" />
-                  </button>
-                </>
-              )}
-            </div>
+        {isMobileLayout && selectionMode ? (
+          <div className="flex shrink-0 items-center gap-1 border-b border-brand-800/40 px-2 py-1.5 lg:hidden">
+            <span className="mr-auto px-2 text-sm text-stone-300">
+              {selectedContactIds.size} selecionado{selectedContactIds.size === 1 ? '' : 's'}
+            </span>
+            <Button size="sm" variant="ghost" onClick={selectAllVisibleLeads}>
+              Todos
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={!selectedContactIds.size || deletingLeads}
+              onClick={() => setBulkDeleteOpen(true)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setSelectionMode(false)
+                clearLeadSelection()
+              }}
+            >
+              OK
+            </Button>
           </div>
         ) : null}
 
@@ -1904,6 +1877,18 @@ export function Chat() {
           unidentifiedCount={unidentifiedCount}
           monitoredGroupCount={monitoredGroupCount}
           compact={isMobileLayout}
+          trailing={
+            isMobileLayout && !selectionMode ? (
+              <button
+                type="button"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-brand-700 bg-brand-900/70 text-stone-400"
+                aria-label="Mais opções"
+                onClick={() => setListToolsOpen(true)}
+              >
+                <MoreVertical className="h-5 w-5" />
+              </button>
+            ) : null
+          }
         />
         {!isMobileLayout && displayedConversations.length > 0 && (
           <p className="shrink-0 px-3 pt-2 text-[10px] font-semibold uppercase tracking-widest text-stone-600">
@@ -2014,6 +1999,17 @@ export function Chat() {
             />
             <div className="absolute inset-x-0 bottom-0 space-y-1 rounded-t-2xl border border-brand-700/80 bg-brand-900 p-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl">
               <p className="px-2 pb-2 text-sm font-semibold text-stone-100">Ferramentas</p>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-stone-200 hover:bg-white/5"
+                onClick={() => {
+                  setListToolsOpen(false)
+                  setSelectionMode(true)
+                }}
+              >
+                <CheckSquare className="h-5 w-5 text-accent-400" />
+                Selecionar conversas
+              </button>
               <button
                 type="button"
                 className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-stone-200 hover:bg-white/5"

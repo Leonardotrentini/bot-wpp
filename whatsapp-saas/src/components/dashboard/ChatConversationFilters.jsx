@@ -112,6 +112,7 @@ function FiltersBody({
 
 /**
  * @param {boolean} [compact] — mobile: só busca + botão Filtros (sheet). Desktop: layout completo.
+ * @param {React.ReactNode} [trailing] — ações extras no mobile (⋯, etc.)
  */
 export function ChatConversationFilters({
   query,
@@ -133,6 +134,7 @@ export function ChatConversationFilters({
   unidentifiedCount,
   monitoredGroupCount,
   compact = false,
+  trailing = null,
 }) {
   const [sheetOpen, setSheetOpen] = useState(false)
   const activeFilterCount = [
@@ -193,6 +195,7 @@ export function ChatConversationFilters({
                 </span>
               ) : null}
             </button>
+            {trailing}
           </div>
         </div>
 
