@@ -2643,16 +2643,16 @@ export function Chat() {
       </div>
 
 
-      {/* Painel do contato — lg+ coluna fixa; abaixo disso drawer sobre o chat */}
+      {/* Painel do contato — lg+ coluna fixa; mobile: acima do chat fixed (z-45) */}
       {active && showPanel && (
         <>
           <button
             type="button"
-            className="fixed inset-0 z-30 bg-black/45 lg:hidden"
+            className="fixed inset-0 z-[50] bg-black/45 lg:hidden"
             onClick={() => setShowPanel(false)}
             aria-label="Fechar painel do contato"
           />
-          <div className="fixed inset-y-0 right-0 z-40 flex w-[min(100vw,20rem)] flex-col overflow-y-auto vg-scrollbar border-l border-brand-800/80 bg-brand-950 shadow-2xl lg:static lg:z-auto lg:w-72 lg:shrink-0 lg:shadow-none lg:bg-brand-950/20">
+          <div className="fixed inset-y-0 right-0 z-[51] flex w-[min(100vw,20rem)] flex-col overflow-y-auto vg-scrollbar border-l border-brand-800/80 bg-brand-950 shadow-2xl lg:static lg:z-auto lg:w-72 lg:shrink-0 lg:shadow-none lg:bg-brand-950/20">
           <div className="flex flex-col items-center gap-2 border-b border-brand-800 px-4 py-5">
             <UserAvatar
               name={contactTitle(active.contact)}

@@ -1,5 +1,6 @@
 import { X } from 'lucide-react'
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from './Button.jsx'
 
 export function Modal({ isOpen, onClose, title, children, footer, size = 'md', dismissible = true }) {
@@ -11,11 +12,13 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md', d
   }, [isOpen, onClose, dismissible])
 
   if (!isOpen) return null
+  if (typeof document === 'undefined') return null
 
   const widths = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' }
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+  // Portal no body: evita ficar atrás do chat fixed (z-45) / drawers
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
       {dismissible ? (
         <button
           type="button"
@@ -46,7 +49,8 @@ export function Modal({ isOpen, onClose, title, children, footer, size = 'md', d
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex justify-end gap-2 border-t border-brand-800 px-5 py-4">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
