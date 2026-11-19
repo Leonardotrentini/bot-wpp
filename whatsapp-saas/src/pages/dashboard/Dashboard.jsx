@@ -15,7 +15,7 @@ function DataBanner({ meta }) {
   if (!meta) return null
   if (!meta.hasActivity) {
     return (
-      <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-sm text-amber-100/90">
+      <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-3 text-sm leading-relaxed text-amber-100/90 break-words">
         Ainda não há mensagens desde que o grupo foi ativado. Novas mensagens entram automaticamente; use{' '}
         <strong>Atualizar</strong> para sincronizar entradas e saídas de membros.
       </div>
@@ -41,6 +41,7 @@ export function Dashboard() {
     addWidget,
     removeWidget,
     moveWidget,
+    placeWidget,
     restoreDefault,
   } = useReportLayout(user?.id)
 
@@ -125,7 +126,7 @@ export function Dashboard() {
 
   if (showInitialSkeleton) {
     return (
-      <div className="space-y-6 max-w-[1400px]">
+      <div className="w-full max-w-[1400px] space-y-6">
         <Skeleton className="h-24 rounded-2xl" />
         <Skeleton className="h-16 rounded-2xl" />
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
@@ -142,7 +143,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="space-y-6 max-w-[1400px]">
+    <div className="w-full max-w-[1400px] space-y-6">
       <ReportToolbar
         filters={layout.filters}
         onFiltersChange={handleFiltersChange}
@@ -162,7 +163,7 @@ export function Dashboard() {
       />
 
       {!hasConnected && (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-4 text-sm text-amber-100/90">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-4 text-sm leading-relaxed text-amber-100/90 break-words">
           Conecte o WhatsApp e ative grupos em{' '}
           <Link to="/dashboard/connect" className="text-accent-400 underline hover:text-accent-300">
             Conectar
@@ -209,13 +210,14 @@ export function Dashboard() {
             onFunnelStepsChange={setFunnelSteps}
             onRemove={removeWidget}
             onMove={moveWidget}
+            onPlace={placeWidget}
           />
         </div>
       )}
 
       {editing && (
         <p className="text-center text-xs text-stone-600 pb-4">
-          Layout salvo neste navegador ·{' '}
+          Arraste os cards para organizar. O layout fica salvo neste navegador ·{' '}
           <Link to="/dashboard/groups" className="text-stone-500 hover:text-accent-400">
             Gerenciar grupos
           </Link>

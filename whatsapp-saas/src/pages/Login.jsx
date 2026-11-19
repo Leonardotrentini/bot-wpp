@@ -84,7 +84,7 @@ export function Login() {
               placeholder="••••••••"
             />
             <div className="flex justify-end">
-              <button type="button" className="text-sm text-accent-400 hover:underline">
+              <button type="button" className="max-w-full truncate text-sm text-accent-400 hover:underline">
                 Esqueci minha senha
               </button>
             </div>

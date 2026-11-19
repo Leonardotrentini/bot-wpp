@@ -79,7 +79,7 @@ export function DashboardLayout() {
           </div>
         )}
         <DashboardHeader title={title} hideOnMobileChatThread={hideHeaderForMobileThread} />
-        <main className={`p-4 lg:p-6 ${isChatRoute ? 'max-lg:p-0' : ''}`}>
+        <main className={`w-full max-w-full p-4 lg:p-6 ${isChatRoute ? 'max-lg:p-0' : ''}`}>
           <Outlet key={user?.id || 'anon'} />
         </main>
         </div>

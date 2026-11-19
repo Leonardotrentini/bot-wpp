@@ -57,13 +57,15 @@ export function ReportToolbar({
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-medium uppercase tracking-widest text-accent-500/80">Relatórios</p>
-          <h2 className="mt-1 text-2xl font-semibold text-stone-50 tracking-tight font-sans">
+          <h2 className="mt-1 text-xl font-semibold tracking-tight text-stone-50 sm:text-2xl font-sans">
             Visão geral · {periodLabel}
           </h2>
-          <p className="mt-1 text-sm text-stone-500">
+          <p className="mt-1 break-words text-sm text-stone-500">
             {updatedLabel ? `Atualizado às ${updatedLabel}` : 'Carregando dados…'}
-            <span className="mx-2 text-stone-700">·</span>
-            CRM histórico completo · {groupsDataNote}
+            <span className="mx-1.5 text-stone-700">·</span>
+            <span className="inline">CRM histórico completo</span>
+            <span className="mx-1.5 text-stone-700">·</span>
+            <span className="inline">{groupsDataNote}</span>
           </p>
         </div>
 
@@ -107,16 +109,16 @@ export function ReportToolbar({
       {/* Filter card */}
       <div className="rounded-2xl border border-brand-800/60 bg-brand-900/30 overflow-hidden">
         <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex flex-wrap gap-1 rounded-xl bg-brand-950/60 p-1 border border-brand-800/50">
+          <div className="flex w-full gap-1 overflow-x-auto rounded-xl border border-brand-800/50 bg-brand-950/60 p-1 vg-scrollbar sm:inline-flex sm:w-auto sm:flex-wrap sm:overflow-visible">
             {PERIOD_OPTIONS.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 onClick={() => onFiltersChange({ period: p.id })}
-                className={`rounded-lg px-3.5 py-2 text-sm font-medium transition-all ${
+                className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-all sm:px-3.5 ${
                   filters.period === p.id
                     ? 'bg-accent-500 text-brand-950 shadow-sm shadow-accent-500/20'
-                    : 'text-stone-400 hover:text-stone-200 hover:bg-white/5'
+                    : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
                 }`}
               >
                 {p.label}

@@ -23,6 +23,8 @@ import {
   Pencil,
   Trash2,
   Plus,
+  MoreVertical,
+  CheckSquare,
 } from 'lucide-react'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
@@ -53,6 +55,7 @@ import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.js
 import { ChatAttachSheet } from '../../components/crm/ChatAttachSheet.jsx'
 import { ChatCameraCapture } from '../../components/crm/ChatCameraCapture.jsx'
 import { useMobileLayout } from '../../hooks/useMediaQuery.js'
+import { useVisualViewportHeight } from '../../hooks/useVisualViewport.js'
 import {
   getCrmConversations,
   getCrmConversation,
@@ -168,14 +171,17 @@ const ConversationListItem = memo(function ConversationListItem({
   selectable,
   selected,
   onToggleSelect,
+  compactMobile = false,
 }) {
   const isGroup = c.kind === 'group'
   const subtitle = isGroup ? null : contactSubtitle(c.contact)
   const unidentified = !isGroup && contactNeedsIdentification(c.contact)
   return (
     <div
-      className={`flex items-stretch gap-1 rounded-xl transition ${
-        c.id === active ? 'bg-accent-500/12 ring-1 ring-inset ring-accent-500/30' : 'hover:bg-white/[0.04]'
+      className={`flex items-stretch gap-1 transition ${
+        compactMobile
+          ? `border-b border-brand-800/40 ${c.id === active ? 'bg-accent-500/10' : 'active:bg-white/[0.04]'}`
+          : `rounded-xl ${c.id === active ? 'bg-accent-500/12 ring-1 ring-inset ring-accent-500/30' : 'hover:bg-white/[0.04]'}`
       }`}
     >
       {selectable ? (
@@ -185,7 +191,7 @@ const ConversationListItem = memo(function ConversationListItem({
             checked={Boolean(selected)}
             onChange={() => onToggleSelect?.(c.contact?.id)}
             onClick={(e) => e.stopPropagation()}
-            className="vg-checkbox"
+            className="vg-checkbox h-5 w-5"
             aria-label={`Selecionar ${contactTitle(c.contact)}`}
           />
         </div>
@@ -195,52 +201,51 @@ const ConversationListItem = memo(function ConversationListItem({
         onClick={() => onOpen(c.id)}
         onMouseEnter={() => onPrefetch(c.id)}
         onFocus={() => onPrefetch(c.id)}
-        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+        className={`flex min-w-0 flex-1 items-center gap-3 text-left ${compactMobile ? 'px-3 py-3' : 'px-3 py-2.5'}`}
       >
-      <UserAvatar
-        name={contactTitle(c.contact)}
-        src={c.contact?.avatarUrl}
-        size="sm"
-        contactId={isGroup ? undefined : c.contact?.id}
-        onRefreshAvatar={isGroup ? undefined : onRefreshAvatar}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <p className="truncate text-sm font-medium text-stone-100">{contactTitle(c.contact)}</p>
-          <span className="shrink-0 text-[10px] text-stone-500">{formatChatTime(c.lastMessageAt)}</span>
-        </div>
-        {subtitle && (
-          <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>{subtitle}</p>
-        )}
-        <div className="mt-0.5 flex items-center gap-1.5">
-          {c.lastMessageFromMe && <MessageDeliveryIcon status="sent" className="shrink-0" />}
-          <p className="truncate text-xs text-stone-400">{c.lastMessagePreview || '—'}</p>
-          {unidentified && (
-            <span className="ml-auto shrink-0 rounded px-1 py-px text-[9px] font-semibold text-amber-200 bg-amber-500/20">
-              ?
+        <UserAvatar
+          name={contactTitle(c.contact)}
+          src={c.contact?.avatarUrl}
+          size="sm"
+          contactId={isGroup ? undefined : c.contact?.id}
+          onRefreshAvatar={isGroup ? undefined : onRefreshAvatar}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate text-[15px] font-medium text-stone-100">{contactTitle(c.contact)}</p>
+            <span
+              className={`shrink-0 text-[11px] ${c.unreadCount > 0 ? 'font-semibold text-accent-400' : 'text-stone-500'}`}
+            >
+              {formatChatTime(c.lastMessageAt)}
             </span>
-          )}
-          {c.unreadCount > 0 && (
-            <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
-              {c.unreadCount}
-            </span>
-          )}
-          {c.aiEnabled && <Bot className="h-3.5 w-3.5 shrink-0 text-sky-400" />}
-        </div>
-        {!isGroup && (c.contact?.tags || []).length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {c.contact.tags.slice(0, 3).map((t) => (
-              <span
-                key={t.id}
-                className="rounded-full px-1.5 py-px text-[9px] font-semibold"
-                style={{ backgroundColor: `${t.color}26`, color: t.color }}
-              >
-                {t.name}
-              </span>
-            ))}
           </div>
-        )}
-      </div>
+          {!compactMobile && subtitle ? (
+            <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>{subtitle}</p>
+          ) : null}
+          <div className="mt-0.5 flex items-center gap-1.5">
+            {c.lastMessageFromMe && <MessageDeliveryIcon status="sent" className="shrink-0" />}
+            <p className="min-w-0 flex-1 truncate text-[13px] text-stone-400">{c.lastMessagePreview || '—'}</p>
+            {c.unreadCount > 0 && (
+              <span className="ml-1 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent-500 px-1.5 text-[11px] font-bold text-brand-950">
+                {c.unreadCount > 99 ? '99+' : c.unreadCount}
+              </span>
+            )}
+            {c.aiEnabled && <Bot className="h-3.5 w-3.5 shrink-0 text-sky-400" />}
+          </div>
+          {!compactMobile && !isGroup && (c.contact?.tags || []).length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {c.contact.tags.slice(0, 3).map((t) => (
+                <span
+                  key={t.id}
+                  className="rounded-full px-1.5 py-px text-[9px] font-semibold"
+                  style={{ backgroundColor: `${t.color}26`, color: t.color }}
+                >
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </button>
     </div>
   )
@@ -255,6 +260,9 @@ export function Chat() {
   const { user, isImpersonating, isOrgOwner } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobileLayout = useMobileLayout()
+  const { height: vvHeight, offsetTop: vvOffsetTop } = useVisualViewportHeight(isMobileLayout)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [listToolsOpen, setListToolsOpen] = useState(false)
 
   const CONV_LIST_INITIAL = 100
   const CONV_LIST_PAGE = 30
@@ -1733,47 +1741,119 @@ export function Chat() {
         }}
       />
       <div
-        className={`flex overflow-hidden border-y border-brand-800/80 bg-brand-900/35 max-lg:border-y-0 lg:mx-0 lg:mb-0 lg:rounded-2xl lg:border ${
-          // Mobile: main já é p-0. Desktop: margem do layout original.
+        className={`flex w-full max-w-full overflow-hidden border-y border-brand-800/80 bg-brand-900/35 max-lg:border-y-0 lg:mx-0 lg:mb-0 lg:rounded-2xl lg:border ${
           isMobileLayout ? '' : '-mx-4 -mb-4'
         } ${
-          isMobileLayout
-            ? activeId
-              ? isImpersonating
-                ? 'h-[calc(100dvh-2.75rem)] min-h-[320px]'
-                : 'h-[100dvh] min-h-[320px]'
-              : isImpersonating
-                ? 'h-[calc(100dvh-6.75rem)] min-h-[320px]'
-                : 'h-[calc(100dvh-4rem)] min-h-[320px]'
-            : isImpersonating
-              ? 'h-[calc(100dvh-9.25rem)] min-h-[420px] lg:h-[calc(100vh-9.75rem)]'
-              : 'h-[calc(100dvh-7.25rem)] min-h-[420px] lg:h-[calc(100vh-7.5rem)]'
+          !isMobileLayout
+            ? isImpersonating
+              ? 'min-h-[420px] lg:h-[calc(100vh-9.75rem)]'
+              : 'min-h-[420px] lg:h-[calc(100vh-7.5rem)]'
+            : ''
         }`}
+        style={
+          isMobileLayout && activeId && vvHeight
+            ? { height: `${vvHeight}px`, maxHeight: `${vvHeight}px`, transform: vvOffsetTop ? `translateY(${vvOffsetTop}px)` : undefined }
+            : isMobileLayout
+              ? {
+                  height: activeId
+                    ? isImpersonating
+                      ? 'calc(100dvh - 2.75rem)'
+                      : '100dvh'
+                    : isImpersonating
+                      ? 'calc(100dvh - 6.75rem)'
+                      : 'calc(100dvh - 4rem)',
+                  minHeight: 320,
+                }
+              : isImpersonating
+                ? { height: 'calc(100dvh - 9.25rem)' }
+                : { height: 'calc(100dvh - 7.25rem)' }
+        }
       >
       {/* Lista de conversas */}
       <div
-        className={`flex w-full flex-col border-r border-brand-800/80 lg:max-w-[min(100%,360px)] lg:shrink-0 ${
+        className={`flex w-full min-h-0 flex-col border-r border-brand-800/80 lg:max-w-[min(100%,360px)] lg:shrink-0 ${
           activeId ? 'hidden lg:flex' : 'flex'
         }`}
       >
-        <ChatSyncBar
-          job={syncJob}
-          onStartSync={handleStartSync}
-          onCancelSync={handleCancelSync}
-          syncStarting={syncStarting}
-          syncCancelling={syncCancelling}
-        />
-        <div className="shrink-0 border-b border-brand-800/80 px-3 py-2">
-          <Button
-            type="button"
-            variant="secondary"
-            className="w-full justify-center gap-1.5 text-xs"
-            onClick={() => setAddContactOpen(true)}
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            Adicionar contato
-          </Button>
+        {/* Desktop: sync + add contact. Mobile: escondidos (menu ⋯). */}
+        <div className="max-lg:hidden">
+          <ChatSyncBar
+            job={syncJob}
+            onStartSync={handleStartSync}
+            onCancelSync={handleCancelSync}
+            syncStarting={syncStarting}
+            syncCancelling={syncCancelling}
+          />
+          <div className="shrink-0 border-b border-brand-800/80 px-3 py-2">
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full justify-center gap-1.5 text-xs"
+              onClick={() => setAddContactOpen(true)}
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Adicionar contato
+            </Button>
+          </div>
         </div>
+
+        {/* Mobile list toolbar */}
+        {isMobileLayout ? (
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-brand-800/60 px-3 py-2 lg:hidden">
+            <p className="text-sm font-semibold text-stone-100">
+              {selectionMode
+                ? `${selectedContactIds.size} selecionado${selectedContactIds.size === 1 ? '' : 's'}`
+                : 'Conversas'}
+            </p>
+            <div className="flex items-center gap-1">
+              {selectionMode ? (
+                <>
+                  <Button size="sm" variant="ghost" onClick={selectAllVisibleLeads}>
+                    Todos
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    disabled={!selectedContactIds.size || deletingLeads}
+                    onClick={() => setBulkDeleteOpen(true)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setSelectionMode(false)
+                      clearLeadSelection()
+                    }}
+                  >
+                    OK
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="rounded-full p-2.5 text-stone-400 hover:bg-white/5 hover:text-stone-100"
+                    aria-label="Selecionar"
+                    onClick={() => setSelectionMode(true)}
+                  >
+                    <CheckSquare className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full p-2.5 text-stone-400 hover:bg-white/5 hover:text-stone-100"
+                    aria-label="Mais opções"
+                    onClick={() => setListToolsOpen(true)}
+                  >
+                    <MoreVertical className="h-5 w-5" />
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+
         {!waConnected && (
           <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-100">
             <Unplug className="h-4 w-4 shrink-0 text-amber-400" />
@@ -1786,11 +1866,9 @@ export function Chat() {
         {waConnected && waSyncStale && (
           <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-amber-100">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
-            <span className="min-w-0 flex-1">
-              WhatsApp sem sincronizar — mensagens novas podem não aparecer. Tentando recuperar automaticamente.
-            </span>
+            <span className="min-w-0 flex-1">WhatsApp sem sincronizar — mensagens novas podem não aparecer.</span>
             <Link to="/dashboard/connect" className="shrink-0 font-medium text-accent-300 underline hover:text-accent-200">
-              Ver conexão
+              Ver
             </Link>
           </div>
         )}
@@ -1825,13 +1903,14 @@ export function Chat() {
           }}
           unidentifiedCount={unidentifiedCount}
           monitoredGroupCount={monitoredGroupCount}
+          compact={isMobileLayout}
         />
-        {displayedConversations.length > 0 && (
+        {!isMobileLayout && displayedConversations.length > 0 && (
           <p className="shrink-0 px-3 pt-2 text-[10px] font-semibold uppercase tracking-widest text-stone-600">
             {displayedConversations.length} conversa{displayedConversations.length !== 1 ? 's' : ''}
           </p>
         )}
-        {!groupsOnly && selectableLeadConversations.length > 0 ? (
+        {!isMobileLayout && !groupsOnly && selectableLeadConversations.length > 0 ? (
           <div className="mx-2 mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-brand-800/80 bg-brand-950/40 px-2.5 py-2">
             {selectedContactIds.size > 0 ? (
               <>
@@ -1857,7 +1936,7 @@ export function Chat() {
             )}
           </div>
         ) : null}
-        <div className="flex-1 overflow-y-auto vg-scrollbar px-1.5 py-1">
+        <div className={`flex-1 overflow-y-auto vg-scrollbar ${isMobileLayout ? 'px-0 py-0' : 'px-1.5 py-1'}`}>
           {refreshingList && !loadingList && (
             <div className="flex justify-center py-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-500" />
@@ -1895,9 +1974,14 @@ export function Chat() {
                   onOpen={openConversation}
                   onPrefetch={prefetchConversation}
                   onRefreshAvatar={refreshAvatar}
-                  selectable={c.kind !== 'group' && Boolean(c.contact?.id)}
+                  selectable={
+                    (isMobileLayout ? selectionMode : true) &&
+                    c.kind !== 'group' &&
+                    Boolean(c.contact?.id)
+                  }
                   selected={c.contact?.id ? selectedContactIds.has(c.contact.id) : false}
                   onToggleSelect={toggleContactSelect}
+                  compactMobile={isMobileLayout}
                 />
               ))}
               {!groupsOnly && hasMoreConversations && (
@@ -1919,10 +2003,47 @@ export function Chat() {
             </>
           )}
         </div>
+
+        {listToolsOpen ? (
+          <div className="fixed inset-0 z-[90] lg:hidden" role="dialog" aria-modal="true">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/55"
+              aria-label="Fechar"
+              onClick={() => setListToolsOpen(false)}
+            />
+            <div className="absolute inset-x-0 bottom-0 space-y-1 rounded-t-2xl border border-brand-700/80 bg-brand-900 p-3 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl">
+              <p className="px-2 pb-2 text-sm font-semibold text-stone-100">Ferramentas</p>
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm text-stone-200 hover:bg-white/5"
+                onClick={() => {
+                  setListToolsOpen(false)
+                  setAddContactOpen(true)
+                }}
+              >
+                <UserPlus className="h-5 w-5 text-accent-400" />
+                Adicionar contato
+              </button>
+              <div className="rounded-xl border border-brand-800/80 bg-brand-950/40 p-2">
+                <ChatSyncBar
+                  job={syncJob}
+                  onStartSync={handleStartSync}
+                  onCancelSync={handleCancelSync}
+                  syncStarting={syncStarting}
+                  syncCancelling={syncCancelling}
+                />
+              </div>
+              <Button type="button" variant="ghost" className="w-full" onClick={() => setListToolsOpen(false)}>
+                Fechar
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Thread */}
-      <div className={`min-w-0 flex-1 flex-col ${activeId ? 'flex' : 'hidden lg:flex'}`}>
+      <div className={`min-h-0 min-w-0 flex-1 flex-col ${activeId ? 'flex' : 'hidden lg:flex'}`}>
         {!active ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-stone-500">
             <div className="rounded-2xl border border-brand-800/50 bg-brand-950/40 p-5">
@@ -2064,9 +2185,15 @@ export function Chat() {
             </div>
 
             {/* Composer */}
-            <div className="relative border-t border-brand-800 bg-brand-950/90 p-3 max-lg:border-brand-800/60 max-lg:bg-brand-900/95 max-lg:pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <div
+              className={`relative shrink-0 border-t border-brand-800 bg-brand-950/90 p-3 max-lg:border-brand-800/50 max-lg:bg-[#0c1814] max-lg:px-2 max-lg:pt-2 ${
+                isMobileLayout && vvHeight
+                  ? 'max-lg:pb-2'
+                  : 'max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))]'
+              }`}
+            >
               {qrOpen && filteredQuickReplies.length > 0 && (
-                <div className="absolute bottom-full left-3 z-20 mb-1 max-h-56 w-80 max-w-[calc(100vw-1.5rem)] overflow-y-auto rounded-xl border border-brand-700 bg-brand-900 shadow-2xl">
+                <div className="absolute bottom-full left-2 z-20 mb-1 max-h-56 w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border border-brand-700 bg-brand-900 shadow-2xl">
                   {filteredQuickReplies.map((qr) => (
                     <button
                       key={qr.id}
@@ -2121,16 +2248,14 @@ export function Chat() {
                   </button>
                 </div>
               )}
-              <div className="flex min-h-[44px] items-end gap-1.5 sm:gap-2">
+              <div className="flex min-h-[48px] items-end gap-1.5 sm:gap-2">
                 {!isRecording && (
-                  <div className="max-lg:hidden">
-                    <ChatQuickRepliesMenu
-                      quickReplies={quickReplies}
-                      onQuickRepliesChange={setQuickReplies}
-                      onApply={applyQuickReply}
-                      draft={draft}
-                    />
-                  </div>
+                  <ChatQuickRepliesMenu
+                    quickReplies={quickReplies}
+                    onQuickRepliesChange={setQuickReplies}
+                    onApply={applyQuickReply}
+                    draft={draft}
+                  />
                 )}
                 {!isRecording && (
                   <>
@@ -2164,7 +2289,6 @@ export function Chat() {
                         e.target.value = ''
                       }}
                     />
-                    {/* Desktop: clip clássico. Mobile: + abre sheet (câmera/galeria/PDF). */}
                     <button
                       type="button"
                       onClick={() => {
@@ -2172,10 +2296,10 @@ export function Chat() {
                         else fileRef.current?.click()
                       }}
                       disabled={Boolean(attachment)}
-                      className="rounded-xl p-2.5 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:text-accent-300"
+                      className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:text-stone-300"
                       title={isMobileLayout ? 'Anexar ou câmera' : 'Anexar imagem, vídeo, áudio ou PDF'}
                     >
-                      {isMobileLayout ? <Plus className="h-6 w-6" /> : <Paperclip className="h-5 w-5" />}
+                      {isMobileLayout ? <Plus className="h-7 w-7" /> : <Paperclip className="h-5 w-5" />}
                     </button>
                   </>
                 )}
@@ -2193,10 +2317,9 @@ export function Chat() {
                     }}
                     rows={1}
                     placeholder={isMobileLayout ? 'Mensagem' : 'Digite uma mensagem… (use / para atalhos)'}
-                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:bg-brand-950/70"
+                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-brand-700/60 max-lg:bg-[#15241e] max-lg:py-3"
                   />
                 )}
-                {/* Mic: desktop = click; mobile = segurar. Some com texto no mobile. */}
                 {(isMobileLayout ? !draft.trim() && !attachment : true) && (
                   <AudioRecorderButton
                     disabled={sending || (!isRecording && Boolean(attachment))}
@@ -2212,13 +2335,12 @@ export function Chat() {
                     onRecordingChange={setIsRecording}
                   />
                 )}
-                {/* Mobile WA: send circular só com texto/anexo. Desktop: Button original. */}
                 {isMobileLayout && !isRecording && (draft.trim() || attachment) ? (
                   <button
                     type="button"
                     onClick={() => void handleSend()}
                     disabled={sending || (!draft.trim() && !attachment)}
-                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-500 text-brand-950 transition hover:bg-accent-400 disabled:opacity-40"
+                    className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-500 text-brand-950 transition hover:bg-accent-400 disabled:opacity-40"
                     aria-label="Enviar"
                   >
                     {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
@@ -2230,16 +2352,6 @@ export function Chat() {
                   </Button>
                 ) : null}
               </div>
-              {isMobileLayout && !isRecording && (
-                <div className="mt-1.5 flex justify-center lg:hidden">
-                  <ChatQuickRepliesMenu
-                    quickReplies={quickReplies}
-                    onQuickRepliesChange={setQuickReplies}
-                    onApply={applyQuickReply}
-                    draft={draft}
-                  />
-                </div>
-              )}
             </div>
             <ChatAttachSheet
               open={attachSheetOpen}

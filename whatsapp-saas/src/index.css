@@ -27,9 +27,18 @@
 @layer base {
   html {
     scroll-behavior: smooth;
+    max-width: 100%;
+    overflow-x: hidden;
   }
   body {
     @apply bg-brand-950 text-stone-200 antialiased font-sans;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  #root {
+    width: 100%;
+    max-width: 100%;
+    min-height: 100%;
   }
   h1,
   h2,

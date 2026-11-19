@@ -51,7 +51,7 @@ export function DashboardHeader({ title, hideOnMobileChatThread = false }) {
             <Menu className="h-5 w-5" />
           </button>
         )}
-        <h1 className="truncate text-lg font-semibold text-stone-100 font-heading">{title || 'Painel'}</h1>
+        <h1 className="truncate text-lg font-semibold text-stone-100 font-sans">{title || 'Painel'}</h1>
       </div>
       <div className="flex items-center gap-2">
         <div className="relative" ref={notifRef}>
