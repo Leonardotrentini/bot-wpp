@@ -199,12 +199,13 @@ export function ChatQuickRepliesMenu({ quickReplies, onQuickRepliesChange, onApp
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`rounded-xl p-2.5 transition hover:bg-white/5 hover:text-stone-100 ${
-          open ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400'
+        className={`mb-0.5 flex h-11 w-10 shrink-0 items-center justify-center rounded-full transition hover:bg-white/5 hover:text-stone-100 max-lg:w-9 ${
+          open ? 'bg-accent-500/15 text-accent-300' : 'text-stone-400 max-lg:text-stone-500'
         }`}
         title="Mensagens rápidas"
+        aria-label="Mensagens rápidas"
       >
-        <Zap className="h-5 w-5" />
+        <Zap className="h-5 w-5 max-lg:h-[18px] max-lg:w-[18px]" />
       </button>
       {menu}
       <QuickReplyFormModal

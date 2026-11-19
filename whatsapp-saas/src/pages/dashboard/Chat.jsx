@@ -2076,14 +2076,16 @@ export function Chat() {
                   onRefreshAvatar={activeIsGroup ? undefined : refreshAvatar}
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-stone-100">{contactTitle(active.contact)}</p>
+                  <p className="truncate text-sm font-semibold text-stone-100 max-lg:text-[15px]">
+                    {contactTitle(active.contact)}
+                  </p>
                   {activeIsGroup ? (
                     <p className="flex items-center gap-1 text-xs text-stone-500">
                       <Users className="h-3 w-3 shrink-0" />
                       {active.contact?.memberCount || 0} membros
                     </p>
                   ) : (
-                    <p className="text-xs text-stone-500">
+                    <p className="truncate text-xs text-stone-500 max-lg:text-[11px] max-lg:text-stone-500/90">
                       {(() => {
                         const phone = resolveContactPhone(active.contact)
                         if (phone) return formatPhoneBr(phone)
@@ -2107,10 +2109,11 @@ export function Chat() {
                   <Bot className="mr-1 h-3 w-3" /> IA ativa
                 </Badge>
               )}
+              {/* Mobile: toque no header já abre o painel — chevron só no desktop */}
               <button
                 type="button"
                 onClick={() => setShowPanel((v) => !v)}
-                className={`rounded-lg p-2.5 transition hover:bg-white/5 ${
+                className={`rounded-lg p-2.5 transition hover:bg-white/5 max-lg:hidden ${
                   showPanel ? 'text-accent-300' : 'text-stone-400 hover:text-stone-100'
                 }`}
                 title={showPanel ? 'Ocultar painel (histórico, orçamento, compra)' : 'Abrir painel do contato'}
@@ -2122,7 +2125,7 @@ export function Chat() {
 
             <div
               ref={threadRef}
-              className={`flex-1 space-y-1 overflow-y-auto vg-scrollbar px-3 py-3 sm:px-4 ${
+              className={`flex-1 space-y-1.5 overflow-y-auto vg-scrollbar px-3 py-3 sm:px-4 max-lg:px-2.5 max-lg:py-2 ${
                 isMobileLayout ? 'vg-chat-wallpaper' : ''
               }`}
             >
@@ -2156,7 +2159,7 @@ export function Chat() {
                   ) : (
                     <div key={item.id} className={`flex ${item.msg.fromMe ? 'justify-end' : 'justify-start'}`}>
                       <div
-                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] ${
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
                           item.msg.fromMe
                             ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
                             : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
@@ -2292,10 +2295,11 @@ export function Chat() {
                         else fileRef.current?.click()
                       }}
                       disabled={Boolean(attachment)}
-                      className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:text-stone-300"
+                      className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white/5 hover:text-stone-100 disabled:opacity-40 max-lg:h-11 max-lg:w-10 max-lg:text-stone-300"
                       title={isMobileLayout ? 'Anexar ou câmera' : 'Anexar imagem, vídeo, áudio ou PDF'}
+                      aria-label={isMobileLayout ? 'Anexar ou câmera' : 'Anexar'}
                     >
-                      {isMobileLayout ? <Plus className="h-7 w-7" /> : <Paperclip className="h-5 w-5" />}
+                      {isMobileLayout ? <Plus className="h-6 w-6" /> : <Paperclip className="h-5 w-5" />}
                     </button>
                   </>
                 )}
@@ -2313,7 +2317,7 @@ export function Chat() {
                     }}
                     rows={1}
                     placeholder={isMobileLayout ? 'Mensagem' : 'Digite uma mensagem… (use / para atalhos)'}
-                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-brand-700/60 max-lg:bg-[#15241e] max-lg:py-3"
+                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-transparent max-lg:bg-[#15241e] max-lg:px-3.5 max-lg:py-2.5 max-lg:leading-5 max-lg:focus:border-brand-600/70"
                   />
                 )}
                 {(isMobileLayout ? !draft.trim() && !attachment : true) && (
@@ -2336,7 +2340,7 @@ export function Chat() {
                     type="button"
                     onClick={() => void handleSend()}
                     disabled={sending || (!draft.trim() && !attachment)}
-                    className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent-500 text-brand-950 transition hover:bg-accent-400 disabled:opacity-40"
+                    className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#25d366] text-white transition hover:bg-[#20bd5a] disabled:opacity-40"
                     aria-label="Enviar"
                   >
                     {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}

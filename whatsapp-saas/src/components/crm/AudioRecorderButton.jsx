@@ -378,7 +378,7 @@ export function AudioRecorderButton({
         onPointerEnter={handleMicPointerEnter}
         onPointerDown={onHoldPointerDown}
         onContextMenu={(e) => e.preventDefault()}
-        className="shrink-0 touch-none select-none rounded-full bg-accent-500/15 p-3 text-accent-300 transition active:bg-accent-500/30 disabled:opacity-40"
+        className="mb-0.5 flex h-11 w-11 shrink-0 touch-none select-none items-center justify-center rounded-full border border-accent-500/35 bg-transparent text-accent-300 transition active:bg-accent-500/20 disabled:opacity-40"
         title="Segure para gravar áudio"
         aria-label="Segure para gravar áudio"
       >

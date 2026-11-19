@@ -53,7 +53,7 @@ export function DashboardLayout() {
       <div className="min-h-screen bg-brand-950">
         <DashboardSidebar />
         <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
-        {demoMode && (
+        {demoMode && !hideHeaderForMobileThread && (
           <div className="sticky top-0 z-40 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
             <p className="text-sm text-amber-100">
               Modo demonstração — dados simulados. Em produção o painel usa a API real automaticamente.
