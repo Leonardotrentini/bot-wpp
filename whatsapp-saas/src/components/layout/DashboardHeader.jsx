@@ -39,21 +39,21 @@ export function DashboardHeader({ title, hideOnMobileChatThread = false }) {
   if (hideOnMobileChatThread) return null
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-brand-800 bg-brand-950/90 px-4 backdrop-blur-md lg:px-6">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-2 border-b border-brand-800 bg-brand-950/90 px-3 backdrop-blur-md max-lg:pt-[env(safe-area-inset-top)] sm:gap-3 lg:h-16 lg:gap-4 lg:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
         {isMobile && (
           <button
             type="button"
             onClick={toggleMobile}
-            className="shrink-0 rounded-xl p-2 text-stone-400 transition hover:bg-white/5 hover:text-stone-100 lg:hidden"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-stone-400 transition hover:bg-white/5 hover:text-stone-100 lg:hidden"
             aria-label="Abrir menu"
           >
             <Menu className="h-5 w-5" />
           </button>
         )}
-        <h1 className="truncate text-lg font-semibold text-stone-100 font-sans">{title || 'Painel'}</h1>
+        <h1 className="min-w-0 truncate font-sans text-base font-semibold text-stone-100 sm:text-lg">{title || 'Painel'}</h1>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         <div className="relative" ref={notifRef}>
           <button
             type="button"
@@ -61,12 +61,12 @@ export function DashboardHeader({ title, hideOnMobileChatThread = false }) {
               setNotifOpen((v) => !v)
               void ensureNotificationPermission()
             }}
-            className="relative rounded-xl p-2 text-stone-400 hover:bg-white/5 hover:text-stone-100 transition"
+            className="relative flex h-11 w-11 items-center justify-center rounded-xl text-stone-400 transition hover:bg-white/5 hover:text-stone-100"
             aria-label="Notificações"
           >
             <Bell className="h-5 w-5" />
             {unreadCount > 0 && (
-              <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
+              <span className="absolute right-1.5 top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-brand-950">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
@@ -117,11 +117,11 @@ export function DashboardHeader({ title, hideOnMobileChatThread = false }) {
           <button
             type="button"
             onClick={() => setOpen(!open)}
-            className="flex items-center gap-2 rounded-xl border border-brand-700 bg-brand-900/60 py-1.5 pl-2 pr-2 text-left hover:border-accent-500/30 transition"
+            className="flex min-h-11 items-center gap-1.5 rounded-xl border border-brand-700 bg-brand-900/60 py-1 pl-1.5 pr-2 text-left transition hover:border-accent-500/30 sm:gap-2 sm:py-1.5 sm:pl-2"
           >
             <UserAvatar name={user?.name} src={user?.avatar} size="sm" className="rounded-lg" />
             <span className="hidden max-w-[120px] truncate text-sm text-stone-100 sm:block">{user?.name}</span>
-            <ChevronDown className={`h-4 w-4 text-stone-400 transition ${open ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`h-4 w-4 shrink-0 text-stone-400 transition ${open ? 'rotate-180' : ''}`} />
           </button>
           {open && (
             <div className="absolute right-0 mt-2 w-52 rounded-xl border border-brand-700 bg-brand-900 py-1 shadow-xl">

@@ -47,39 +47,39 @@ export function Register() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-950 flex">
-      <div className="hidden lg:flex lg:w-1/2 flex-col justify-center border-r border-brand-800 bg-gradient-to-br from-brand-800/90 to-brand-950 p-12 relative overflow-hidden">
+    <div className="flex min-h-dvh min-h-screen bg-brand-950">
+      <div className="relative hidden overflow-hidden border-r border-brand-800 bg-gradient-to-br from-brand-800/90 to-brand-950 p-12 lg:flex lg:w-1/2 lg:flex-col lg:justify-center">
         <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-accent-500/10 blur-3xl" />
         <div className="absolute -bottom-10 -left-10 h-48 w-48 rounded-full bg-brand-500/20 blur-2xl" />
         <div className="relative">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-500/20 text-accent-400 mb-8 border border-accent-500/30">
+          <div className="mb-8 flex h-16 w-16 items-center justify-center rounded-2xl border border-accent-500/30 bg-accent-500/20 text-accent-400">
             <Sparkles className="h-8 w-8" />
           </div>
-          <h2 className="text-3xl font-bold text-stone-50 max-w-md font-heading">Comece a escalar hoje</h2>
-          <p className="mt-4 text-stone-400 max-w-md leading-relaxed">
+          <h2 className="max-w-md font-heading text-3xl font-bold text-stone-50">Comece a escalar hoje</h2>
+          <p className="mt-4 max-w-md leading-relaxed text-stone-400">
             Trial completo para testar automações, analytics e integrações com seus grupos reais.
           </p>
         </div>
       </div>
-      <div className="flex flex-1 flex-col justify-center px-4 py-12 sm:px-8">
-        <div className="mx-auto w-full max-w-md">
-          <Link to="/" className="text-sm text-accent-400 hover:underline mb-8 inline-block">
+      <div className="flex w-full min-w-0 flex-1 flex-col justify-center px-4 pb-[max(2rem,env(safe-area-inset-bottom))] pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-8 sm:py-12 max-lg:justify-start">
+        <div className="mx-auto w-full max-w-md min-w-0">
+          <Link to="/" className="mb-6 inline-flex min-h-11 items-center text-sm text-accent-400 hover:underline max-lg:mb-4">
             ← Voltar ao site
           </Link>
-          <h1 className="text-2xl font-bold text-stone-50 font-heading">Criar conta</h1>
-          <p className="mt-2 text-sm text-stone-400">Leva menos de um minuto.</p>
-          <form onSubmit={onSubmit} className="mt-8 space-y-4">
+          <h1 className="font-heading text-2xl font-bold text-stone-50 max-lg:text-[1.65rem]">Criar conta</h1>
+          <p className="mt-2 text-sm leading-relaxed text-stone-400">Leva menos de um minuto.</p>
+          <form onSubmit={onSubmit} className="mt-7 space-y-4 max-lg:mt-6">
             <Input label="Nome completo" value={name} onChange={(e) => setName(e.target.value)} error={errors.name} placeholder="Maria Santos" />
             <Input label="E-mail" type="email" value={email} onChange={(e) => setEmail(e.target.value)} error={errors.email} placeholder="voce@empresa.com.br" />
             <Input label="Senha" type="password" revealable value={password} onChange={(e) => setPassword(e.target.value)} error={errors.password} placeholder="Mínimo 6 caracteres" />
             <Input label="Confirmar senha" type="password" revealable value={confirm} onChange={(e) => setConfirm(e.target.value)} error={errors.confirm} placeholder="Repita a senha" />
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full max-lg:min-h-12" disabled={loading}>
               {loading ? 'Criando...' : 'Criar conta'}
             </Button>
           </form>
           <p className="mt-8 text-center text-sm text-stone-400">
             Já tem conta?{' '}
-            <Link to="/login" className="text-accent-400 font-medium hover:underline">
+            <Link to="/login" className="font-medium text-accent-400 hover:underline">
               Entrar
             </Link>
           </p>

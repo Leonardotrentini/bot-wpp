@@ -161,11 +161,18 @@ export function DarkDropdown({
                   e.preventDefault()
                   if (!opt.disabled) pick(opt.value)
                 }}
-                className={`w-full px-4 py-2.5 text-left text-sm whitespace-nowrap transition disabled:opacity-40 ${
-                  active ? 'bg-accent-500/15 font-medium text-accent-300' : 'text-white hover:bg-white/10'
+                className={`w-full px-4 py-2.5 text-left text-sm transition disabled:opacity-40 ${
+                  opt.hint ? 'whitespace-normal' : 'whitespace-nowrap'
+                } ${
+                  opt.native
+                    ? 'bg-amber-400/15 font-medium text-amber-100 hover:bg-amber-400/25'
+                    : active
+                      ? 'bg-accent-500/15 font-medium text-accent-300'
+                      : 'text-white hover:bg-white/10'
                 }`}
               >
-                {opt.label}
+                <span className="block">{opt.label}</span>
+                {opt.hint ? <span className="mt-0.5 block text-xs font-normal text-amber-200/80">{opt.hint}</span> : null}
               </button>
             </li>
           )
@@ -184,7 +191,7 @@ export function DarkDropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={toggleOpen}
-        className={`flex w-full items-center gap-2 rounded-xl border border-brand-700 bg-black px-3 py-2.5 text-left text-sm text-white outline-none transition focus:border-accent-500/50 focus:ring-2 focus:ring-accent-500/20 disabled:cursor-not-allowed disabled:opacity-50 ${triggerClassName}`}
+        className={`flex w-full min-h-11 items-center gap-2 rounded-xl border border-brand-700 bg-black px-3 py-2.5 text-left text-sm text-white outline-none transition focus:border-accent-500/50 focus:ring-2 focus:ring-accent-500/20 disabled:cursor-not-allowed disabled:opacity-50 max-lg:text-base ${triggerClassName}`}
       >
         {leadingIcon}
         <span className="min-w-0 flex-1 truncate">{display}</span>

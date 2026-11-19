@@ -237,7 +237,7 @@ export function Groups() {
                 </p>
               )}
             </div>
-            <div className="min-w-40">
+            <div className="w-full min-w-0 sm:min-w-40 sm:w-auto">
               <div className="h-2 overflow-hidden rounded-full bg-brand-800">
                 <div className="h-full rounded-full bg-accent-400 transition-all" style={{ width: `${Math.max(0, Math.min(100, sync.progress || 0))}%` }} />
               </div>
@@ -248,7 +248,7 @@ export function Groups() {
       )}
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {[
             { id: 'ativos', label: `Ativos (${groupCounts.ativos})` },
             { id: 'pendentes', label: `Pendentes (${groupCounts.pendentes})` },
@@ -258,7 +258,7 @@ export function Groups() {
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+              className={`rounded-xl px-4 py-2 text-sm font-medium transition max-lg:min-h-11 ${
                 filter === f.id ? 'bg-accent-500/15 text-accent-400 border border-accent-500/30' : 'text-stone-400 border border-transparent hover:bg-white/5'
               }`}
             >

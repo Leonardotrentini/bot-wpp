@@ -143,7 +143,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="w-full max-w-[1400px] space-y-6">
+    <div className="w-full max-w-[1400px] min-w-0 space-y-5 max-lg:space-y-4">
       <ReportToolbar
         filters={layout.filters}
         onFiltersChange={handleFiltersChange}
@@ -163,7 +163,7 @@ export function Dashboard() {
       />
 
       {!hasConnected && (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-4 text-sm leading-relaxed text-amber-100/90 break-words">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-3.5 py-3.5 text-sm leading-relaxed text-amber-100/90 break-words max-lg:text-[13px] max-lg:leading-relaxed">
           Conecte o WhatsApp e ative grupos em{' '}
           <Link to="/dashboard/connect" className="text-accent-400 underline hover:text-accent-300">
             Conectar

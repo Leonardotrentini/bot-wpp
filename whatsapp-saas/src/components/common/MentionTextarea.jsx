@@ -53,7 +53,7 @@ export function MentionTextarea({
   }, [textareaRef])
 
   const fieldClass =
-    'mention-editor-field w-full resize-y rounded-xl border bg-transparent px-4 py-2.5 outline-none transition focus:ring-2'
+    'mention-editor-field w-full resize-y rounded-xl border bg-transparent px-4 py-2.5 text-sm outline-none transition focus:ring-2 max-lg:min-h-11 max-lg:text-base'
 
   return (
     <label className="block w-full">
@@ -105,7 +105,7 @@ export function MentionTextarea({
         {children}
       </div>
       <p className="mt-1.5 text-[11px] text-stone-500">
-        Digite @ para mencionar · @todos marca o grupo · máx. 2 pessoas (ou filtre só admins)
+        Digite @ para mencionar · máx. 2 pessoas (ou filtre só admins)
       </p>
     </label>
   )

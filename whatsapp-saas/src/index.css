@@ -39,12 +39,31 @@
     width: 100%;
     max-width: 100%;
     min-height: 100%;
+    overflow-x: hidden;
   }
   h1,
   h2,
   h3,
   .font-heading {
     @apply font-serif tracking-tight;
+  }
+
+  /* iOS Safari: inputs < 16px forçam zoom ao focar — trava escala no mobile */
+  @media (max-width: 1023px) {
+    html {
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+      touch-action: manipulation;
+    }
+    body {
+      touch-action: manipulation;
+      overscroll-behavior-x: none;
+    }
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
   }
 }
 

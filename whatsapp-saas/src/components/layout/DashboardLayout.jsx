@@ -50,18 +50,18 @@ export function DashboardLayout() {
     // Remonta lembretes + páginas ao trocar de conta (impersonação) — zero residual.
     <ReminderAlertsProvider key={user?.id || 'anon'}>
       <MetaPixelLoader />
-      <div className="min-h-screen bg-brand-950">
+      <div className="min-h-dvh min-h-screen overflow-x-hidden bg-brand-950">
         <DashboardSidebar />
-        <div className="transition-[margin] duration-300" style={{ marginLeft: width }}>
+        <div className="min-w-0 transition-[margin] duration-300" style={{ marginLeft: width }}>
         {demoMode && !hideHeaderForMobileThread && (
-          <div className="sticky top-0 z-40 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
-            <p className="text-sm text-amber-100">
+          <div className="sticky top-0 z-40 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 backdrop-blur-md lg:px-6 lg:py-2.5">
+            <p className="text-xs leading-snug text-amber-100 sm:text-sm">
               Modo demonstração — dados simulados. Em produção o painel usa a API real automaticamente.
             </p>
           </div>
         )}
         {isImpersonating && (
-          <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-accent-500/30 bg-accent-500/10 px-4 py-2.5 backdrop-blur-md lg:px-6">
+          <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-accent-500/30 bg-accent-500/10 px-3 py-2.5 backdrop-blur-md lg:px-6">
             <p className="inline-flex items-center gap-2 text-sm text-accent-200">
               <Eye className="h-4 w-4 shrink-0" />
               Visualizando conta de <strong className="font-semibold text-accent-100">{impersonation?.name}</strong>
@@ -79,7 +79,11 @@ export function DashboardLayout() {
           </div>
         )}
         <DashboardHeader title={title} hideOnMobileChatThread={hideHeaderForMobileThread} />
-        <main className={`w-full max-w-full p-4 lg:p-6 ${isChatRoute ? 'max-lg:p-0' : ''}`}>
+        <main
+          className={`w-full max-w-full min-w-0 p-3 sm:p-4 lg:p-6 ${
+            isChatRoute ? 'max-lg:p-0' : 'max-lg:pb-[max(1rem,env(safe-area-inset-bottom))]'
+          }`}
+        >
           <Outlet key={user?.id || 'anon'} />
         </main>
         </div>

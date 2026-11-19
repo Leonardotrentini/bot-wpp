@@ -2317,7 +2317,7 @@ export function Chat() {
                     }}
                     rows={1}
                     placeholder={isMobileLayout ? 'Mensagem' : 'Digite uma mensagem… (use / para atalhos)'}
-                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-transparent max-lg:bg-[#15241e] max-lg:px-3.5 max-lg:py-2.5 max-lg:leading-5 max-lg:focus:border-brand-600/70"
+                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-transparent max-lg:bg-[#15241e] max-lg:px-3.5 max-lg:py-2.5 max-lg:text-base max-lg:leading-5 max-lg:focus:border-brand-600/70"
                   />
                 )}
                 {(isMobileLayout ? !draft.trim() && !attachment : true) && (

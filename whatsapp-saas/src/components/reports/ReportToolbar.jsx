@@ -52,31 +52,33 @@ export function ReportToolbar({
   const updatedLabel = formatLastUpdated(lastUpdatedAt)
 
   return (
-    <div className="space-y-4">
+    <div className="w-full min-w-0 space-y-4">
       {/* Header */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-widest text-accent-500/80">Relatórios</p>
-          <h2 className="mt-1 text-xl font-semibold tracking-tight text-stone-50 sm:text-2xl font-sans">
+          <h2 className="mt-1 font-sans text-xl font-semibold tracking-tight text-stone-50 sm:text-2xl">
             Visão geral · {periodLabel}
           </h2>
-          <p className="mt-1 break-words text-sm text-stone-500">
-            {updatedLabel ? `Atualizado às ${updatedLabel}` : 'Carregando dados…'}
-            <span className="mx-1.5 text-stone-700">·</span>
-            <span className="inline">CRM histórico completo</span>
-            <span className="mx-1.5 text-stone-700">·</span>
-            <span className="inline">{groupsDataNote}</span>
-          </p>
+          <div className="mt-1 space-y-0.5 text-sm leading-snug text-stone-500">
+            <p>{updatedLabel ? `Atualizado às ${updatedLabel}` : 'Carregando dados…'}</p>
+            <p className="max-lg:hidden">
+              CRM histórico completo
+              <span className="mx-1.5 text-stone-700">·</span>
+              {groupsDataNote}
+            </p>
+            <p className="lg:hidden text-stone-500/90">{groupsDataNote}</p>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 max-lg:min-h-11 lg:flex lg:w-auto lg:flex-wrap lg:items-center">
           {editing && (
             <>
-              <Button type="button" variant="ghost" size="sm" className="gap-1.5" onClick={onAddWidget}>
+              <Button type="button" variant="ghost" size="sm" className="gap-1.5 max-lg:min-h-11" onClick={onAddWidget}>
                 <Plus className="h-4 w-4" />
                 Adicionar
               </Button>
-              <Button type="button" variant="ghost" size="sm" className="gap-1.5" onClick={onRestoreDefault}>
+              <Button type="button" variant="ghost" size="sm" className="gap-1.5 max-lg:min-h-11" onClick={onRestoreDefault}>
                 <RotateCcw className="h-4 w-4" />
                 Restaurar
               </Button>
@@ -86,7 +88,7 @@ export function ReportToolbar({
             type="button"
             variant={editing ? 'primary' : 'ghost'}
             size="sm"
-            className="gap-1.5"
+            className="gap-1.5 max-lg:min-h-11"
             onClick={onToggleEditing}
           >
             <Settings2 className="h-4 w-4" />
@@ -96,7 +98,7 @@ export function ReportToolbar({
             type="button"
             variant="secondary"
             size="sm"
-            className="gap-2 min-w-[120px]"
+            className="gap-2 max-lg:min-h-11 lg:min-w-[120px]"
             onClick={onRefresh}
             disabled={refreshing || loading}
           >
@@ -107,15 +109,15 @@ export function ReportToolbar({
       </div>
 
       {/* Filter card */}
-      <div className="rounded-2xl border border-brand-800/60 bg-brand-900/30 overflow-hidden">
-        <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex w-full gap-1 overflow-x-auto rounded-xl border border-brand-800/50 bg-brand-950/60 p-1 vg-scrollbar sm:inline-flex sm:w-auto sm:flex-wrap sm:overflow-visible">
+      <div className="overflow-hidden rounded-2xl border border-brand-800/60 bg-brand-900/30">
+        <div className="flex flex-col gap-4 p-3 sm:p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex w-full flex-wrap gap-1 rounded-xl border border-brand-800/50 bg-brand-950/60 p-1 sm:inline-flex sm:w-auto">
             {PERIOD_OPTIONS.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 onClick={() => onFiltersChange({ period: p.id })}
-                className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-all sm:px-3.5 ${
+                className={`rounded-lg px-3 py-2.5 text-sm font-medium transition-all max-lg:min-h-11 sm:px-3.5 sm:py-2 ${
                   filters.period === p.id
                     ? 'bg-accent-500 text-brand-950 shadow-sm shadow-accent-500/20'
                     : 'text-stone-400 hover:bg-white/5 hover:text-stone-200'
@@ -127,7 +129,7 @@ export function ReportToolbar({
           </div>
 
           {sellers.length > 0 && onSellerChange && (
-            <div className="min-w-[180px]">
+            <div className="w-full min-w-0 sm:min-w-[180px] sm:w-auto">
               <Select
                 value={sellerUserId}
                 onChange={(e) => onSellerChange(e.target.value)}

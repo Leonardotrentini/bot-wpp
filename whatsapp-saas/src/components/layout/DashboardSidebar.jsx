@@ -99,7 +99,9 @@ export function DashboardSidebar() {
         />
       ) : null}
       <aside
-        className={`fixed left-0 top-0 z-50 flex h-screen flex-col border-r border-brand-800 bg-brand-900/98 backdrop-blur-md transition-[width,transform] duration-300 ${asideWidthClass} ${asideMobileClass}`}
+        className={`fixed left-0 top-0 z-50 flex h-dvh h-screen flex-col border-r border-brand-800 bg-brand-900/98 backdrop-blur-md transition-[width,transform] duration-300 ${asideWidthClass} ${asideMobileClass}`}
+        aria-hidden={isMobile && !mobileOpen ? true : undefined}
+        {...(isMobile && !mobileOpen ? { inert: true } : {})}
       >
         <div className="flex h-16 items-center justify-between gap-2 border-b border-brand-800 px-2">
           {showLabels && (
@@ -150,7 +152,7 @@ export function DashboardSidebar() {
                     title={item.title || item.label}
                     onClick={closeMobile}
                     className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                      `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition max-lg:min-h-11 ${
                         isActive
                           ? 'bg-accent-500/10 text-accent-400 border border-accent-500/25 shadow-sm shadow-accent-900/20'
                           : 'text-stone-400 hover:bg-white/5 hover:text-stone-100 border border-transparent'

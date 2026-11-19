@@ -16,7 +16,7 @@ export function Input({ label, error, className = '', id, type = 'text', reveala
         <input
           id={inputId}
           type={inputType}
-          className={`w-full rounded-xl border bg-brand-900/50 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/60 focus:ring-2 focus:ring-accent-500/20 ${
+          className={`w-full rounded-xl border bg-brand-900/50 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none transition focus:border-accent-500/60 focus:ring-2 focus:ring-accent-500/20 max-lg:min-h-11 max-lg:text-base ${
             canReveal ? 'pr-11' : ''
           } ${error ? 'border-red-500/60' : 'border-brand-700'} ${className}`}
           {...props}

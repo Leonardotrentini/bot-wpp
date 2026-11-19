@@ -1519,7 +1519,7 @@ export function GroupDetails() {
               {tagCatalog.length === 0 && <span className="text-xs text-stone-500">Nenhuma tag ainda.</span>}
             </div>
             <div className="flex flex-wrap items-end gap-2 pt-1">
-              <div className="min-w-[200px] flex-1 max-w-md">
+              <div className="w-full min-w-0 flex-1 max-w-md">
                 <Input
                   placeholder="Nome da nova tag (ex: lead-quente)"
                   value={newTagName}
@@ -2079,7 +2079,7 @@ export function GroupDetails() {
                   onChange={(v) => setGovernance((prev) => ({ ...prev, postingWindowEnabled: v }))}
                   label="Ativar janela de postagem"
                 />
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Input
                     label="Início"
                     type="time"
@@ -2093,7 +2093,7 @@ export function GroupDetails() {
                     onChange={(e) => setGovernance((prev) => ({ ...prev, postingEnd: e.target.value }))}
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {Object.entries(governance.mediaPolicies).map(([k, v]) => (
                     <Toggle
                       key={k}
