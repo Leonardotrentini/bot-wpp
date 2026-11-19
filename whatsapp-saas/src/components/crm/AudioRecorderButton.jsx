@@ -263,33 +263,91 @@ export function AudioRecorderButton({
 
   useEffect(() => {
     if (!holdMode) return undefined
+    const clearTextSelection = () => {
+      try {
+        window.getSelection()?.removeAllRanges()
+      } catch {
+        /* ignore */
+      }
+    }
     const onMove = (e) => {
       if (!holdActiveRef.current || e.pointerId !== holdPointerIdRef.current) return
+      // Evita seleção de texto / scroll / callout no iOS enquanto desliza pra cancelar
+      if (e.cancelable) e.preventDefault()
+      clearTextSelection()
       const dx = e.clientX - holdStartXRef.current
+      setSlideDx(Math.min(0, dx))
+      setSlideHint(dx < -56)
+    }
+    const onTouchMove = (e) => {
+      if (!holdActiveRef.current) return
+      if (e.cancelable) e.preventDefault()
+      clearTextSelection()
+      const t = e.touches?.[0]
+      if (!t) return
+      const dx = t.clientX - holdStartXRef.current
       setSlideDx(Math.min(0, dx))
       setSlideHint(dx < -56)
     }
     const onUp = (e) => {
       if (!holdActiveRef.current) return
       if (holdPointerIdRef.current != null && e.pointerId !== holdPointerIdRef.current) return
+      clearTextSelection()
       finishHoldGesture(e.clientX)
+    }
+    const onTouchEnd = (e) => {
+      if (!holdActiveRef.current) return
+      clearTextSelection()
+      const t = e.changedTouches?.[0]
+      finishHoldGesture(t?.clientX ?? holdStartXRef.current)
     }
     const onCancel = () => {
       if (!holdActiveRef.current) return
       holdActiveRef.current = false
       holdPointerIdRef.current = null
+      clearTextSelection()
       cancelRecording()
     }
-    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointermove', onMove, { passive: false })
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onCancel)
+    // iOS Safari: seleção de texto vem do touchmove, não só do pointer
+    window.addEventListener('touchmove', onTouchMove, { passive: false })
+    window.addEventListener('touchend', onTouchEnd)
+    window.addEventListener('touchcancel', onCancel)
     return () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
+      window.removeEventListener('touchmove', onTouchMove)
+      window.removeEventListener('touchend', onTouchEnd)
+      window.removeEventListener('touchcancel', onCancel)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- listeners estáveis via refs
   }, [holdMode])
+
+  // Trava user-select no documento enquanto o gesto de hold está ativo
+  useEffect(() => {
+    if (!holdMode) return undefined
+    const active = recording || starting || processing
+    if (!active) return undefined
+    const prevUserSelect = document.body.style.userSelect
+    const prevWebkitUserSelect = document.body.style.webkitUserSelect
+    const prevTouchCallout = document.body.style.webkitTouchCallout
+    document.body.style.userSelect = 'none'
+    document.body.style.webkitUserSelect = 'none'
+    document.body.style.webkitTouchCallout = 'none'
+    try {
+      window.getSelection()?.removeAllRanges()
+    } catch {
+      /* ignore */
+    }
+    return () => {
+      document.body.style.userSelect = prevUserSelect
+      document.body.style.webkitUserSelect = prevWebkitUserSelect
+      document.body.style.webkitTouchCallout = prevTouchCallout
+    }
+  }, [holdMode, recording, starting, processing])
 
   function onHoldPointerDown(e) {
     if (disabled || processing) return
@@ -306,6 +364,11 @@ export function AudioRecorderButton({
     holdStartXRef.current = e.clientX
     setSlideHint(false)
     setSlideDx(0)
+    try {
+      window.getSelection()?.removeAllRanges()
+    } catch {
+      /* ignore */
+    }
     // Esconde textarea/+ IMEDIATAMENTE (antes do getUserMedia)
     setComposerRecording(true)
     void startRecording()
@@ -316,7 +379,17 @@ export function AudioRecorderButton({
   // ——— Hold / WhatsApp: barra full-width no lugar do composer ———
   if (holdMode && (recording || starting || processing)) {
     return (
-      <div className="flex min-h-[48px] w-full min-w-0 flex-1 items-center gap-2">
+      <div
+        className="relative flex min-h-[48px] w-full min-w-0 flex-1 touch-none select-none items-center gap-2"
+        style={{ WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {/* Camada de gesto: evita seleção do texto “cancelar” no iOS */}
+        <div
+          className="absolute inset-0 z-10 touch-none select-none"
+          style={{ WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
+          aria-hidden
+        />
         <div
           className={`flex min-h-[44px] min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-full px-3 transition-colors ${
             slideHint ? 'bg-red-500/20' : 'bg-[#15241e]'
@@ -325,7 +398,7 @@ export function AudioRecorderButton({
           {processing ? (
             <>
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-stone-400" />
-              <span className="text-xs text-stone-400">Enviando áudio…</span>
+              <span className="pointer-events-none text-xs text-stone-400">Enviando áudio…</span>
             </>
           ) : (
             <>
@@ -333,17 +406,18 @@ export function AudioRecorderButton({
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-60" />
                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
               </span>
-              <span className="shrink-0 min-w-[2.75rem] text-sm tabular-nums text-stone-100">
+              <span className="pointer-events-none shrink-0 min-w-[2.75rem] text-sm tabular-nums text-stone-100">
                 {formatRecordSeconds(seconds)}
               </span>
               <div
-                className="flex min-w-0 flex-1 items-center justify-center"
+                className="pointer-events-none flex min-w-0 flex-1 items-center justify-center"
                 style={{ transform: `translateX(${Math.max(slideDx, -80)}px)` }}
               >
                 <span
                   className={`truncate text-xs transition-colors ${
                     slideHint ? 'font-medium text-red-300' : 'text-stone-400'
                   }`}
+                  aria-hidden
                 >
                   {slideHint ? 'Solte para cancelar' : '← Deslize para cancelar'}
                 </span>
@@ -357,7 +431,7 @@ export function AudioRecorderButton({
           }`}
           aria-hidden
         >
-          <Mic className="h-6 w-6" />
+          <Mic className="h-6 w-6 pointer-events-none" />
         </div>
       </div>
     )

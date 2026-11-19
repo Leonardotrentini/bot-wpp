@@ -1793,6 +1793,8 @@ export function Chat() {
                 maxHeight: vvHeight ? `${vvHeight}px` : '100dvh',
                 zIndex: 45,
                 transform: 'none',
+                overscrollBehavior: 'none',
+                WebkitOverflowScrolling: 'touch',
               }
             : isMobileLayout
               ? {
@@ -2160,62 +2162,65 @@ export function Chat() {
 
             <div
               ref={threadRef}
-              className={`flex-1 space-y-1.5 overflow-y-auto vg-scrollbar px-3 py-3 sm:px-4 max-lg:px-2.5 max-lg:py-2 ${
+              className={`flex-1 overflow-y-auto overscroll-contain vg-scrollbar px-3 py-3 sm:px-4 max-lg:px-2.5 max-lg:py-2 max-lg:overscroll-none ${
                 isMobileLayout ? 'vg-chat-wallpaper' : ''
               }`}
             >
-              {refreshingMessages && !loadingMessages && (
-                <div className="flex justify-center pb-1">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-800/80 px-2.5 py-0.5 text-[10px] text-stone-500">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Atualizando…
-                  </span>
-                </div>
-              )}
-              {hasMore && !loadingMessages && (
-                <div className="flex justify-center pb-2">
-                  <Button size="sm" variant="ghost" onClick={loadOlder} disabled={loadingOlder}>
-                    {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Carregar mensagens antigas'}
-                  </Button>
-                </div>
-              )}
-              {loadingMessages && messages.length === 0 ? (
-                <div className="flex justify-center py-10">
-                  <Spinner />
-                </div>
-              ) : (
-                groupedMessages.map((item) =>
-                  item.type === 'day' ? (
-                    <div key={item.id} className="flex justify-center py-2">
-                      <span className="rounded-full bg-brand-800/80 px-3 py-1 text-[10px] font-medium text-stone-400">
-                        {item.label}
-                      </span>
-                    </div>
-                  ) : (
-                    <div key={item.id} className={`flex ${item.msg.fromMe ? 'justify-end' : 'justify-start'}`}>
-                      <div
-                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
-                          item.msg.fromMe
-                            ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
-                            : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
-                        }`}
-                      >
-                        {!item.msg.fromMe && activeIsGroup && item.msg.senderName && (
-                          <p className="mb-0.5 text-[10px] font-semibold text-accent-400/90">{item.msg.senderName}</p>
-                        )}
-                        <ChatMessageContent message={item.msg} />
-                        <div className="mt-1 flex items-center justify-end gap-1">
-                          {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
-                          {item.msg.source === 'flow' && <Zap className="h-3 w-3 text-amber-400" />}
-                          <span className="text-[10px] text-stone-500">{formatMsgTime(item.msg.timestamp)}</span>
-                          {item.msg.fromMe && <MessageDeliveryIcon status={item.msg.status} />}
+              {/* min-h-full + justify-end: mensagens grudam no composer (estilo WA), sem buraco vazio */}
+              <div className="flex min-h-full flex-col justify-end space-y-1.5">
+                {refreshingMessages && !loadingMessages && (
+                  <div className="flex justify-center pb-1">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-800/80 px-2.5 py-0.5 text-[10px] text-stone-500">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Atualizando…
+                    </span>
+                  </div>
+                )}
+                {hasMore && !loadingMessages && (
+                  <div className="flex justify-center pb-2">
+                    <Button size="sm" variant="ghost" onClick={loadOlder} disabled={loadingOlder}>
+                      {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Carregar mensagens antigas'}
+                    </Button>
+                  </div>
+                )}
+                {loadingMessages && messages.length === 0 ? (
+                  <div className="flex justify-center py-10">
+                    <Spinner />
+                  </div>
+                ) : (
+                  groupedMessages.map((item) =>
+                    item.type === 'day' ? (
+                      <div key={item.id} className="flex justify-center py-2">
+                        <span className="rounded-full bg-brand-800/80 px-3 py-1 text-[10px] font-medium text-stone-400">
+                          {item.label}
+                        </span>
+                      </div>
+                    ) : (
+                      <div key={item.id} className={`flex ${item.msg.fromMe ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
+                            item.msg.fromMe
+                              ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
+                              : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
+                          }`}
+                        >
+                          {!item.msg.fromMe && activeIsGroup && item.msg.senderName && (
+                            <p className="mb-0.5 text-[10px] font-semibold text-accent-400/90">{item.msg.senderName}</p>
+                          )}
+                          <ChatMessageContent message={item.msg} />
+                          <div className="mt-1 flex items-center justify-end gap-1">
+                            {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
+                            {item.msg.source === 'flow' && <Zap className="h-3 w-3 text-amber-400" />}
+                            <span className="text-[10px] text-stone-500">{formatMsgTime(item.msg.timestamp)}</span>
+                            {item.msg.fromMe && <MessageDeliveryIcon status={item.msg.status} />}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ),
-                )
-              )}
-              <div ref={listEndRef} />
+                    ),
+                  )
+                )}
+                <div ref={listEndRef} />
+              </div>
             </div>
 
             {/* Composer */}

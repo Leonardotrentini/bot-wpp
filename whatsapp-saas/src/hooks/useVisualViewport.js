@@ -19,8 +19,10 @@ export function useVisualViewportHeight(enabled = true) {
 
     const vv = window.visualViewport
     const sync = () => {
-      const nextHeight = Math.round(vv.height)
-      const nextOffset = Math.round(vv.offsetTop || 0)
+      // iOS: teclado/scroll do visualViewport desloca a página — zera pra não abrir buraco preto
+      if (window.scrollY !== 0) window.scrollTo(0, 0)
+      const nextHeight = Math.max(1, Math.round(vv.height))
+      const nextOffset = Math.max(0, Math.round(vv.offsetTop || 0))
       // Teclado: viewport visual bem menor que a janela (com folga p/ URL bar).
       const open = nextHeight < window.innerHeight * 0.75
       setHeight(nextHeight)
