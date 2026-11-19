@@ -922,19 +922,96 @@ export async function getWhatsAppStatus() {
 
 // ============================= CRM =============================
 
+const MOCK_CRM_CONVERSATIONS = [
+  {
+    id: 'mock-c1',
+    remoteJid: '5511999990001@s.whatsapp.net',
+    lastMessageAt: new Date(Date.now() - 3600_000).toISOString(),
+    lastMessagePreview: 'claro! Segunda cedinho te dou um toque aqui…',
+    lastMessageFromMe: true,
+    unreadCount: 2,
+    aiEnabled: false,
+    contact: {
+      id: 'mock-ct1',
+      name: 'Dalizz jeans',
+      savedName: 'Dalizz jeans',
+      phone: '5511999990001',
+      avatarUrl: null,
+      tags: [{ id: 't1', name: 'QUALIFICADO', color: '#38bdf8' }],
+    },
+  },
+  {
+    id: 'mock-c2',
+    remoteJid: '5511988880002@s.whatsapp.net',
+    lastMessageAt: new Date(Date.now() - 86_400_000).toISOString(),
+    lastMessagePreview: 'Oi, ainda tem interesse?',
+    lastMessageFromMe: false,
+    unreadCount: 0,
+    aiEnabled: false,
+    contact: {
+      id: 'mock-ct2',
+      name: 'Patricia',
+      savedName: 'Patricia',
+      phone: '5511988880002',
+      avatarUrl: null,
+      tags: [],
+    },
+  },
+]
+
+const MOCK_CRM_MESSAGES = {
+  'mock-c1': [
+    {
+      id: 'm1',
+      conversationId: 'mock-c1',
+      fromMe: true,
+      type: 'text',
+      body: 'Oi! Tudo bem? Passando para saber se ainda faz sentido conversarmos.',
+      status: 'read',
+      timestamp: new Date(Date.now() - 7200_000).toISOString(),
+    },
+    {
+      id: 'm2',
+      conversationId: 'mock-c1',
+      fromMe: false,
+      type: 'text',
+      body: 'claro! Segunda cedinho te dou um toque aqui 😊',
+      status: 'delivered',
+      timestamp: new Date(Date.now() - 3600_000).toISOString(),
+    },
+  ],
+  'mock-c2': [
+    {
+      id: 'm3',
+      conversationId: 'mock-c2',
+      fromMe: true,
+      type: 'text',
+      body: 'Oi Patricia! Tudo bem?',
+      status: 'read',
+      timestamp: new Date(Date.now() - 90_000_000).toISOString(),
+    },
+  ],
+}
+
 export async function getCrmConversations(params = {}) {
   if (resolveUseRealApi()) return apiClient.get('/crm/conversations', { params })
-  return mockResponse({ conversations: [], total: 0, limit: 100, offset: 0 })
+  return mockResponse({
+    conversations: MOCK_CRM_CONVERSATIONS,
+    total: MOCK_CRM_CONVERSATIONS.length,
+    limit: 100,
+    offset: 0,
+  })
 }
 
 export async function getCrmConversation(id) {
   if (resolveUseRealApi()) return apiClient.get(`/crm/conversations/${encodeURIComponent(id)}`)
-  return mockResponse({ conversation: null })
+  const conversation = MOCK_CRM_CONVERSATIONS.find((c) => c.id === id) || null
+  return mockResponse({ conversation })
 }
 
 export async function getCrmConversationMessages(id, params = {}) {
   if (resolveUseRealApi()) return apiClient.get(`/crm/conversations/${encodeURIComponent(id)}/messages`, { params })
-  return mockResponse({ messages: [], hasMore: false })
+  return mockResponse({ messages: MOCK_CRM_MESSAGES[id] || [], hasMore: false })
 }
 
 export async function getCrmMessageMedia(messageId) {
@@ -958,7 +1035,25 @@ export async function sendCrmMessage(id, payload) {
       timeout: hasMedia ? 600000 : 120000,
     })
   }
-  return mockResponse({ message: null, conversation: null })
+  const message = {
+    id: `mock-sent-${Date.now()}`,
+    conversationId: id,
+    fromMe: true,
+    type: payload?.mediaType && payload.mediaType !== 'none' ? payload.mediaType : 'text',
+    body: payload?.body || payload?.mediaName || '',
+    mediaMime: payload?.mediaMime || null,
+    status: 'sent',
+    timestamp: new Date().toISOString(),
+  }
+  if (!MOCK_CRM_MESSAGES[id]) MOCK_CRM_MESSAGES[id] = []
+  MOCK_CRM_MESSAGES[id].push(message)
+  const conversation = MOCK_CRM_CONVERSATIONS.find((c) => c.id === id) || null
+  if (conversation) {
+    conversation.lastMessageAt = message.timestamp
+    conversation.lastMessagePreview = message.body
+    conversation.lastMessageFromMe = true
+  }
+  return mockResponse({ message, conversation })
 }
 
 export async function markCrmConversationRead(id) {
