@@ -260,7 +260,8 @@ export function Chat() {
   const { user, isImpersonating, isOrgOwner } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobileLayout = useMobileLayout()
-  const { height: vvHeight, offsetTop: vvOffsetTop } = useVisualViewportHeight(isMobileLayout)
+  const { height: vvHeight, offsetTop: vvOffsetTop, keyboardOpen: vvKeyboardOpen } =
+    useVisualViewportHeight(isMobileLayout)
   const [selectionMode, setSelectionMode] = useState(false)
   const [listToolsOpen, setListToolsOpen] = useState(false)
 
@@ -379,6 +380,36 @@ export function Chat() {
     activeIdRef.current = activeId
     scrollToEndRef.current = true
   }, [activeId])
+
+  // Trava scroll do body no iOS enquanto a thread está full-screen (evita buraco preto / bounce).
+  useEffect(() => {
+    if (!isMobileLayout || !activeId) return undefined
+    const prevOverflow = document.body.style.overflow
+    const prevPos = document.body.style.position
+    const prevTop = document.body.style.top
+    const prevWidth = document.body.style.width
+    const scrollY = window.scrollY || 0
+    document.body.style.overflow = 'hidden'
+    document.body.style.position = 'fixed'
+    document.body.style.top = `-${scrollY}px`
+    document.body.style.width = '100%'
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.body.style.position = prevPos
+      document.body.style.top = prevTop
+      document.body.style.width = prevWidth
+      window.scrollTo(0, scrollY)
+    }
+  }, [isMobileLayout, activeId])
+
+  // Teclado abriu: mantém última mensagem visível acima do composer.
+  useEffect(() => {
+    if (!isMobileLayout || !activeId || !vvKeyboardOpen) return
+    const t = window.setTimeout(() => {
+      listEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    }, 50)
+    return () => window.clearTimeout(t)
+  }, [isMobileLayout, activeId, vvKeyboardOpen, vvHeight])
 
   useEffect(() => {
     conversationsRef.current = conversations
@@ -1751,17 +1782,21 @@ export function Chat() {
             : ''
         }`}
         style={
-          isMobileLayout && activeId && vvHeight
-            ? { height: `${vvHeight}px`, maxHeight: `${vvHeight}px`, transform: vvOffsetTop ? `translateY(${vvOffsetTop}px)` : undefined }
+          isMobileLayout && activeId
+            ? {
+                // iOS Safari: fixa no visualViewport — composer cola no teclado, sem buraco preto
+                position: 'fixed',
+                top: vvOffsetTop || 0,
+                left: 0,
+                right: 0,
+                height: vvHeight ? `${vvHeight}px` : '100dvh',
+                maxHeight: vvHeight ? `${vvHeight}px` : '100dvh',
+                zIndex: 45,
+                transform: 'none',
+              }
             : isMobileLayout
               ? {
-                  height: activeId
-                    ? isImpersonating
-                      ? 'calc(100dvh - 2.75rem)'
-                      : '100dvh'
-                    : isImpersonating
-                      ? 'calc(100dvh - 6.75rem)'
-                      : 'calc(100dvh - 4rem)',
+                  height: isImpersonating ? 'calc(100dvh - 6.75rem)' : 'calc(100dvh - 4rem)',
                   minHeight: 320,
                 }
               : isImpersonating
@@ -2052,11 +2087,11 @@ export function Chat() {
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 border-b border-brand-800/80 bg-brand-950/95 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3 max-lg:bg-brand-900/95 max-lg:pt-[max(0.5rem,env(safe-area-inset-top))]">
+            <div className="flex shrink-0 items-center gap-2 border-b border-brand-800/80 bg-brand-950/95 px-3 py-2.5 sm:gap-3 sm:px-4 sm:py-3 max-lg:bg-brand-900/95 max-lg:pt-[max(0.5rem,env(safe-area-inset-top))]">
               <button
                 type="button"
                 onClick={closeMobileThread}
-                className="lg:hidden shrink-0 rounded-xl p-2.5 text-stone-300 transition hover:bg-white/5 hover:text-stone-100"
+                className="lg:hidden flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-stone-300 transition hover:bg-white/5 hover:text-stone-100"
                 aria-label="Voltar para conversas"
               >
                 <ArrowLeft className="h-5 w-5" />
@@ -2186,7 +2221,7 @@ export function Chat() {
             {/* Composer */}
             <div
               className={`relative shrink-0 border-t border-brand-800 bg-brand-950/90 p-3 max-lg:border-brand-800/50 max-lg:bg-[#0c1814] max-lg:px-2 max-lg:pt-2 ${
-                isMobileLayout && vvHeight
+                isMobileLayout && vvKeyboardOpen
                   ? 'max-lg:pb-2'
                   : 'max-lg:pb-[max(0.5rem,env(safe-area-inset-bottom))]'
               }`}
