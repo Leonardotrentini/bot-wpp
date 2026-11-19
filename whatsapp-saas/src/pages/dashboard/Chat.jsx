@@ -265,7 +265,11 @@ export function Chat() {
   const { user, isImpersonating, isOrgOwner } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobileLayout = useMobileLayout()
-  const { height: vvHeight, keyboardOpen: vvKeyboardOpen } = useVisualViewportHeight(isMobileLayout)
+  const chatShellRef = useRef(null)
+  const { keyboardOpen: vvKeyboardOpen } = useVisualViewportHeight(
+    Boolean(isMobileLayout && activeId),
+    chatShellRef,
+  )
   const [selectionMode, setSelectionMode] = useState(false)
   const [listToolsOpen, setListToolsOpen] = useState(false)
 
@@ -1816,6 +1820,7 @@ export function Chat() {
         }}
       />
       <div
+        ref={chatShellRef}
         className={`flex w-full max-w-full overflow-hidden border-y border-brand-800/80 bg-brand-900/35 max-lg:border-y-0 lg:mx-0 lg:mb-0 lg:rounded-2xl lg:border ${
           isMobileLayout ? '' : '-mx-4 -mb-4'
         } ${
@@ -1828,17 +1833,18 @@ export function Chat() {
         style={
           isMobileLayout && activeId
             ? {
-                // iOS Safari: top fixo 0 + altura do visualViewport (offsetTop treme o teclado)
+                // iOS: top/height sincronizados no DOM pelo useVisualViewportHeight (sem tremor)
                 position: 'fixed',
                 top: 0,
                 left: 0,
                 right: 0,
-                height: vvHeight ? `${vvHeight}px` : '100dvh',
-                maxHeight: vvHeight ? `${vvHeight}px` : '100dvh',
+                height: '100dvh',
+                maxHeight: '100dvh',
                 zIndex: 45,
                 transform: 'none',
                 overscrollBehavior: 'none',
                 WebkitOverflowScrolling: 'touch',
+                backgroundColor: '#0a1612',
               }
             : isMobileLayout
               ? {
