@@ -1,4 +1,4 @@
-/* Vesto PWA — Web Push + open chat on click */
+/* Vesto PWA — Web Push + open chat on click (v2) */
 self.addEventListener('install', (event) => {
   self.skipWaiting()
   event.waitUntil(Promise.resolve())

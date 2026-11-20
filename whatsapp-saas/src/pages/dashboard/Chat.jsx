@@ -55,6 +55,7 @@ import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.js
 import { ChatAttachSheet } from '../../components/crm/ChatAttachSheet.jsx'
 import { ChatCameraCapture } from '../../components/crm/ChatCameraCapture.jsx'
 import { ChatMessageActionSheet } from '../../components/crm/ChatMessageActionSheet.jsx'
+import { ChatMessageDesktopMenu } from '../../components/crm/ChatMessageDesktopMenu.jsx'
 import { ChatForwardModal } from '../../components/crm/ChatForwardModal.jsx'
 import { useMobileLayout } from '../../hooks/useMediaQuery.js'
 import { useVisualViewportHeight } from '../../hooks/useVisualViewport.js'
@@ -2284,27 +2285,30 @@ export function Chat() {
                           role={isMobileLayout ? 'button' : undefined}
                           tabIndex={isMobileLayout ? 0 : undefined}
                           onContextMenu={(e) => {
-                            // Desktop: menu nativo (copiar). Mobile: ações estilo WhatsApp.
+                            // Só no toque/mobile: sheet. No desktop o menu nativo copia o texto selecionado.
                             if (!isMobileLayout || activeIsGroup || item.msg.deleted) return
                             e.preventDefault()
                             setActionMessage(item.msg)
                           }}
                           onPointerDown={(e) => {
-                            if (!isMobileLayout || activeIsGroup || item.msg.deleted || e.button === 2) return
+                            // Desktop/mouse: nunca abre sheet — permite arrastar e selecionar texto.
+                            if (e.pointerType !== 'touch') return
+                            if (activeIsGroup || item.msg.deleted) return
                             if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
                             longPressTimerRef.current = window.setTimeout(() => {
                               longPressTimerRef.current = null
                               setActionMessage(item.msg)
                             }, 480)
                           }}
-                          onPointerMove={() => {
-                            // Arrastar = seleção/scroll: cancela long-press
+                          onPointerMove={(e) => {
+                            if (e.pointerType !== 'touch') return
                             if (longPressTimerRef.current) {
                               clearTimeout(longPressTimerRef.current)
                               longPressTimerRef.current = null
                             }
                           }}
-                          onPointerUp={() => {
+                          onPointerUp={(e) => {
+                            if (e.pointerType !== 'touch') return
                             if (longPressTimerRef.current) {
                               clearTimeout(longPressTimerRef.current)
                               longPressTimerRef.current = null
@@ -2322,12 +2326,36 @@ export function Chat() {
                               longPressTimerRef.current = null
                             }
                           }}
-                          className={`max-w-[85%] max-lg:select-none rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
+                          className={`group/msg relative max-w-[85%] select-text rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug max-lg:touch-manipulation ${
                             item.msg.fromMe
                               ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
                               : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
                           } ${actionMessage?.id === item.msg.id ? 'ring-2 ring-accent-400/50' : ''}`}
                         >
+                          {!isMobileLayout && !activeIsGroup && !item.msg.deleted ? (
+                            <ChatMessageDesktopMenu
+                              message={item.msg}
+                              align={item.msg.fromMe ? 'end' : 'start'}
+                              onReply={(msg) => {
+                                setReplyTo(msg)
+                                inputRef.current?.focus()
+                              }}
+                              onForward={(msg) => setForwardMessage(msg)}
+                              onEdit={(msg) => {
+                                setEditMessage(msg)
+                                setEditDraft(String(msg.body || ''))
+                              }}
+                              onDelete={(msg) => setDeleteConfirmMsg(msg)}
+                              onCopy={async (msg) => {
+                                try {
+                                  await navigator.clipboard.writeText(String(msg.body || ''))
+                                  toastRef.current.success('Texto copiado.')
+                                } catch {
+                                  toastRef.current.error('Não foi possível copiar.')
+                                }
+                              }}
+                            />
+                          ) : null}
                           {!item.msg.fromMe && activeIsGroup && item.msg.senderName && (
                             <p className="mb-0.5 text-[10px] font-semibold text-accent-400/90">{item.msg.senderName}</p>
                           )}
@@ -2566,29 +2594,31 @@ export function Chat() {
               onCapture={(file) => handleFile(file, { autoSend: true })}
               onError={(msg) => toastRef.current.error(msg)}
             />
-            <ChatMessageActionSheet
-              open={Boolean(actionMessage)}
-              message={actionMessage}
-              onClose={() => setActionMessage(null)}
-              onReply={(msg) => {
-                setReplyTo(msg)
-                inputRef.current?.focus()
-              }}
-              onForward={(msg) => setForwardMessage(msg)}
-              onEdit={(msg) => {
-                setEditMessage(msg)
-                setEditDraft(String(msg.body || ''))
-              }}
-              onDelete={(msg) => setDeleteConfirmMsg(msg)}
-              onCopy={async (msg) => {
-                try {
-                  await navigator.clipboard.writeText(String(msg.body || ''))
-                  toastRef.current.success('Texto copiado.')
-                } catch {
-                  toastRef.current.error('Não foi possível copiar.')
-                }
-              }}
-            />
+            {isMobileLayout ? (
+              <ChatMessageActionSheet
+                open={Boolean(actionMessage)}
+                message={actionMessage}
+                onClose={() => setActionMessage(null)}
+                onReply={(msg) => {
+                  setReplyTo(msg)
+                  inputRef.current?.focus()
+                }}
+                onForward={(msg) => setForwardMessage(msg)}
+                onEdit={(msg) => {
+                  setEditMessage(msg)
+                  setEditDraft(String(msg.body || ''))
+                }}
+                onDelete={(msg) => setDeleteConfirmMsg(msg)}
+                onCopy={async (msg) => {
+                  try {
+                    await navigator.clipboard.writeText(String(msg.body || ''))
+                    toastRef.current.success('Texto copiado.')
+                  } catch {
+                    toastRef.current.error('Não foi possível copiar.')
+                  }
+                }}
+              />
+            ) : null}
             <ChatForwardModal
               open={Boolean(forwardMessage)}
               conversations={conversations.filter((c) => c.id !== activeId)}
