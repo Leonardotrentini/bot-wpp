@@ -15,6 +15,7 @@ const {
   phoneDigitsFromJid,
   phoneDigitsFromValue,
   phoneLookupVariants,
+  isLikelyPhoneDigits,
 } = require("./participantIdentity")
 
 const INDIVIDUAL_JID_RE = /@(s\.whatsapp\.net|lid)$/i
@@ -79,11 +80,9 @@ function resolveEvolutionRecipient(conversation) {
 }
 
 function phoneFromJid(jid) {
-  const raw = String(jid || "").split("@")[0]
-  const digits = raw.replace(/\D/g, "")
-  // JIDs @lid não são números de telefone
+  // Alinhado a isLikelyPhoneDigits — NÃO aceitar 8 dígitos (LID truncado virava “telefone”).
   if (isLidJid(jid)) return null
-  return digits.length >= 8 && digits.length <= 15 ? digits : null
+  return phoneDigitsFromJid(jid)
 }
 
 function previewFromBody(body, type) {
@@ -474,7 +473,10 @@ async function promoteLidContactToPhoneJid(prisma, contact, { phoneJid, phone })
 /** Garante contato + conversa para um JID individual (reusa LID↔telefone da mesma inbox). */
 async function ensureContactAndConversation(prisma, userId, remoteJid, { pushName, avatarUrl, phone: phoneHint, lidJid: lidHint } = {}) {
   const jid = String(remoteJid).trim()
-  const phone = phoneHint || phoneFromJid(jid) || phoneDigitsFromJid(jid)
+  const rawPhone = phoneHint || phoneFromJid(jid) || phoneDigitsFromJid(jid)
+  const phoneDigits = String(rawPhone || "").replace(/\D/g, "")
+  // Só promove @lid → telefone com número plausível (evita 10585765@s.whatsapp.net).
+  const phone = isLikelyPhoneDigits(phoneDigits) ? phoneDigits : null
   const incomingIsLid = isLidJid(jid)
   const lidJid = incomingIsLid ? jid : lidHint && isLidJid(lidHint) ? String(lidHint).trim() : null
   const { unifyContactSiblings } = require("./crmContactMerge")
