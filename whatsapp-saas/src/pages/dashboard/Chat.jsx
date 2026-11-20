@@ -96,7 +96,7 @@ import {
 
 import { contactTitle, contactSubtitle, contactNeedsIdentification, resolveContactPhone, formatPhoneBr, isSelfOrGenericPushName, isGenericContactName, mergeIncomingConversation } from '../../lib/contactDisplay.js'
 import { toastMetaTracking } from '../../lib/metaTrackingFeedback.js'
-import { contactHasTag, mergeCrmTagCatalog } from '../../lib/crmTags.js'
+import { contactHasTag, mergeCrmTagCatalog, tagNameKey } from '../../lib/crmTags.js'
 import {
   dedupeGroupsByJid,
   groupChatId,
@@ -341,6 +341,8 @@ export function Chat() {
   const [editSaving, setEditSaving] = useState(false)
   const [deleteConfirmMsg, setDeleteConfirmMsg] = useState(null)
   const longPressTimerRef = useRef(null)
+  const [tagBusyIds, setTagBusyIds] = useState(() => new Set())
+  const [tagsManageOpen, setTagsManageOpen] = useState(false)
 
   const [tags, setTags] = useState([])
   const [stages, setStages] = useState([])
@@ -401,6 +403,8 @@ export function Chat() {
     setForwardMessage(null)
     setEditMessage(null)
     setDeleteConfirmMsg(null)
+    setTagsManageOpen(false)
+    setTagBusyIds(new Set())
   }, [activeId])
 
   // Trava scroll do body no iOS enquanto a thread está full-screen (evita buraco preto / bounce).
@@ -1210,6 +1214,9 @@ export function Chat() {
       toastRef.current.info('Uma conversa foi transferida da IA para atendimento humano.', 'Transferência')
       loadConversationsRef.current()
     })
+    const offTagMeta = onSocketEvent('crm:tag_meta', ({ metaTracking }) => {
+      if (metaTracking) toastMetaTracking(toastRef.current, metaTracking)
+    })
     const offRemoved = onSocketEvent('crm:conversation_removed', ({ conversationId, contactId }) => {
       setConversations((prev) =>
         prev.filter((c) => c.id !== conversationId && c.contact?.id !== contactId),
@@ -1250,6 +1257,7 @@ export function Chat() {
       offConvo()
       offSync()
       offHandoff()
+      offTagMeta()
       offRemoved()
       offReconnect()
     }
@@ -1583,11 +1591,24 @@ export function Chat() {
   const toggleContactTag = useCallback(
     async (tag) => {
       if (!active?.contact) return
+      if (tagBusyIds.has(tag.id)) return
+      const contactId = active.contact.id
       const has = contactHasTag(active.contact.tags, tag)
+      const prevTags = active.contact.tags || []
+
+      // UI otimista: chip responde no toque (Qualificado não espera Meta)
+      const optimisticTags = has
+        ? prevTags.filter((t) => t.id !== tag.id && tagNameKey(t.name) !== tagNameKey(tag.name))
+        : [...prevTags.filter((t) => tagNameKey(t.name) !== tagNameKey(tag.name)), { id: tag.id, name: tag.name, color: tag.color }]
+      setConversations((prev) =>
+        prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, tags: optimisticTags } } : c)),
+      )
+      setTagBusyIds((prev) => new Set(prev).add(tag.id))
+
       try {
         const { data } = has
-          ? await removeCrmContactTag(active.contact.id, tag.id)
-          : await addCrmContactTag(active.contact.id, tag.id)
+          ? await removeCrmContactTag(contactId, tag.id)
+          : await addCrmContactTag(contactId, tag.id)
         if (data.contact) {
           setConversations((prev) => prev.map((c) => (c.id === activeId ? { ...c, contact: data.contact } : c)))
         }
@@ -1595,10 +1616,19 @@ export function Chat() {
           toastMetaTracking(toastRef.current, data.metaTracking)
         }
       } catch (err) {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === activeId ? { ...c, contact: { ...c.contact, tags: prevTags } } : c)),
+        )
         toastRef.current.error(err?.response?.data?.message || 'Falha ao atualizar tags.')
+      } finally {
+        setTagBusyIds((prev) => {
+          const next = new Set(prev)
+          next.delete(tag.id)
+          return next
+        })
       }
     },
-    [active, activeId],
+    [active, activeId, tagBusyIds],
   )
 
   const handleCreateTag = useCallback(async () => {
@@ -2792,65 +2822,87 @@ export function Chat() {
             ) : null}
 
             <div>
-              <div className="mb-1.5 flex items-center justify-between">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
                   <TagIcon className="mr-1 inline h-3 w-3" />
                   Tags
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setNewTagModal(true)}
-                  className="text-xs text-accent-400 hover:text-accent-300"
-                >
-                  + Nova
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTagsManageOpen((v) => !v)}
+                    className={`text-xs transition ${
+                      tagsManageOpen ? 'text-accent-300' : 'text-stone-500 hover:text-stone-300'
+                    }`}
+                  >
+                    {tagsManageOpen ? 'Pronto' : 'Editar'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewTagModal(true)}
+                    className="text-xs text-accent-400 hover:text-accent-300"
+                  >
+                    + Nova
+                  </button>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-2">
                 {tags.length === 0 && <p className="text-xs text-stone-500">Nenhuma tag criada.</p>}
                 {tags.map((t) => {
                   const selected = contactHasTag(active.contact?.tags, t)
+                  const busy = tagBusyIds.has(t.id)
                   return (
-                    <span
+                    <div
                       key={t.id}
-                      className={`group inline-flex max-w-full items-center gap-0.5 rounded-full border text-[11px] font-medium transition ${
-                        selected ? '' : 'opacity-45'
-                      }`}
+                      className={`inline-flex max-w-full items-stretch overflow-hidden rounded-full border transition ${
+                        selected ? 'shadow-sm' : 'opacity-55'
+                      } ${busy ? 'pointer-events-none opacity-70' : ''}`}
                       style={{
-                        borderColor: `${t.color}66`,
-                        backgroundColor: selected ? `${t.color}26` : 'transparent',
+                        borderColor: selected ? `${t.color}99` : `${t.color}55`,
+                        backgroundColor: selected ? `${t.color}30` : `${t.color}10`,
                         color: t.color,
                       }}
                     >
                       <button
                         type="button"
                         onClick={() => toggleContactTag(t)}
-                        className="truncate px-2 py-1 pl-2.5 hover:opacity-90"
+                        disabled={busy}
+                        className="min-h-10 min-w-0 flex-1 truncate px-3.5 py-2 text-left text-sm font-semibold tracking-tight transition active:scale-[0.97] disabled:opacity-60 max-lg:min-h-11"
                         title={selected ? 'Remover do lead' : 'Aplicar ao lead'}
+                        aria-pressed={selected}
                       >
-                        {t.name}
+                        {busy ? '…' : t.name}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => openEditTag(t)}
-                        className="rounded-full p-1 opacity-50 transition hover:bg-white/10 hover:opacity-100"
-                        title="Editar tag"
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setTagToDelete(t)}
-                        className="rounded-full p-1 pr-1.5 opacity-50 transition hover:bg-white/10 hover:text-red-300 hover:opacity-100"
-                        title="Excluir tag"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </span>
+                      {tagsManageOpen ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openEditTag(t)}
+                            className="flex min-h-10 items-center border-l px-2.5 opacity-80 transition hover:bg-white/10 max-lg:min-h-11"
+                            style={{ borderColor: `${t.color}44` }}
+                            title="Editar tag"
+                            aria-label={`Editar ${t.name}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setTagToDelete(t)}
+                            className="flex min-h-10 items-center border-l px-2.5 pr-3 opacity-80 transition hover:bg-white/10 hover:text-red-300 max-lg:min-h-11"
+                            style={{ borderColor: `${t.color}44` }}
+                            title="Excluir tag"
+                            aria-label={`Excluir ${t.name}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
                   )
                 })}
               </div>
-              <p className="mt-1.5 text-[10px] text-stone-600">
-                Clique no nome para aplicar ou remover do lead. Editar ou excluir altera a tag em todo o CRM.
+              <p className="mt-2 text-[11px] text-stone-500">
+                Toque na tag para aplicar ou remover. Use Editar para alterar o catálogo.
               </p>
             </div>
 

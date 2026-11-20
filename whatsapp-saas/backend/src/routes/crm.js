@@ -1708,21 +1708,30 @@ function createCrmRouter({ io }) {
       include: { tags: { include: { tag: true } } },
     })
 
-    let metaTracking = null
-    if (tagWasCreated && (isQualifiedTagName(tag.name) || isQuoteTagName(tag.name) || tag.name === "Comprou")) {
-      try {
-        metaTracking = await trackMetaForContactTag(prisma, { userId, contact: updated, tagName: tag.name })
-      } catch (err) {
-        console.error("[crm-tag] meta:", err?.message || err)
-        metaTracking = {
-          sent: false,
-          error: err?.message || "Falha ao enviar evento à Meta.",
-          eventName: isQualifiedTagName(tag.name) ? "LeadQualified" : tag.name,
-        }
-      }
-    }
-
+    // Meta / fluxos / WA labels em background — resposta imediata pro toque da tag no mobile
     if (tagWasCreated) {
+      if (isQualifiedTagName(tag.name) || isQuoteTagName(tag.name) || tag.name === "Comprou") {
+        trackMetaForContactTag(prisma, { userId, contact: updated, tagName: tag.name })
+          .then((metaTracking) => {
+            if (metaTracking) {
+              emitCrmEvent(io, userId, "crm:tag_meta", {
+                contactId: contact.id,
+                metaTracking,
+              })
+            }
+          })
+          .catch((err) => {
+            console.error("[crm-tag] meta:", err?.message || err)
+            emitCrmEvent(io, userId, "crm:tag_meta", {
+              contactId: contact.id,
+              metaTracking: {
+                sent: false,
+                error: err?.message || "Falha ao enviar evento à Meta.",
+                eventName: isQualifiedTagName(tag.name) ? "LeadQualified" : tag.name,
+              },
+            })
+          })
+      }
       notifyTagAddedForContact({ prisma, io, sendText }, { userId, contactId: contact.id, tagId: tag.id }).catch(
         (err) => console.error("[crm-flow] tag_added:", err?.message || err),
       )
@@ -1733,14 +1742,9 @@ function createCrmRouter({ io }) {
       }
     }
 
-    const refreshed = await prisma.crmContact.findUnique({
-      where: { id: contact.id },
-      include: { tags: { include: { tag: true } } },
-    })
-
     return res.json({
-      contact: formatContactRow(refreshed),
-      metaTracking,
+      contact: formatContactRow(updated),
+      metaTracking: null,
     })
   })
 
