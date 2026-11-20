@@ -2281,20 +2281,28 @@ export function Chat() {
                     ) : (
                       <div key={item.id} className={`flex ${item.msg.fromMe ? 'justify-end' : 'justify-start'}`}>
                         <div
-                          role="button"
-                          tabIndex={0}
+                          role={isMobileLayout ? 'button' : undefined}
+                          tabIndex={isMobileLayout ? 0 : undefined}
                           onContextMenu={(e) => {
-                            if (activeIsGroup || item.msg.deleted) return
+                            // Desktop: menu nativo (copiar). Mobile: ações estilo WhatsApp.
+                            if (!isMobileLayout || activeIsGroup || item.msg.deleted) return
                             e.preventDefault()
                             setActionMessage(item.msg)
                           }}
                           onPointerDown={(e) => {
-                            if (activeIsGroup || item.msg.deleted || e.button === 2) return
+                            if (!isMobileLayout || activeIsGroup || item.msg.deleted || e.button === 2) return
                             if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
                             longPressTimerRef.current = window.setTimeout(() => {
                               longPressTimerRef.current = null
                               setActionMessage(item.msg)
                             }, 480)
+                          }}
+                          onPointerMove={() => {
+                            // Arrastar = seleção/scroll: cancela long-press
+                            if (longPressTimerRef.current) {
+                              clearTimeout(longPressTimerRef.current)
+                              longPressTimerRef.current = null
+                            }
                           }}
                           onPointerUp={() => {
                             if (longPressTimerRef.current) {
@@ -2314,7 +2322,7 @@ export function Chat() {
                               longPressTimerRef.current = null
                             }
                           }}
-                          className={`max-w-[85%] select-none rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
+                          className={`max-w-[85%] max-lg:select-none rounded-2xl px-3.5 py-2 text-sm shadow sm:max-w-[75%] max-lg:max-w-[82%] max-lg:px-3 max-lg:py-1.5 max-lg:leading-snug ${
                             item.msg.fromMe
                               ? 'rounded-br-md bg-accent-500/25 text-stone-100 max-lg:bg-[#1a3d2e] max-lg:shadow-md'
                               : 'rounded-bl-md bg-brand-800 text-stone-200 max-lg:bg-[#152820] max-lg:shadow-md'
