@@ -889,6 +889,7 @@ async function ingestCrmMessage(deps, { userId, record, source = "webhook", upda
 /**
  * Emite eventos CRM para o dono da inbox (`user:`) e, se houver org,
  * para a sala `org:` (somente OWNER entra nela — vendedores não recebem inbox alheia).
+ * Mensagens inbound (webhook) também disparam Web Push (PWA / app fechado).
  */
 function emitCrmEvent(io, userId, event, payload) {
   if (!io) return
@@ -901,6 +902,18 @@ function emitCrmEvent(io, userId, event, payload) {
       }
     })
     .catch(() => {})
+
+  if (event === "crm:message" && payload?.message && !payload.message.fromMe) {
+    try {
+      const { notifyCrmInboundPush } = require("./webPush")
+      void notifyCrmInboundPush(userId, {
+        conversation: payload.conversation,
+        message: payload.message,
+      }).catch((err) => console.warn("[web-push] crm inbound:", err?.message || err))
+    } catch (err) {
+      console.warn("[web-push] load:", err?.message || err)
+    }
+  }
 }
 
 const CRM_MSG_STATUS_RANK = { failed: 0, sent: 1, delivered: 2, read: 3 }

@@ -1,5 +1,9 @@
 require("dotenv").config()
 
+process.on("unhandledRejection", (err) => {
+  console.error("[process] promessa sem tratamento:", err?.stack || err?.message || err)
+})
+
 const jwtSecret = process.env.JWT_SECRET
 if (!jwtSecret || typeof jwtSecret !== "string" || jwtSecret.trim().length < 8) {
   console.error(
@@ -25,13 +29,27 @@ const { enqueueUserSend } = require("./lib/sendQueue")
 const { scheduleParticipantSync } = require("./lib/participantSyncQueue")
 const { ensureDefaultPlans } = require("./lib/ensureBillingDefaults")
 const { signToken, authMiddleware } = require("./lib/auth")
-const { ensureUserOrganization, readUserFilter, backfillAllUserOrganizations } = require("./lib/orgScope")
+const {
+  ensureUserOrganization,
+  readUserFilter,
+  backfillAllUserOrganizations,
+  resolveDataScope,
+} = require("./lib/orgScope")
+const {
+  connectionPhoneData,
+  clearConnectionPhoneData,
+  backfillWhatsAppPhoneDigits,
+} = require("./lib/whatsappPhoneClaim")
 const { createOrgRouter, handleAcceptInvite } = require("./routes/org")
 const {
   createInstance,
   setInstanceWebhook,
-  connectInstance,
   getConnectionState,
+  getConnectionStateForProbe,
+  isEvolutionUnreachableError,
+  recoverQrIfStuck,
+  recoverPairingCode,
+  normalizeWhatsappNumber,
   fetchAllGroups,
   fetchGroupParticipants,
   findContacts,
@@ -39,6 +57,7 @@ const {
   fetchProfilePictureUrl,
   fetchGroupMessages,
   findChats,
+  findChatsPaginated,
   fetchChatMessages,
   findMessageById,
   sendText,
@@ -48,6 +67,8 @@ const {
   getBase64FromMediaMessage,
   extractMediaBase64Payload,
   logoutInstance,
+  restartInstance,
+  reassertInstanceWebhook,
   resolveQrForStorage,
   pickConnected,
   pickStatus,
@@ -58,6 +79,15 @@ const {
   getDefaultHostForNewConnections,
   normalizeHostId,
 } = require("./lib/evolution")
+const {
+  touchLastWebhookAt,
+  markSyncHealthy,
+  appendSyncHealthPayload,
+  runWhatsappSyncHealthWatchdog,
+  backfillRecentCrmAfterRecovery,
+  tryKeepAliveAfterClose,
+  SYNC_HEALTH,
+} = require("./lib/whatsappSyncHealth")
 const { warmInstanceHostCache, isSecondaryConfigured } = require("./lib/evolutionHosts")
 const { buildAnalytics, buildDashboard, buildOverview } = require("./lib/analytics.js")
 const {
@@ -116,6 +146,7 @@ const { createCrmRouter } = require("./routes/crm")
 const { createReportsRouter } = require("./routes/reports")
 const { createIntegrationsRouter } = require("./routes/integrations")
 const { createPublicMetaRouter } = require("./routes/publicMeta")
+const { createPushRouter } = require("./routes/push")
 const path = require("path")
 const {
   isIndividualJid,
@@ -131,7 +162,12 @@ const {
   ensureGroupMessageRaw,
   buildOutboundMessageRaw,
 } = require("./lib/crmMedia")
-const { ensureWhatsAppConnected } = require("./lib/whatsappConnection")
+const {
+  ensureWhatsAppConnected,
+  clearProbeFailStreak,
+  bumpProbeFailStreak,
+  PROBE_FAIL_STREAK,
+} = require("./lib/whatsappConnection")
 const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } = require("./lib/crmProfile")
 const { onCrmMessage, processNoReplyFlows, dispatchCrmMessageFlows } = require("./lib/crmFlows")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
@@ -164,6 +200,12 @@ const MESSAGE_SYNC_PAGE_DELAY_MS = Number(process.env.MESSAGE_SYNC_PAGE_DELAY_MS
 const MESSAGE_SYNC_GROUP_DELAY_MS = Number(process.env.MESSAGE_SYNC_GROUP_DELAY_MS || 4000)
 const MESSAGE_SYNC_TICK_MS = Number(process.env.MESSAGE_SYNC_TICK_MS || 60000)
 const STATUS_REFRESH_MIN_INTERVAL_MS = Number(process.env.STATUS_REFRESH_MIN_INTERVAL_MS || 15000)
+/** Força probe mesmo com cache se lastSync está velho (Evo morta sem webhook). */
+const STATUS_STALE_FORCE_PROBE_MS = Number(process.env.STATUS_STALE_FORCE_PROBE_MS || 60000)
+const WHATSAPP_RECONCILE_INTERVAL_MS = Number(process.env.WHATSAPP_RECONCILE_INTERVAL_MS || 5 * 60 * 1000)
+const WHATSAPP_SYNC_HEALTH_INTERVAL_MS = Number(process.env.WHATSAPP_SYNC_HEALTH_INTERVAL_MS || 2 * 60 * 1000)
+const qrRecoverCooldown = new Map()
+const QR_RECOVER_COOLDOWN_MS = 2 * 60 * 1000
 const activeMessageImports = new Set()
 
 const app = express()
@@ -177,21 +219,26 @@ const io = new Server(httpServer, {
   },
 })
 
-// Autentica o socket via JWT.
+// Autentica o socket via JWT, mas salas vêm do dataScope no DB
+// (nunca confiar em orgRole/orgId stale do token).
 // SELLER: só sala do próprio user (inbox do seu WhatsApp).
 // OWNER: user + org (vê atualizações da equipe em tempo real).
 io.on("connection", (socket) => {
   const token = socket.handshake?.auth?.token || null
   if (!token) return
-  try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET)
-    if (payload?.sub) socket.join(`user:${payload.sub}`)
-    if (payload?.orgId && payload?.orgRole === "OWNER") {
-      socket.join(`org:${payload.orgId}`)
+  void (async () => {
+    try {
+      const payload = jwt.verify(token, process.env.JWT_SECRET)
+      if (!payload?.sub) return
+      socket.join(`user:${payload.sub}`)
+      const scope = await resolveDataScope(payload.sub)
+      if (scope?.isOwner && scope.orgId) {
+        socket.join(`org:${scope.orgId}`)
+      }
+    } catch {
+      /* socket sem sala privada */
     }
-  } catch {
-    /* socket sem sala privada */
-  }
+  })()
 })
 
 function emitWhatsAppToUser(userId, event, payload) {
@@ -248,8 +295,9 @@ app.use((req, res, next) => {
 app.use("/api/admin", adminRoutes)
 app.use("/api/org", createOrgRouter())
 app.use("/api/crm", createCrmRouter({ io }))
-app.use("/api/reports", createReportsRouter())
-app.use("/api/integrations", createIntegrationsRouter())
+  app.use("/api/reports", createReportsRouter())
+  app.use("/api/integrations", createIntegrationsRouter())
+  app.use("/api/push", createPushRouter())
 
 app.get("/health", async (_req, res) => {
   try {
@@ -2893,14 +2941,18 @@ async function deliverToGroup(instanceName, groupJid, content, userId) {
   const mentionOpts = await resolveMentionsForGroup(prisma, userId, groupJid, content)
   const sendOpts = buildEvolutionSendOptions(mentionOpts)
   const text = mentionOpts.whatsappBody ?? content.body
-  if (sendOpts.mentioned?.length || sendOpts.mentionsEveryOne) {
+  if (mentionOpts.mentionDebug?.mentionStrategy === "everyone_blocked") {
+    console.warn(
+      "[mentions] @todos ignorado — a Evolution listaria cada participante",
+      JSON.stringify({ groupJid, participantCount: mentionOpts.mentionDebug.participantCount }),
+    )
+  } else if (sendOpts.mentioned?.length) {
     console.log(
       "[mentions]",
       JSON.stringify({
         groupJid,
         bodyPreview: String(text || "").slice(0, 80),
-        mentioned: sendOpts.mentioned || [],
-        mentionsEveryOne: Boolean(sendOpts.mentionsEveryOne),
+        mentioned: sendOpts.mentioned,
         debug: mentionOpts.mentionDebug,
       }),
     )
@@ -3095,7 +3147,56 @@ function computeNextRun(a, from = new Date()) {
   return null
 }
 
-function getAutomationPayload(a) {
+const AUTOMATION_LIST_SELECT = {
+  id: true,
+  cadenceId: true,
+  name: true,
+  status: true,
+  groupJids: true,
+  groupNames: true,
+  templateId: true,
+  body: true,
+  mediaType: true,
+  mediaMime: true,
+  mediaName: true,
+  mentionsJson: true,
+  linkPreview: true,
+  frequency: true,
+  scheduledAt: true,
+  timeOfDay: true,
+  weekday: true,
+  nextRunAt: true,
+  lastRunAt: true,
+}
+
+const TEMPLATE_LIST_SELECT = {
+  id: true,
+  name: true,
+  body: true,
+  mediaType: true,
+  mediaMime: true,
+  mediaName: true,
+  mentionsJson: true,
+  linkPreview: true,
+  updatedAt: true,
+}
+
+function automationHasStoredMedia(a) {
+  const mt = a?.mediaType
+  if (!(mt === "image" || mt === "video" || mt === "document")) return false
+  if (Object.prototype.hasOwnProperty.call(a, "mediaBase64")) return Boolean(a.mediaBase64)
+  return true
+}
+
+function templateHasStoredMedia(t) {
+  const mt = t?.mediaType
+  if (!(mt === "image" || mt === "video" || mt === "document")) return false
+  if (Object.prototype.hasOwnProperty.call(t, "mediaBase64")) return Boolean(t.mediaBase64)
+  return true
+}
+
+/** Lista/respostas leves: nunca embute mediaBase64 (vídeos estouravam o timeout do front). */
+function getAutomationPayload(a, { includeMedia = false } = {}) {
   return {
     id: a.id,
     cadenceId: a.cadenceId || null,
@@ -3106,9 +3207,10 @@ function getAutomationPayload(a) {
     templateId: a.templateId,
     body: a.body,
     mediaType: a.mediaType,
-    mediaBase64: a.mediaBase64,
     mediaMime: a.mediaMime,
     mediaName: a.mediaName,
+    hasMedia: automationHasStoredMedia(a),
+    mediaBase64: includeMedia ? a.mediaBase64 || null : null,
     mentionsJson: a.mentionsJson || null,
     linkPreview: a.linkPreview !== false,
     frequency: a.frequency,
@@ -3120,15 +3222,16 @@ function getAutomationPayload(a) {
   }
 }
 
-function getTemplatePayload(t) {
+function getTemplatePayload(t, { includeMedia = false } = {}) {
   return {
     id: t.id,
     name: t.name,
     body: t.body,
     mediaType: t.mediaType,
-    mediaBase64: t.mediaBase64,
     mediaMime: t.mediaMime,
     mediaName: t.mediaName,
+    hasMedia: templateHasStoredMedia(t),
+    mediaBase64: includeMedia ? t.mediaBase64 || null : null,
     mentionsJson: t.mentionsJson || null,
     linkPreview: t.linkPreview !== false,
     updatedAt: t.updatedAt?.toISOString?.() || null,
@@ -3175,8 +3278,18 @@ const templateBodySchema = z.object({
 })
 
 app.get("/api/messages/templates", authMiddleware, async (req, res) => {
-  const rows = await prisma.messageTemplate.findMany({ where: { userId: req.user.sub }, orderBy: { updatedAt: "desc" } })
-  res.json({ templates: rows.map(getTemplatePayload) })
+  const rows = await prisma.messageTemplate.findMany({
+    where: { userId: req.user.sub },
+    orderBy: { updatedAt: "desc" },
+    select: TEMPLATE_LIST_SELECT,
+  })
+  res.json({ templates: rows.map((t) => getTemplatePayload(t)) })
+})
+
+app.get("/api/messages/templates/:id", authMiddleware, async (req, res) => {
+  const tpl = await prisma.messageTemplate.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!tpl) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
+  res.json({ template: getTemplatePayload(tpl, { includeMedia: true }) })
 })
 
 app.post("/api/messages/templates", authMiddleware, async (req, res) => {
@@ -3202,7 +3315,20 @@ app.put("/api/messages/templates/:id", authMiddleware, async (req, res) => {
     if (!parsed.success) return res.status(400).json({ error: "VALIDATION_ERROR", message: "Dados da mensagem inválidos." })
     const existing = await prisma.messageTemplate.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
     if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Mensagem não encontrada." })
-    const content = getMessageContent(parsed.data)
+
+    const bodyForContent = { ...parsed.data }
+    const wantsMedia =
+      bodyForContent.mediaType === "image" ||
+      bodyForContent.mediaType === "video" ||
+      bodyForContent.mediaType === "document"
+    // Edição sem reenviar o arquivo: mantém mídia já salva (não apaga o que o cliente criou).
+    if (wantsMedia && !bodyForContent.mediaBase64 && existing.mediaBase64) {
+      bodyForContent.mediaBase64 = existing.mediaBase64
+      bodyForContent.mediaMime = existing.mediaMime
+      bodyForContent.mediaName = existing.mediaName || bodyForContent.mediaName
+    }
+
+    const content = getMessageContent(bodyForContent)
     const invalid = validateContent(content)
     if (invalid) return res.status(400).json({ error: "VALIDATION_ERROR", message: invalid })
     const tpl = await prisma.messageTemplate.update({
@@ -3347,8 +3473,18 @@ app.get("/api/messages/activity", authMiddleware, async (req, res) => {
 })
 
 app.get("/api/automations", authMiddleware, async (req, res) => {
-  const rows = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
-  res.json({ automations: rows.map(getAutomationPayload) })
+  const rows = await prisma.automation.findMany({
+    where: { userId: req.user.sub },
+    orderBy: { createdAt: "desc" },
+    select: AUTOMATION_LIST_SELECT,
+  })
+  res.json({ automations: rows.map((a) => getAutomationPayload(a)) })
+})
+
+app.get("/api/automations/:id", authMiddleware, async (req, res) => {
+  const existing = await prisma.automation.findFirst({ where: { id: req.params.id, userId: req.user.sub } })
+  if (!existing) return res.status(404).json({ error: "NOT_FOUND", message: "Automação não encontrada." })
+  res.json({ automation: getAutomationPayload(existing, { includeMedia: true }) })
 })
 
 app.post("/api/automations", authMiddleware, async (req, res) => {
@@ -3672,8 +3808,12 @@ app.post("/api/cadences/:id/automations", authMiddleware, async (req, res) => {
       data: { cadenceId: existing.id },
     })
   }
-  const automations = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
-  res.json({ automations: automations.map(getAutomationPayload) })
+  const automations = await prisma.automation.findMany({
+    where: { userId: req.user.sub },
+    orderBy: { createdAt: "desc" },
+    select: AUTOMATION_LIST_SELECT,
+  })
+  res.json({ automations: automations.map((a) => getAutomationPayload(a)) })
 })
 
 app.post("/api/cadences/:id/status", authMiddleware, async (req, res) => {
@@ -3696,8 +3836,12 @@ app.post("/api/cadences/:id/status", authMiddleware, async (req, res) => {
     if (parsed.data.status === "ativa" && a.frequency !== "once") data.nextRunAt = computeNextRun(a)
     await prisma.automation.update({ where: { id: a.id }, data })
   }
-  const automations = await prisma.automation.findMany({ where: { userId: req.user.sub }, orderBy: { createdAt: "desc" } })
-  res.json({ cadence: getCadencePayload(updatedCadence), automations: automations.map(getAutomationPayload) })
+  const automations = await prisma.automation.findMany({
+    where: { userId: req.user.sub },
+    orderBy: { createdAt: "desc" },
+    select: AUTOMATION_LIST_SELECT,
+  })
+  res.json({ cadence: getCadencePayload(updatedCadence), automations: automations.map((a) => getAutomationPayload(a)) })
 })
 
 async function processDueAutomations() {
@@ -3779,11 +3923,46 @@ function toInstanceName(userId) {
 
 const NUMBER_CONFLICT_STATUS = "NUMBER_CONFLICT"
 
+/** Pairing code efêmero (não grava no banco; não afeta outras contas). */
+const PAIRING_CODE_TTL_MS = 4 * 60 * 1000
+const pairingCodeByUserId = new Map()
+
+function setPairingCodeCache(userId, pairingCode, phone) {
+  if (!userId || !pairingCode) {
+    pairingCodeByUserId.delete(userId)
+    return
+  }
+  pairingCodeByUserId.set(userId, {
+    code: String(pairingCode).trim().toUpperCase(),
+    phone: phone ? String(phone) : null,
+    expiresAt: Date.now() + PAIRING_CODE_TTL_MS,
+  })
+}
+
+function clearPairingCodeCache(userId) {
+  if (userId) pairingCodeByUserId.delete(userId)
+}
+
+function getPairingCodeCache(userId) {
+  if (!userId) return null
+  const entry = pairingCodeByUserId.get(userId)
+  if (!entry) return null
+  if (Date.now() > entry.expiresAt) {
+    pairingCodeByUserId.delete(userId)
+    return null
+  }
+  return entry
+}
+
 function formatConnectionPayload(conn, groupsCount = 0) {
   const phoneDigits = phoneDigitsFromValue(conn?.phone)
-  return {
+  const pairing = conn?.connected ? null : getPairingCodeCache(conn?.userId)
+  if (conn?.connected) clearPairingCodeCache(conn.userId)
+  return appendSyncHealthPayload(conn, {
     connected: conn?.connected || false,
     qr: conn?.qrCode || null,
+    pairingCode: pairing?.code || null,
+    pairingPhone: pairing?.phone || null,
     lastSync: conn?.lastSync?.toISOString() || null,
     status: conn?.status || "DISCONNECTED",
     phone: conn?.phone || null,
@@ -3792,7 +3971,39 @@ function formatConnectionPayload(conn, groupsCount = 0) {
     instanceName: conn?.instanceName || null,
     sync: getSyncPayload(conn, groupsCount),
     import: getImportPayload(conn),
-  }
+  })
+}
+
+function scheduleCrmBackfillAfterRecovery(userId, instanceName, reason = "recovery") {
+  if (!userId || !instanceName) return
+  console.log(`[sync-health] scheduling CRM backfill for ${instanceName} (${reason})`)
+  setTimeout(() => {
+    const deps = getCrmDeps()
+    void (async () => {
+      try {
+        const { resolveLidPhonesFromChats, reidentifyContactsFromMessages } = require("./lib/crmProfile")
+        const { unifyLidPhoneDuplicates } = require("./lib/crmContactMerge")
+        const lid = await resolveLidPhonesFromChats(deps, { userId, instanceName })
+        if (lid?.resolved) {
+          console.log(`[sync-health] lid phones resolved ${instanceName}: ${lid.resolved}`)
+        }
+        await reidentifyContactsFromMessages(deps, userId).catch(() => 0)
+        await unifyLidPhoneDuplicates(prisma, { userIds: [userId], limit: 120 }).catch(() => null)
+      } catch (err) {
+        console.warn("[sync-health] resolveLidPhones:", err?.message || err)
+      }
+      await backfillRecentCrmAfterRecovery(deps, { userId, instanceName })
+      // Discovery parcial: se store voltou, puxa inventário (checkpointed).
+      try {
+        const { startCrmSync, isSyncRunning } = require("./lib/crmSync")
+        if (!isSyncRunning(userId)) {
+          await startCrmSync(deps, userId, { scope: "all" })
+        }
+      } catch (err) {
+        console.warn("[sync-health] discovery sync:", err?.message || err)
+      }
+    })().catch((err) => console.error("[sync-health] backfill:", err?.message || err))
+  }, 2500)
 }
 
 /**
@@ -3803,10 +4014,14 @@ async function findPhoneConflicts(userId, phoneDigits) {
   if (!phoneDigits) return []
 
   const connections = await prisma.whatsAppConnection.findMany({
-    where: { userId: { not: userId }, phone: { not: null } },
+    where: {
+      userId: { not: userId },
+      OR: [{ phoneDigits }, { phone: { not: null } }],
+    },
     select: {
       userId: true,
       phone: true,
+      phoneDigits: true,
       instanceName: true,
       connected: true,
       evolutionHost: true,
@@ -3815,10 +4030,11 @@ async function findPhoneConflicts(userId, phoneDigits) {
   })
 
   return connections
-    .filter((c) => phoneDigitsFromValue(c.phone) === phoneDigits)
+    .filter((c) => (c.phoneDigits || phoneDigitsFromValue(c.phone)) === phoneDigits)
     .map((c) => ({
       userId: c.userId,
       phone: c.phone,
+      phoneDigits: c.phoneDigits || phoneDigitsFromValue(c.phone),
       instanceName: c.instanceName,
       connected: c.connected,
       evolutionHost: c.evolutionHost,
@@ -3846,7 +4062,7 @@ async function purgeConflictingConnection(other, { reason } = {}) {
       connected: false,
       status: "DISCONNECTED",
       qrCode: null,
-      phone: null,
+      ...clearConnectionPhoneData(),
       lastSync: new Date(),
     },
   })
@@ -3890,7 +4106,7 @@ async function enforceOrgNumberConflict({ userId, instanceName, phone }) {
       connected: false,
       status: NUMBER_CONFLICT_STATUS,
       qrCode: null,
-      phone: null,
+      ...clearConnectionPhoneData(),
       lastSync: new Date(),
     },
   })
@@ -3955,24 +4171,55 @@ async function updateConnectionFromWebhook(instanceName, body) {
   const qr = (await resolveQrForStorage(payload)) || (await resolveQrForStorage(body)) || existing.qrCode
   const nextStatus = pickStatus(payload) || pickStatus(body)
   const status = nextStatus && nextStatus !== "unknown" ? nextStatus.toUpperCase() : existing.status
-  const phone = pickPhone(payload) || pickPhone(body)
+  let phone = pickPhone(payload) || pickPhone(body)
+  // O evento de conexão não traz o número. Sem isso a tela fica “conectada” sem telefone.
+  if (connected && !phone && !existing.phone) {
+    const info = await fetchInstanceInfo(instanceName).catch((err) => {
+      console.warn("[whatsapp] fetchInstanceInfo:", err?.message || err)
+      return null
+    })
+    phone = pickPhone(info)
+  }
 
-  const phoneForDb = connected
+  const phoneRaw = connected
     ? phone
       ? String(phone)
       : existing.phone
     : null
+  const phoneData = connected ? connectionPhoneData(phoneRaw) : clearConnectionPhoneData()
 
-  let conn = await prisma.whatsAppConnection.update({
-    where: { instanceName },
-    data: {
-      connected,
-      status,
-      qrCode: connected ? null : qr,
-      phone: phoneForDb,
-      lastSync: new Date(),
-    },
-  })
+  if (connected && phoneData.phone) {
+    const enforcedEarly = await enforceOrgNumberConflict({
+      userId: existing.userId,
+      instanceName,
+      phone: phoneData.phone,
+    })
+    if (enforcedEarly) return enforcedEarly.conn
+  }
+
+  let conn
+  try {
+    conn = await prisma.whatsAppConnection.update({
+      where: { instanceName },
+      data: {
+        connected,
+        status,
+        qrCode: connected ? null : qr,
+        ...phoneData,
+        lastSync: new Date(),
+      },
+    })
+  } catch (err) {
+    if (err?.code === "P2002" && connected) {
+      const enforced = await enforceOrgNumberConflict({
+        userId: existing.userId,
+        instanceName,
+        phone: phoneData.phone,
+      })
+      if (enforced) return enforced.conn
+    }
+    throw err
+  }
 
   if (connected) {
     const enforced = await enforceOrgNumberConflict({
@@ -3983,6 +4230,7 @@ async function updateConnectionFromWebhook(instanceName, body) {
     if (enforced) conn = enforced.conn
   }
 
+  if (conn.connected) clearReconcileFailStreak(instanceName)
   emitWhatsAppToUser(conn.userId, "whatsapp:status", formatConnectionPayload(conn))
   if (conn.qrCode) emitWhatsAppToUser(conn.userId, "whatsapp:qr", { qr: conn.qrCode })
   return conn
@@ -4021,7 +4269,27 @@ async function updateGroupsFromWebhook(instanceName, body) {
 
 /** Deps compartilhadas dos motores do CRM (fluxos, IA, fila de envio). */
 function getCrmDeps() {
-  return { prisma, io, sendText, sendMedia, sendWhatsAppAudio, sendPresence, findChats, fetchChatMessages, findMessageById }
+  return {
+    prisma,
+    io,
+    sendText,
+    sendMedia,
+    sendWhatsAppAudio,
+    sendPresence,
+    findChats,
+    findChatsPaginated,
+    findContacts,
+    fetchChatMessages,
+    findMessageById,
+    fetchProfile,
+    fetchProfilePictureUrl,
+    bindInstanceHost,
+    restartInstance,
+    reassertInstanceWebhook,
+    getConnectionStateForProbe,
+    pickConnected,
+    pickStatus,
+  }
 }
 
 /** Grava mensagem 1:1 no CRM, emite tempo real e dispara fluxos/IA. */
@@ -4065,26 +4333,34 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null, opti
   }
 
   if (!message.fromMe) {
-    // ConversationStarted: 1ª mensagem INBOUND do contato (idempotente via flag).
-    // Não depender só de isNewConversation — o sync do CRM pré-cria conversas e
-    // zerava o disparo; outbound-first também precisa do evento na 1ª resposta do lead.
-    const contactForMeta = await prisma.crmContact.findUnique({ where: { id: conversation.contactId } })
-    if (contactForMeta && !contactForMeta.conversationStartedEventSentAt) {
-      trackConversationStartedEvent(prisma, {
-        userId,
-        contact: contactForMeta,
-        eventTime: message.timestamp || new Date(),
-      }).catch((err) => console.error("[meta] ConversationStarted:", err?.message || err))
-    }
-
-    if (shouldDispatchFlows) {
-      await dispatchCrmMessageFlows(getCrmDeps(), result, { includeAi: true })
-    }
+    // Meta + fluxos/IA fora do caminho crítico: a inbox já recebeu crm:message.
+    const flowResult = result
+    const contactId = conversation.contactId
+    const eventTime = message.timestamp || new Date()
+    enqueueWebhookJob(
+      `crm-side:${userId}:${message.id || message.messageId || "msg"}`,
+      async () => {
+        const contactForMeta = await prisma.crmContact.findUnique({ where: { id: contactId } })
+        if (contactForMeta && !contactForMeta.conversationStartedEventSentAt) {
+          await trackConversationStartedEvent(prisma, {
+            userId,
+            contact: contactForMeta,
+            eventTime,
+          }).catch((err) => console.error("[meta] ConversationStarted:", err?.message || err))
+        }
+        if (shouldDispatchFlows) {
+          await dispatchCrmMessageFlows(getCrmDeps(), flowResult, { includeAi: true })
+        }
+      },
+      { priority: "normal" },
+    )
   }
 }
 
 /** Mensagens novas (a partir da conexão). Só grava em grupos monitorados; sem histórico antigo. */
 async function storeIncomingMessages(instanceName, body, options = {}) {
+  const onlyCrm = options.onlyCrm === true
+  const onlyGroups = options.onlyGroups === true
   const conn = await prisma.whatsAppConnection.findUnique({ where: { instanceName } })
   if (!conn) return 0
 
@@ -4097,7 +4373,7 @@ async function storeIncomingMessages(instanceName, body, options = {}) {
   const records = collectWebhookMessageRecords(body)
   if (!records.length) {
     const event = getWebhookEvent(body)
-    if (event.includes("MESSAGE")) {
+    if (event.includes("MESSAGE") && !onlyGroups && !onlyCrm) {
       console.warn(`[webhook] ${event} sem registros parseáveis (${instanceName})`)
     }
     return 0
@@ -4110,6 +4386,7 @@ async function storeIncomingMessages(instanceName, body, options = {}) {
     const groupJid = record?.key?.remoteJid || record?.remoteJid
     if (!groupJid) continue
     if (!String(groupJid).endsWith("@g.us")) {
+      if (onlyGroups) continue
       // Chats 1:1 (@s.whatsapp.net / @lid) alimentam o CRM em tempo real.
       if (isIndividualJid(groupJid) && !isReactionRecord(record)) {
         await handleCrmIncomingRecord(conn.userId, record, instanceName, {
@@ -4118,6 +4395,7 @@ async function storeIncomingMessages(instanceName, body, options = {}) {
       }
       continue
     }
+    if (onlyCrm) continue
 
     let group = touchedGroups.get(groupJid)
     if (!group) {
@@ -4202,11 +4480,32 @@ async function storeIncomingMessages(instanceName, body, options = {}) {
 }
 
 async function upsertConnectionFromEvolution({ userId, instanceName, stateData, qrData, evolutionHost }) {
-  const connected = pickConnected(stateData)
+  const existingRow = await prisma.whatsAppConnection.findUnique({
+    where: { userId },
+    select: { qrCode: true, connected: true, syncHealth: true, phone: true },
+  })
+  let connected = pickConnected(stateData)
   let qr =
     (await resolveQrForStorage(qrData)) || (await resolveQrForStorage(stateData))
   const status = pickStatus(stateData).toUpperCase()
   let phone = pickPhone(stateData)
+
+  // Histerese: 1º close/connecting após open não derruba CRM (restart/keep-alive).
+  if (!connected && existingRow?.connected) {
+    const streak = bumpProbeFailStreak(userId, "notOpen")
+    if (streak.notOpen < PROBE_FAIL_STREAK) {
+      console.warn(
+        `[whatsapp] upsert defer disconnect ${instanceName} (${streak.notOpen}/${PROBE_FAIL_STREAK}) status=${status}`,
+      )
+      connected = true
+      // Mantém phone anterior enquanto confirma queda.
+      if (!phone && existingRow.phone) phone = existingRow.phone
+    } else {
+      clearProbeFailStreak(userId)
+    }
+  } else if (connected) {
+    clearProbeFailStreak(userId)
+  }
 
   // connectionState só devolve o estado; o número (ownerJid) vem do fetchInstances.
   if (connected && !phone) {
@@ -4218,47 +4517,93 @@ async function upsertConnectionFromEvolution({ userId, instanceName, stateData, 
   }
 
   if (!connected && !qr) {
-    const existing = await prisma.whatsAppConnection.findUnique({
-      where: { userId },
-      select: { qrCode: true },
-    })
-    qr = existing?.qrCode || null
+    qr = existingRow?.qrCode || null
   }
 
   const hostForCreate = normalizeHostId(evolutionHost || getDefaultHostForNewConnections())
   if (instanceName) bindInstanceHost(instanceName, hostForCreate)
 
   // Desconectado: não conservar ownerJid stale da Evolution (evita recontaminar outras contas).
-  const phoneForDb = connected ? (phone ? String(phone) : undefined) : null
+  const phonePatch = connected
+    ? phone
+      ? connectionPhoneData(phone)
+      : {} // mantém phone/phoneDigits atuais se Evolution não mandou número
+    : clearConnectionPhoneData()
+  const qrForDb = connected ? null : qr || existingRow?.qrCode || null
+  // NÃO zerar STALE/RECOVERING só porque a Evo diz "open" (falso positivo zombie /
+  // soft-restart). HEALTHY só via webhook de mensagem ou connect limpo fora de recovery.
+  const prevHealth = String(existingRow?.syncHealth || "").toUpperCase()
+  const inRecovery = prevHealth === SYNC_HEALTH.STALE || prevHealth === SYNC_HEALTH.RECOVERING
+  const becameConnected = connected && !existingRow?.connected
+  const healthPatch = connected
+    ? becameConnected && !inRecovery
+      ? {
+          syncHealth: SYNC_HEALTH.HEALTHY,
+          staleDetectedAt: null,
+          staleRecoveryCount: 0,
+          staleLastRecoveryAt: null,
+        }
+      : {}
+    : inRecovery
+      ? {} // mantém STALE/RECOVERING + contadores durante oscilação do soft-restart
+      : {
+          syncHealth: SYNC_HEALTH.UNKNOWN,
+          staleRecoveryCount: 0,
+          staleLastRecoveryAt: null,
+        }
 
-  let conn = await prisma.whatsAppConnection.upsert({
-    where: { userId },
-    create: {
+  const phoneForConflict = phonePatch.phone || (connected ? existingRow?.phone : null)
+  if (connected && phoneForConflict) {
+    const enforcedEarly = await enforceOrgNumberConflict({
       userId,
       instanceName,
-      evolutionHost: hostForCreate,
-      connected,
-      status,
-      qrCode: connected ? null : qr,
-      phone: connected && phone ? String(phone) : null,
-      lastSync: new Date(),
-    },
-    update: {
-      instanceName,
-      // NÃO altera evolutionHost no update — evita “migrar” quem já está na Evo1.
-      connected,
-      status,
-      qrCode: connected ? null : qr,
-      phone: phoneForDb,
-      lastSync: new Date(),
-    },
-  })
+      phone: phoneForConflict,
+    })
+    if (enforcedEarly) return enforcedEarly.conn
+  }
+
+  let conn
+  try {
+    conn = await prisma.whatsAppConnection.upsert({
+      where: { userId },
+      create: {
+        userId,
+        instanceName,
+        evolutionHost: hostForCreate,
+        connected,
+        status,
+        qrCode: connected ? null : qr,
+        ...connectionPhoneData(connected && phone ? phone : null),
+        lastSync: new Date(),
+        syncHealth: connected ? SYNC_HEALTH.HEALTHY : SYNC_HEALTH.UNKNOWN,
+      },
+      update: {
+        instanceName,
+        // NÃO altera evolutionHost no update — evita “migrar” quem já está na Evo1.
+        connected,
+        status,
+        qrCode: qrForDb,
+        ...phonePatch,
+        lastSync: new Date(),
+        ...healthPatch,
+      },
+    })
+  } catch (err) {
+    if (err?.code === "P2002" && connected && phoneForConflict) {
+      const enforced = await enforceOrgNumberConflict({ userId, instanceName, phone: phoneForConflict })
+      if (enforced) return enforced.conn
+    }
+    throw err
+  }
 
   if (conn.evolutionHost) bindInstanceHost(conn.instanceName, conn.evolutionHost)
 
   if (connected) {
     const enforced = await enforceOrgNumberConflict({ userId, instanceName, phone: conn.phone })
     if (enforced) conn = enforced.conn
+    if (becameConnected && !inRecovery) {
+      scheduleCrmBackfillAfterRecovery(userId, instanceName, "reconnect")
+    }
   }
 
   return conn
@@ -4334,22 +4679,71 @@ async function updateOutboundAckFromWebhook(instanceName, body) {
   }
 }
 
-async function processEvolutionWebhookEvent(event, instanceName, body) {
+async function processEvolutionWebhookEvent(event, instanceName, body, options = {}) {
   if (event === "CONNECTION_UPDATE" || event === "QRCODE_UPDATED") {
-    await updateConnectionFromWebhook(instanceName, body)
+    const before = await prisma.whatsAppConnection.findUnique({
+      where: { instanceName },
+      select: { connected: true, userId: true, syncHealth: true, evolutionHost: true },
+    })
+    const conn = await updateConnectionFromWebhook(instanceName, body)
+    // Soft-restart de sessão STALE/RECOVERING também gera open de novo — NÃO marcar HEALTHY
+    // aqui (senão zera o contador de recovery). Só webhook de mensagem prova vida.
+    const prevHealth = String(before?.syncHealth || "").toUpperCase()
+    const recovering = prevHealth === SYNC_HEALTH.STALE || prevHealth === SYNC_HEALTH.RECOVERING
+    if (conn?.connected && before && !before.connected && !recovering) {
+      await markSyncHealthy(prisma, { instanceName }).catch(() => {})
+      scheduleCrmBackfillAfterRecovery(conn.userId, instanceName, "connection-update")
+    }
+    // Queda real: tenta voltar sem logout/QR (keep-alive).
+    if (before?.connected && conn && !conn.connected && before.userId) {
+      void tryKeepAliveAfterClose(
+        { prisma, emitWhatsAppToUser, formatConnectionPayload },
+        {
+          userId: before.userId,
+          instanceName,
+          evolutionHost: before.evolutionHost || conn.evolutionHost,
+        },
+      ).catch((err) => console.warn("[sync-health] keep-alive:", err?.message || err))
+    }
   } else if (event === "GROUP_PARTICIPANTS_UPDATE") {
     await updateGroupsFromWebhook(instanceName, body)
     await handleGroupParticipantsX1Webhook(getX1Deps(), instanceName, body)
   } else if (["GROUPS_UPSERT", "GROUP_UPDATE"].includes(event)) {
     await updateGroupsFromWebhook(instanceName, body)
   } else if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
-    await storeIncomingMessages(instanceName, body, { webhookEvent: event })
+    await storeIncomingMessages(instanceName, body, {
+      webhookEvent: event,
+      onlyCrm: options.onlyCrm === true,
+      onlyGroups: options.onlyGroups === true,
+    })
   } else if (event === "MESSAGES_UPDATE") {
     await updateOutboundAckFromWebhook(instanceName, body)
   } else if (event === "LABELS_ASSOCIATION" || event === "LABELS_EDIT") {
     const { handleWhatsappLabelsWebhook } = require("./lib/crmWhatsappLabels")
     await handleWhatsappLabelsWebhook(prisma, io, sendText, instanceName, event, body)
   }
+}
+
+function classifyMessageWebhookRecords(body) {
+  const records = collectWebhookMessageRecords(body)
+  let hasCrm = false
+  let hasGroup = false
+  for (const record of records) {
+    const jid = record?.key?.remoteJid || record?.remoteJid
+    if (!jid) continue
+    if (String(jid).endsWith("@g.us")) {
+      hasGroup = true
+      continue
+    }
+    if (isIndividualJid(jid) && !isReactionRecord(record)) hasCrm = true
+  }
+  return { hasCrm, hasGroup }
+}
+
+function webhookJobPriority(event) {
+  if (event === "MESSAGES_UPDATE") return "high"
+  if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") return "high"
+  return "normal"
 }
 
 app.post("/api/evolution/webhook", (req, res) => {
@@ -4377,7 +4771,48 @@ app.post("/api/evolution/webhook", (req, res) => {
 
     // Mensagens / grupos / ACK: ACK imediato + fila (evita timeout/retry/OOM).
     res.json({ ok: true, queued: true })
-    enqueueWebhookJob(label, () => processEvolutionWebhookEvent(event, instanceName, body))
+
+    // 1:1 CRM separado e prioritário — flood de grupo/labels não rouba a fila.
+    if (event === "MESSAGES_UPSERT" || event === "MESSAGES_SET") {
+      // Touch uma vez por request (prova de vida), fora da fila duplicada CRM/grupos.
+      enqueueWebhookJob(
+        `${label}:sync-health`,
+        async () => {
+          // Passa o body para ignorar replay/histórico antigo (não marca HEALTHY falso).
+          const touch = await touchLastWebhookAt(prisma, instanceName, { body })
+          if (touch?.skippedReplay) return
+          if (touch?.recoveredFromStale) {
+            emitWhatsAppToUser(touch.conn.userId, "whatsapp:status", formatConnectionPayload(touch.conn))
+            scheduleCrmBackfillAfterRecovery(touch.conn.userId, instanceName, "webhook-resume")
+          }
+        },
+        { priority: "high" },
+      )
+      const { hasCrm, hasGroup } = classifyMessageWebhookRecords(body)
+      if (hasCrm) {
+        enqueueWebhookJob(
+          `${label}:crm`,
+          () => processEvolutionWebhookEvent(event, instanceName, body, { onlyCrm: true }),
+          { priority: "high" },
+        )
+      }
+      if (hasGroup || !hasCrm) {
+        // Sem CRM parseável: ainda processa (no-op/log) em prioridade normal.
+        enqueueWebhookJob(
+          `${label}${hasGroup ? ":groups" : ""}`,
+          () =>
+            processEvolutionWebhookEvent(event, instanceName, body, {
+              onlyGroups: hasCrm && hasGroup,
+            }),
+          { priority: "normal" },
+        )
+      }
+      return
+    }
+
+    enqueueWebhookJob(label, () => processEvolutionWebhookEvent(event, instanceName, body), {
+      priority: webhookJobPriority(event),
+    })
   } catch (err) {
     console.error("[evolution-webhook]", err?.message || err)
     if (!res.headersSent) {
@@ -4386,17 +4821,42 @@ app.post("/api/evolution/webhook", (req, res) => {
   }
 })
 
+async function markConnectionDisconnected(userId, existing, { clearQr = false } = {}) {
+  if (existing?.status === "NUMBER_CONFLICT") {
+    return prisma.whatsAppConnection.update({
+      where: { userId },
+      data: { lastSync: new Date() },
+    })
+  }
+  return prisma.whatsAppConnection.update({
+    where: { userId },
+    data: {
+      connected: false,
+      status: "DISCONNECTED",
+      qrCode: clearQr ? null : existing?.qrCode ?? null,
+      ...clearConnectionPhoneData(),
+      lastSync: new Date(),
+      syncHealth: SYNC_HEALTH.UNKNOWN,
+      staleRecoveryCount: 0,
+      staleLastRecoveryAt: null,
+      // Mantém staleDetectedAt / lastWebhookAt para diagnóstico.
+    },
+  })
+}
+
 app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
   try {
     const userId = req.user.sub
     const existing = await prisma.whatsAppConnection.findUnique({ where: { userId } })
     if (!existing) return res.json(formatConnectionPayload(null))
     const groupsCount = await prisma.whatsAppGroup.count({ where: { userId } })
+    const forceFresh = String(req.query.fresh || "") === "1"
+    const ageMs = existing.lastSync ? Date.now() - existing.lastSync.getTime() : Infinity
 
-    // TTL: se já está conectado e sincronizou há pouco, devolve cache e evita martelar a Evolution.
-    const recentlySynced =
-      existing.lastSync && Date.now() - existing.lastSync.getTime() < STATUS_REFRESH_MIN_INTERVAL_MS
-    if (existing.connected && recentlySynced) {
+    // TTL curto; se lastSync está velho, força probe (detecta Evo morta sem webhook).
+    const recentlySynced = ageMs < STATUS_REFRESH_MIN_INTERVAL_MS
+    const staleConnected = existing.connected && ageMs >= STATUS_STALE_FORCE_PROBE_MS
+    if (existing.connected && recentlySynced && !forceFresh && !staleConnected) {
       return res.json(formatConnectionPayload(existing, groupsCount))
     }
 
@@ -4406,35 +4866,62 @@ app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
 
     let stateData
     try {
-      stateData = await getConnectionState(existing.instanceName)
+      stateData = await getConnectionStateForProbe(existing.instanceName)
     } catch (err) {
-      // Instância apagada / offline: não 502 — devolve desconectado do CRM.
       const status = Number(err?.status || 0)
       const msg = String(err?.message || "").toLowerCase()
-      if (status === 404 || msg.includes("not found") || msg.includes("does not exist")) {
-        const conn = await prisma.whatsAppConnection.update({
-          where: { userId },
-          data: {
-            connected: false,
-            status: existing.status === "NUMBER_CONFLICT" ? existing.status : "DISCONNECTED",
-            qrCode: null,
-            phone: null,
-            lastSync: new Date(),
-          },
-        })
+      const gone =
+        status === 404 || msg.includes("not found") || msg.includes("does not exist")
+      if (gone) {
+        clearProbeFailStreak(userId)
+        const conn = await markConnectionDisconnected(userId, existing, { clearQr: true })
+        emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn, groupsCount))
+        return res.json(formatConnectionPayload(conn, groupsCount))
+      }
+      if (isEvolutionUnreachableError(err) && existing.connected) {
+        const streak = bumpProbeFailStreak(userId, "unreachable")
+        if (streak.unreachable < PROBE_FAIL_STREAK) {
+          console.warn(
+            `[whatsapp] status unreachable ${existing.instanceName} (${streak.unreachable}/${PROBE_FAIL_STREAK}) — mantém connected`,
+          )
+          return res.json(formatConnectionPayload(existing, groupsCount))
+        }
+        clearProbeFailStreak(userId)
+        const conn = await markConnectionDisconnected(userId, existing, { clearQr: false })
+        emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn, groupsCount))
         return res.json(formatConnectionPayload(conn, groupsCount))
       }
       throw err
+    }
+
+    let qrData = null
+    const stateLabel = pickStatus(stateData).toUpperCase()
+    const stuckConnecting =
+      !pickConnected(stateData) &&
+      !existing.qrCode &&
+      (stateLabel === "CONNECTING" || existing.status === "CONNECTING")
+    if (stuckConnecting) {
+      const last = qrRecoverCooldown.get(userId) || 0
+      if (Date.now() - last > QR_RECOVER_COOLDOWN_MS) {
+        qrRecoverCooldown.set(userId, Date.now())
+        try {
+          const recovered = await recoverQrIfStuck(existing.instanceName)
+          if (recovered.qrReady) qrData = recovered.qrData
+        } catch (err) {
+          console.warn("[whatsapp] recover QR no status:", err?.message || err)
+        }
+      }
     }
 
     const conn = await upsertConnectionFromEvolution({
       userId,
       instanceName: existing.instanceName,
       stateData,
-      qrData: null,
+      qrData,
     })
 
     emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn, groupsCount))
+    if (conn.qrCode) emitWhatsAppToUser(userId, "whatsapp:qr", { qr: conn.qrCode })
     return res.json(formatConnectionPayload(conn, groupsCount))
   } catch (err) {
     return handleEvolutionError(res, err)
@@ -4446,6 +4933,7 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
     const userId = req.user.sub
     const instanceName = toInstanceName(userId)
     const webhook = buildEvolutionWebhookUrl()
+    const phoneForPairing = normalizeWhatsappNumber(req.body?.phone || req.body?.number || "")
 
     const existing = await prisma.whatsAppConnection.findUnique({
       where: { userId },
@@ -4458,7 +4946,10 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
     bindInstanceHost(instanceName, evolutionHost)
 
     try {
-      await createInstance(instanceName, webhook, { hostId: evolutionHost })
+      await createInstance(instanceName, webhook, {
+        hostId: evolutionHost,
+        ...(phoneForPairing ? { number: phoneForPairing } : {}),
+      })
     } catch (err) {
       if (!isInstanceAlreadyExistsError(err)) throw err
     }
@@ -4467,8 +4958,27 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
         console.warn("[evolution] Não foi possível atualizar webhook da instância:", err?.message || err)
       })
     }
-    const qrData = await connectInstance(instanceName)
-    const stateData = await getConnectionState(instanceName)
+
+    let qrData = null
+    if (phoneForPairing) {
+      const recovered = await recoverPairingCode(instanceName, phoneForPairing)
+      if (recovered.alreadyOpen) {
+        clearPairingCodeCache(userId)
+      } else if (recovered.pairingCode) {
+        setPairingCodeCache(userId, recovered.pairingCode, phoneForPairing)
+      } else {
+        clearPairingCodeCache(userId)
+      }
+      qrData = recovered.qrData
+    } else {
+      clearPairingCodeCache(userId)
+      const recovered = await recoverQrIfStuck(instanceName)
+      qrData = recovered.qrData
+    }
+
+    const stateData = await getConnectionStateForProbe(instanceName).catch(() =>
+      getConnectionState(instanceName),
+    )
 
     const conn = await upsertConnectionFromEvolution({
       userId,
@@ -4478,10 +4988,14 @@ app.post("/api/whatsapp/connect", authMiddleware, async (req, res) => {
       evolutionHost,
     })
 
-    emitWhatsAppToUser(userId, "whatsapp:qr", { qr: conn.qrCode })
-    emitWhatsAppToUser(userId, "whatsapp:status", formatConnectionPayload(conn))
-    return res.status(201).json(formatConnectionPayload(conn))
+    const payload = formatConnectionPayload(conn)
+    emitWhatsAppToUser(userId, "whatsapp:qr", { qr: conn.qrCode, pairingCode: payload.pairingCode })
+    emitWhatsAppToUser(userId, "whatsapp:status", payload)
+    return res.status(201).json(payload)
   } catch (err) {
+    if (err?.code === "INVALID_PHONE") {
+      return res.status(400).json({ error: "INVALID_PHONE", message: err.message })
+    }
     return handleEvolutionError(res, err)
   }
 })
@@ -4496,13 +5010,14 @@ app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res) => {
       bindInstanceHost(existing.instanceName, existing.evolutionHost || "primary")
       await logoutInstance(existing.instanceName)
     }
+    clearPairingCodeCache(userId)
     const conn = await prisma.whatsAppConnection.update({
       where: { userId },
       data: {
         connected: false,
         status: "DISCONNECTED",
         qrCode: null,
-        phone: null,
+        ...clearConnectionPhoneData(),
         lastSync: new Date(),
         groupSyncStatus: "IDLE",
         groupSyncProgress: 0,
@@ -4554,6 +5069,120 @@ async function refreshConnectedInstanceWebhooks() {
   }
 }
 
+/**
+ * Histerese do reconcile: não derruba sessão no 1º timeout/502 da Evolution
+ * (falso positivo comum → usuário acha que “desconectou sozinho”).
+ * - unreachable: precisa de N falhas seguidas
+ * - notConnected (probe OK mas state ≠ open): N-1 falhas (mais confiável)
+ */
+const RECONCILE_UNREACHABLE_STREAK = Math.max(
+  2,
+  Math.min(8, Number(process.env.WHATSAPP_RECONCILE_UNREACHABLE_STREAK || 3)),
+)
+const RECONCILE_NOT_CONNECTED_STREAK = Math.max(
+  1,
+  Math.min(6, Number(process.env.WHATSAPP_RECONCILE_NOT_CONNECTED_STREAK || 2)),
+)
+/** instanceName → { unreachable, notConnected } */
+const reconcileFailStreak = new Map()
+
+function clearReconcileFailStreak(instanceName) {
+  if (instanceName) reconcileFailStreak.delete(instanceName)
+}
+
+function bumpReconcileFailStreak(instanceName, kind) {
+  const prev = reconcileFailStreak.get(instanceName) || { unreachable: 0, notConnected: 0 }
+  if (kind === "unreachable") {
+    prev.unreachable += 1
+  } else {
+    prev.notConnected += 1
+    prev.unreachable = 0
+  }
+  reconcileFailStreak.set(instanceName, prev)
+  return prev
+}
+
+/** Marca como desconectado sessões que a Evolution não responde (OOM/timeout). */
+async function reconcileConnectedWhatsAppInstances() {
+  const connections = await prisma.whatsAppConnection.findMany({
+    // instanceName é obrigatório no schema — evitar `{ not: null }` (Prisma 6 rejeita).
+    where: { connected: true },
+    select: {
+      userId: true,
+      instanceName: true,
+      evolutionHost: true,
+      status: true,
+      qrCode: true,
+    },
+    take: 40,
+  })
+  if (!connections.length) return
+
+  const concurrency = 3
+  let downgraded = 0
+  let deferred = 0
+  for (let i = 0; i < connections.length; i += concurrency) {
+    const batch = connections.slice(i, i + concurrency)
+    await Promise.all(
+      batch.map(async (row) => {
+        bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
+        try {
+          const state = await getConnectionStateForProbe(row.instanceName)
+          if (pickConnected(state)) {
+            clearReconcileFailStreak(row.instanceName)
+            return
+          }
+          const streak = bumpReconcileFailStreak(row.instanceName, "notConnected")
+          if (streak.notConnected < RECONCILE_NOT_CONNECTED_STREAK) {
+            deferred += 1
+            console.warn(
+              `[whatsapp-reconcile] ${row.instanceName} not-connected (${streak.notConnected}/${RECONCILE_NOT_CONNECTED_STREAK}) — aguardando confirmação`,
+            )
+            // Tentativa precoce de keep-alive (sem esperar streak completo).
+            if (streak.notConnected === 1) {
+              void tryKeepAliveAfterClose(
+                { prisma, emitWhatsAppToUser, formatConnectionPayload },
+                {
+                  userId: row.userId,
+                  instanceName: row.instanceName,
+                  evolutionHost: row.evolutionHost,
+                },
+              ).catch(() => {})
+            }
+            return
+          }
+          const conn = await markConnectionDisconnected(row.userId, row, { clearQr: false })
+          clearReconcileFailStreak(row.instanceName)
+          downgraded += 1
+          emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(conn))
+        } catch (err) {
+          if (isEvolutionUnreachableError(err)) {
+            const streak = bumpReconcileFailStreak(row.instanceName, "unreachable")
+            if (streak.unreachable < RECONCILE_UNREACHABLE_STREAK) {
+              deferred += 1
+              console.warn(
+                `[whatsapp-reconcile] ${row.instanceName} unreachable (${streak.unreachable}/${RECONCILE_UNREACHABLE_STREAK}): ${err?.message || err}`,
+              )
+              return
+            }
+            const conn = await markConnectionDisconnected(row.userId, row, { clearQr: false })
+            clearReconcileFailStreak(row.instanceName)
+            downgraded += 1
+            emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(conn))
+          } else {
+            console.warn("[whatsapp-reconcile]", row.instanceName, err?.message || err)
+          }
+        }
+      }),
+    )
+  }
+  if (downgraded || deferred) {
+    console.warn(
+      `[whatsapp-reconcile] downgraded=${downgraded} deferred=${deferred} (unreachable≥${RECONCILE_UNREACHABLE_STREAK}, notConnected≥${RECONCILE_NOT_CONNECTED_STREAK})`,
+    )
+  }
+}
+
 async function warmAllEvolutionHosts() {
   const rows = await prisma.whatsAppConnection.findMany({
     select: { instanceName: true, evolutionHost: true },
@@ -4571,6 +5200,15 @@ httpServer.listen(port, () => {
       if (r.created > 0) console.log(`[bootstrap] backfill orgs: ${r.created} empresa(s) criada(s).`)
     })
     .catch((err) => console.error("[bootstrap] backfillAllUserOrganizations:", err?.message || err))
+  void backfillWhatsAppPhoneDigits(prisma)
+    .then((r) => {
+      if (r.filled || r.cleared) {
+        console.log(
+          `[bootstrap] phoneDigits claim: filled=${r.filled} cleared=${r.cleared} scanned=${r.scanned}`,
+        )
+      }
+    })
+    .catch((err) => console.error("[bootstrap] backfillWhatsAppPhoneDigits:", err?.message || err))
   void syncLegacyCadenceStatus().catch((err) => console.error("[bootstrap] syncLegacyCadenceStatus:", err?.message || err))
   void migrateStoredX1Templates(prisma).catch((err) => console.error("[bootstrap] migrateStoredX1Templates:", err?.message || err))
   void warmAllEvolutionHosts()
@@ -4618,6 +5256,62 @@ httpServer.listen(port, () => {
     }, CRM_MAINTENANCE_INTERVAL_MS)
     console.log(
       `Manutenção CRM ativa (a cada ${CRM_MAINTENANCE_INTERVAL_MS / 60000} min — compacta raw e limpa entregas).`,
+    )
+
+    let reconcileBusy = false
+    setInterval(() => {
+      if (reconcileBusy) return
+      reconcileBusy = true
+      void reconcileConnectedWhatsAppInstances()
+        .catch((err) => console.error("[whatsapp-reconcile]", err?.message || err))
+        .finally(() => {
+          reconcileBusy = false
+        })
+    }, WHATSAPP_RECONCILE_INTERVAL_MS)
+    console.log(
+      `Reconciliação WhatsApp ativa (a cada ${WHATSAPP_RECONCILE_INTERVAL_MS / 60000} min — detecta Evo morta).`,
+    )
+
+    let syncHealthBusy = false
+    setInterval(() => {
+      if (syncHealthBusy) return
+      syncHealthBusy = true
+      void (async () => {
+        const { cancelStuckCrmSyncJobs } = require("./lib/crmSync")
+        const stuck = await cancelStuckCrmSyncJobs(prisma).catch(() => null)
+        if (stuck?.cancelled) {
+          console.warn(`[crm-sync] cancelou ${stuck.cancelled} job(s) running órfão(s)`)
+        }
+        await runWhatsappSyncHealthWatchdog({
+          prisma,
+          emitWhatsAppToUser,
+          formatConnectionPayload,
+          markConnectionDisconnected,
+          scheduleBackfill: scheduleCrmBackfillAfterRecovery,
+        })
+      })()
+        .catch((err) => console.error("[sync-health]", err?.message || err))
+        .finally(() => {
+          syncHealthBusy = false
+        })
+    }, WHATSAPP_SYNC_HEALTH_INTERVAL_MS)
+    console.log(
+      `Watchdog sync WhatsApp ativo (a cada ${WHATSAPP_SYNC_HEALTH_INTERVAL_MS / 1000}s — detecta sessão zombie sem webhook).`,
+    )
+
+    const { runLidOrphanTick, LID_ORPHAN_INTERVAL_MS } = require("./lib/crmLidOrphanJob")
+    let lidOrphanBusy = false
+    setInterval(() => {
+      if (lidOrphanBusy) return
+      lidOrphanBusy = true
+      void runLidOrphanTick(getCrmDeps())
+        .catch((err) => console.error("[lid-orphan]", err?.message || err))
+        .finally(() => {
+          lidOrphanBusy = false
+        })
+    }, LID_ORPHAN_INTERVAL_MS)
+    console.log(
+      `Job órfãos LID ativo (a cada ${LID_ORPHAN_INTERVAL_MS / 1000}s — resolve telefone + arquiva LID legado inativo).`,
     )
 
     // Após subir, limpa mídia legada em entregas já concluídas (recuperação pós disco cheio).

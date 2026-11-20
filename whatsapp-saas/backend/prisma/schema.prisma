@@ -35,19 +35,36 @@ model User {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
   subscriptions      Subscription[]
+  pushSubscriptions  PushSubscription[]
   whatsappConnection WhatsAppConnection?
   whatsappGroups     WhatsAppGroup[]
   metaIntegration    MetaIntegration?
   organizationMember OrganizationMember?
 }
 
+/** Web Push (PWA) — endpoint por dispositivo/browser do usuário. */
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
 model Organization {
-  id        String               @id @default(cuid())
+  id        String                @id @default(cuid())
   name      String
-  createdAt DateTime             @default(now())
-  updatedAt DateTime             @updatedAt
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
   members   OrganizationMember[]
   invites   OrgInvite[]
+  aiConfig  OrganizationAiConfig?
 }
 
 model OrganizationMember {
@@ -132,7 +149,16 @@ model WhatsAppConnection {
   connected           Boolean   @default(false)
   qrCode              String?
   phone               String?
+  /// Dígitos normalizados do WhatsApp conectado — unique global (1 número = 1 conta).
+  phoneDigits         String?   @unique
   lastSync            DateTime?
+  /// Último webhook de mensagem (MESSAGES_UPSERT/SET) recebido desta instância.
+  lastWebhookAt       DateTime?
+  /// HEALTHY | STALE | RECOVERING | UNKNOWN — health real além do state "open" da Evolution.
+  syncHealth          String    @default("UNKNOWN")
+  staleDetectedAt     DateTime?
+  staleRecoveryCount  Int       @default(0)
+  staleLastRecoveryAt DateTime?
   groupSyncStatus     String    @default("IDLE")
   groupSyncProgress   Int       @default(0)
   groupSyncMessage    String?
@@ -151,6 +177,7 @@ model WhatsAppConnection {
   updatedAt           DateTime  @updatedAt
 
   @@index([instanceName])
+  @@index([connected, syncHealth])
 }
 
 model WhatsAppGroup {
@@ -553,6 +580,8 @@ model CrmFlow {
   userId                  String
   name                    String
   enabled                 Boolean      @default(false)
+  /// Momento da última ativação (false→true). Fluxos só reagem a eventos depois disso.
+  enabledAt               DateTime?
   trigger                 Json // { type: "new_conversation" | "keyword" | "no_reply" | "stage_change", ... }
   conditions              Json? // [{ field, op, value }]
   actions                 Json // [{ type: "send_message" | "add_tag" | "move_stage" | "assign_ai" | "set_status", ... }]
@@ -579,9 +608,26 @@ model CrmFlowRun {
   @@index([userId, createdAt])
 }
 
+model OrganizationAiConfig {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  apiKeyEnc      String
+  apiKeyLast4    String
+  baseUrl        String       @default("https://api.openai.com/v1")
+  updatedAt      DateTime     @updatedAt
+}
+
 model CrmAiAgent {
   id                        String   @id @default(cuid())
   userId                    String
+  organizationId            String?
+  /// all = todos os números da empresa; member = só o WhatsApp de numberUserId
+  numberScope               String   @default("all")
+  numberUserId              String?
+  /// all = todos os quadros; member = só o kanban de boardUserId
+  boardScope                String   @default("all")
+  boardUserId               String?
   name                      String
   enabled                   Boolean  @default(false)
   systemPrompt              String
@@ -607,6 +653,7 @@ model CrmAiAgent {
   knowledge                 CrmAiAgentKnowledge[]
 
   @@index([userId])
+  @@index([organizationId])
 }
 
 model CrmAiAgentKnowledge {
@@ -619,9 +666,10 @@ model CrmAiAgentKnowledge {
   contentText String     @db.Text
   mimeType    String?
   fileSize    Int?
+  sortOrder   Int        @default(0)
   createdAt   DateTime   @default(now())
 
-  @@index([agentId])
+  @@index([agentId, sortOrder])
   @@index([userId])
 }
 
@@ -659,12 +707,17 @@ model CrmSyncJob {
   id            String    @id @default(cuid())
   userId        String
   scope         String    @default("all") // all | remoteJid específico
-  status        String    @default("running") // running | done | error | rate_limited | cancelled
+  /// running | done | partial | error | rate_limited | cancelled
+  status        String    @default("running")
   totalChats    Int       @default(0)
   doneChats     Int       @default(0)
   totalMessages Int       @default(0)
   currentChat   String?
   cutoffDate    DateTime?
+  /// Checkpoint para sync além do batch (continuar de onde parou).
+  cursorOffset  Int       @default(0)
+  /// ok | empty_store | capped | null
+  discoveryStatus String?
   error         String?
   retryAfter    DateTime?
   startedAt     DateTime  @default(now())

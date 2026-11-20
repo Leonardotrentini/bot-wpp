@@ -3,10 +3,11 @@ import { DashboardSidebar } from './DashboardSidebar.jsx'
 import { DashboardHeader } from './DashboardHeader.jsx'
 import { ReminderAlertsProvider } from '../../contexts/ReminderAlertsContext.jsx'
 import { MetaPixelLoader } from '../integrations/MetaPixelLoader.jsx'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
+import { syncWebPushIfGranted } from '../../lib/webPushClient.js'
 import { Button } from '../common/Button.jsx'
 import { Eye } from 'lucide-react'
 
@@ -32,6 +33,11 @@ export function DashboardLayout() {
   const { width, isMobile } = useSidebar()
   const { user, isImpersonating, impersonation, exitImpersonation } = useAuth()
   const demoMode = !resolveUseRealApi()
+
+  useEffect(() => {
+    if (!user?.id || demoMode || isImpersonating) return
+    void syncWebPushIfGranted()
+  }, [user?.id, demoMode, isImpersonating])
 
   const title = useMemo(() => {
     if (pathname.startsWith('/dashboard/groups/') && pathname !== '/dashboard/groups') return 'Detalhes do grupo'

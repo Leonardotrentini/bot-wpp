@@ -9,6 +9,7 @@ import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
 import { updateProfile, fetchOrgMembers, updateOrgMemberAvatar } from '../../services/api.js'
 import { AVATAR_MAX_INPUT_BYTES, resizeAvatarFile } from '../../lib/avatarImage.js'
+import { PushNotificationsCard } from '../../components/pwa/PushNotificationsCard.jsx'
 
 function emptyProfileForm(user) {
   return {
@@ -223,6 +224,8 @@ export function Settings() {
         <h2 className="text-xl font-semibold text-stone-50">Configurações</h2>
         <p className="mt-1 text-sm text-stone-400">Gerencie seus dados de acesso e preferências da conta.</p>
       </div>
+
+      <PushNotificationsCard />
 
       <Card className="space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
