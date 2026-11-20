@@ -316,10 +316,8 @@ export function Chat() {
       return raw
     }
   })
-  const { keyboardOpen: vvKeyboardOpen } = useVisualViewportHeight(
-    Boolean(isMobileLayout && activeId),
-    chatShellRef,
-  )
+  // Hook só pelo efeito no DOM (altura do shell); keyboardOpen não precisa no React agora
+  useVisualViewportHeight(Boolean(isMobileLayout && activeId), chatShellRef)
   /** Evita limpar a thread na 1ª montagem (só ao trocar filtro de membro/tag/estágio). */
   const filtersMountedRef = useRef(false)
   const [messages, setMessages] = useState([])
@@ -428,25 +426,8 @@ export function Chat() {
     }
   }, [isMobileLayout, activeId])
 
-  // Teclado abriu: rola pro fim só depois do settle (evita “sobe e volta” no meio da animação).
-  const prevKeyboardOpenRef = useRef(false)
-  useEffect(() => {
-    if (!isMobileLayout || !activeId) {
-      prevKeyboardOpenRef.current = false
-      return
-    }
-    const justOpened = vvKeyboardOpen && !prevKeyboardOpenRef.current
-    prevKeyboardOpenRef.current = vvKeyboardOpen
-    if (!justOpened) return
-    const t = window.setTimeout(() => {
-      const el = threadRef.current
-      if (!el) return
-      // Só mexe se ainda não estiver perto do fim
-      const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-      if (dist > 24) el.scrollTop = el.scrollHeight
-    }, 260)
-    return () => window.clearTimeout(t)
-  }, [isMobileLayout, activeId, vvKeyboardOpen])
+  // Não rolar a thread ao abrir teclado — isso + sync do VV causava “sobe e volta”.
+  // Mensagens já ficam no fim via justify-end.
 
   useEffect(() => {
     conversationsRef.current = conversations

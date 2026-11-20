@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 
 /**
- * iOS Safari + teclado: sincroniza um shell `position:fixed` com o visualViewport.
- * - Aplica top/height no DOM via ref (sem re-render a cada frame → sem tremor)
- * - Expõe só `keyboardOpen` no React (padding do composer etc.)
+ * iOS Safari + teclado: sincroniza altura do shell fixed com o visualViewport.
+ * - top sempre 0 (aplicar offsetTop causava “sobe e volta”)
+ * - height acompanha vv.height via rAF
+ * - se o Safari deslocar a página, zera scrollY (sem mexer no top do shell)
  *
  * @param {boolean} enabled
  * @param {React.RefObject<HTMLElement|null>} [shellRef]
@@ -25,28 +26,30 @@ export function useVisualViewportHeight(enabled = true, shellRef = null) {
 
     let raf = 0
     let lastOpen = false
-    let settleTimer = 0
+    let lastH = -1
 
     const applyToDom = () => {
       const el = shellRef?.current
       if (!el) return
       const h = Math.max(1, Math.round(vv.height))
-      const top = Math.max(0, Math.round(vv.offsetTop || 0))
-      el.style.top = `${top}px`
-      el.style.height = `${h}px`
-      el.style.maxHeight = `${h}px`
+      // top fixo 0 — offsetTop no iOS gera o salto sobe/volta ao focar o input
+      el.style.top = '0px'
+      if (Math.abs(h - lastH) >= 1) {
+        lastH = h
+        el.style.height = `${h}px`
+        el.style.maxHeight = `${h}px`
+      }
     }
 
     const apply = () => {
       raf = 0
+      // Evita buraco preto se o Safari scrollar o layout por baixo do fixed
+      if (window.scrollY !== 0) window.scrollTo(0, 0)
       applyToDom()
 
       const h = Math.max(1, Math.round(vv.height))
-      // Com interactive-widget=resizes-content, innerHeight também encolhe —
-      // comparar com screen.height é mais estável no iOS.
-      const baseline = Math.max(window.innerHeight, window.screen?.height ? window.screen.height * 0.5 : 0)
+      const baseline = Math.max(window.innerHeight, (window.screen?.height || 0) * 0.5)
       const open = h < baseline * 0.82
-
       if (open !== lastOpen) {
         lastOpen = open
         setKeyboardOpen(open)
@@ -54,31 +57,20 @@ export function useVisualViewportHeight(enabled = true, shellRef = null) {
     }
 
     const schedule = () => {
-      // Durante a animação do teclado, só agenda o settle final —
-      // aplicar a cada rAF + settle gerava “sobe e volta”.
-      window.clearTimeout(settleTimer)
-      settleTimer = window.setTimeout(() => {
-        if (raf) window.cancelAnimationFrame(raf)
-        raf = window.requestAnimationFrame(apply)
-      }, 120)
+      if (raf) return
+      raf = window.requestAnimationFrame(apply)
     }
 
     apply()
     vv.addEventListener('resize', schedule)
-    // scroll do VV é necessário p/ offsetTop (grudar no teclado); DOM direto evita tremor do React
     vv.addEventListener('scroll', schedule)
     window.addEventListener('orientationchange', schedule)
-    // Foco: não sincroniza no focusin (Safari ainda está animando) — só no settle via resize/scroll
-    window.addEventListener('focusout', schedule)
 
     return () => {
       if (raf) window.cancelAnimationFrame(raf)
-      window.clearTimeout(settleTimer)
       vv.removeEventListener('resize', schedule)
       vv.removeEventListener('scroll', schedule)
       window.removeEventListener('orientationchange', schedule)
-      window.removeEventListener('focusin', schedule)
-      window.removeEventListener('focusout', schedule)
       const el = shellRef?.current
       if (el) {
         el.style.top = ''
