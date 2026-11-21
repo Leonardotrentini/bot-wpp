@@ -83,11 +83,33 @@ export const ACTIVATION_MODE_LABELS = {
   auto_stage: 'Automático — etapa do kanban',
 }
 
+export const TOOLS_SETUP_SNIPPET = `FERRAMENTAS DO CRM
+Use as ferramentas só quando a conversa justificar. Não fale com o cliente em linguagem de sistema.
+
+- Adicionar tag: quando o lead se encaixar numa etiqueta já existente.
+- Remover tag: quando a etiqueta antiga deixar de valer.
+- Mover etapa do kanban: quando o lead avançar de fase.
+- Transferir para humano: reclamação, negociação fora da tabela ou pedido explícito de atendente. Nesse caso responda apenas TRANSFERIR_HUMANO.`
+
 export const AI_TOOL_LABELS = {
   add_tag: 'Adicionar tag',
   remove_tag: 'Remover tag',
   move_stage: 'Mover etapa do kanban',
   handoff: 'Transferir para humano',
+}
+
+export function describeAgentAudience(agent, members = []) {
+  const nameOf = (id) => members.find((member) => member.userId === id)?.name || 'vendedor'
+  const number =
+    agent?.numberScope === 'member' && agent?.numberUserId
+      ? `Número de ${nameOf(agent.numberUserId)}`
+      : 'Todos os números'
+  const board =
+    agent?.boardScope === 'member' && agent?.boardUserId
+      ? `Quadro/kanban de ${nameOf(agent.boardUserId)}`
+      : 'Todos os quadros'
+  const when = ACTIVATION_MODE_LABELS[agent?.activationMode] || 'Manual'
+  return `${number} · ${board} · ${when}`
 }
 
 export function getAgentTemplate(id) {
