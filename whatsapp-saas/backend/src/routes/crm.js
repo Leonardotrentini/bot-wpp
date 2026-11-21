@@ -57,7 +57,14 @@ const {
 const { startCrmSync, cancelCrmSync, getCrmSyncStatus } = require("../lib/crmSync")
 const { syncContactProfiles, enqueueAvatarFetches } = require("../lib/crmProfile")
 const { ensureMessageRaw, readStoredMessageMedia, buildOutboundMessageRaw, stripMediaBase64 } = require("../lib/crmMedia")
-const { onStageChange, notifyTagAddedForContact, testFlowOnConversation, dispatchCrmMessageFlows } = require("../lib/crmFlows")
+const {
+  onStageChange,
+  onTagRemoved,
+  notifyTagAddedForContact,
+  testFlowOnConversation,
+  dispatchCrmMessageFlows,
+  onHumanOutboundMessage,
+} = require("../lib/crmFlows")
 const { importCrmPack } = require("../lib/crmPackImport")
 const { processPendingCrmDeliveries, flushCrmDeliveries } = require("../lib/crmDelivery")
 const { ensureWhatsAppConnected } = require("../lib/whatsappConnection")
@@ -181,6 +188,7 @@ function formatFlowRow(flow) {
     actions: flow.actions,
     cooldownPerContactHours: flow.cooldownPerContactHours,
     quietHours: flow.quietHours || null,
+    cancelIfHumanReplies: flow.cancelIfHumanReplies !== false,
     createdAt: flow.createdAt.toISOString(),
   }
 }
@@ -195,9 +203,16 @@ function flowEnabledAtData(nextEnabled, previousEnabled) {
 function validateFlowActions(actions) {
   for (const action of actions) {
     if (action.type !== "send_message") continue
+    const hasBody =
+      String(action.body || "").trim() ||
+      (Array.isArray(action.bodyVariants) && action.bodyVariants.some((v) => String(v || "").trim()))
+    const mediaType = action.mediaType || "none"
+    if (!hasBody && mediaType === "none") {
+      return "Ação Enviar mensagem precisa de texto ou mídia."
+    }
     const err = validateMediaContentSize({
       body: action.body || "",
-      mediaType: action.mediaType || "none",
+      mediaType,
       mediaBase64: action.mediaBase64,
       mediaMime: action.mediaMime,
       mediaName: action.mediaName,
@@ -676,6 +691,10 @@ function createCrmRouter({ io }) {
         message: formatMessageRow(message),
       })
 
+      onHumanOutboundMessage({ prisma, io, sendText }, { conversationId: convo.id, userId }).catch((err) =>
+        console.warn("[crm-flow] cancel on human send:", err?.message || err),
+      )
+
       if (resp?._ackOk === false) {
         return res.status(502).json({
           error: "DELIVERY_NOT_CONFIRMED",
@@ -968,6 +987,9 @@ function createCrmRouter({ io }) {
           conversationId: target.id,
           message: formatMessageRow(created),
         })
+        onHumanOutboundMessage({ prisma, io, sendText }, { conversationId: target.id, userId: target.userId }).catch(
+          (err) => console.warn("[crm-flow] cancel on forward:", err?.message || err),
+        )
         results.push({ conversationId: targetId, ok: true, messageId: created.id })
       } catch (err) {
         console.error("[crm] forward:", err?.message || err)
@@ -1120,9 +1142,15 @@ function createCrmRouter({ io }) {
         },
       }).catch((err) => console.error("[crm-activity] stage_changed:", err?.message || err))
 
-      onStageChange({ prisma, io, sendText }, { conversation: updated, stageId: nextStageId }).catch((err) =>
-        console.error("[crm-flow] stage_change:", err?.message || err),
-      )
+      onStageChange(
+        { prisma, io, sendText },
+        {
+          conversation: updated,
+          stageId: nextStageId,
+          previousStageId: convo.kanbanStageId || null,
+          cancelBrokenConditions: true,
+        },
+      ).catch((err) => console.error("[crm-flow] stage_change:", err?.message || err))
 
       mirrorStageChangeToWhatsapp(prisma, {
         userId,
@@ -1773,6 +1801,15 @@ function createCrmRouter({ io }) {
         type: "tag_removed",
         payload: { tagId: tag.id, tagName: tag.name },
       }).catch((err) => console.error("[crm-activity] tag_removed:", err?.message || err))
+    }
+    const conversation = await prisma.crmConversation.findFirst({
+      where: { contactId: contact.id, userId },
+      include: CONVERSATION_INCLUDE,
+    })
+    if (conversation && tag?.id) {
+      onTagRemoved({ prisma, io, sendText }, { conversation, tagId: tag.id }).catch((err) =>
+        console.warn("[crm-flow] tag_removed cancel:", err?.message || err),
+      )
     }
     const updated = await prisma.crmContact.findUnique({
       where: { id: contact.id },
@@ -2448,6 +2485,7 @@ function createCrmRouter({ io }) {
       stageId: z.string().nullable().optional(),
       tagId: z.string().nullable().optional(),
       tagIds: z.array(z.string().min(1)).max(20).optional(),
+      firstReplyOnly: z.boolean().optional(),
     }),
     conditions: z
       .array(
@@ -2472,6 +2510,7 @@ function createCrmRouter({ io }) {
         z.object({
           type: z.enum(["send_message", "add_tag", "remove_tag", "move_stage", "assign_ai", "set_status", "stop_flows"]),
           body: z.string().max(4096).optional(),
+          bodyVariants: z.array(z.string().max(4096)).max(2).optional(),
           mediaType: z.enum(["none", "image", "video", "audio", "document"]).optional(),
           mediaBase64: z.string().optional().nullable(),
           mediaMime: z.string().max(120).optional().nullable(),
@@ -2489,6 +2528,7 @@ function createCrmRouter({ io }) {
       .max(10),
     cooldownPerContactHours: z.number().int().min(0).max(720).optional().default(24),
     quietHours: quietHoursSchema,
+    cancelIfHumanReplies: z.boolean().optional().default(true),
   })
 
   router.get("/flows", async (req, res) => {
@@ -2504,12 +2544,6 @@ function createCrmRouter({ io }) {
     }
     if (parsed.data.trigger.type === "tag_added" && !parsed.data.trigger.tagId) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione a tag do gatilho." })
-    }
-    if (parsed.data.trigger.type === "contact_reply" && !parsed.data.trigger.tagIds?.length) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        message: "Selecione ao menos uma tag para o gatilho de resposta.",
-      })
     }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })
@@ -2533,12 +2567,6 @@ function createCrmRouter({ io }) {
     }
     if (parsed.data.trigger.type === "tag_added" && !parsed.data.trigger.tagId) {
       return res.status(400).json({ error: "VALIDATION_ERROR", message: "Selecione a tag do gatilho." })
-    }
-    if (parsed.data.trigger.type === "contact_reply" && !parsed.data.trigger.tagIds?.length) {
-      return res.status(400).json({
-        error: "VALIDATION_ERROR",
-        message: "Selecione ao menos uma tag para o gatilho de resposta.",
-      })
     }
     const actionError = validateFlowActions(parsed.data.actions)
     if (actionError) return res.status(400).json({ error: "VALIDATION_ERROR", message: actionError })

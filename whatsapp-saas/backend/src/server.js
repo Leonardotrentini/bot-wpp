@@ -81,7 +81,6 @@ const {
 } = require("./lib/evolution")
 const {
   touchLastWebhookAt,
-  markSyncHealthy,
   appendSyncHealthPayload,
   runWhatsappSyncHealthWatchdog,
   backfillRecentCrmAfterRecovery,
@@ -169,7 +168,12 @@ const {
   PROBE_FAIL_STREAK,
 } = require("./lib/whatsappConnection")
 const { scheduleProfileFetch, contactNeedsProfile, contactNeedsIdentification } = require("./lib/crmProfile")
-const { onCrmMessage, processNoReplyFlows, dispatchCrmMessageFlows } = require("./lib/crmFlows")
+const {
+  onCrmMessage,
+  processNoReplyFlows,
+  dispatchCrmMessageFlows,
+  onHumanOutboundMessage,
+} = require("./lib/crmFlows")
 const { processPendingCrmDeliveries } = require("./lib/crmDelivery")
 const { runCrmStorageMaintenance } = require("./lib/crmMaintenance")
 const { processDueContactReminders } = require("./lib/crmContactReminders")
@@ -3992,7 +3996,7 @@ function scheduleCrmBackfillAfterRecovery(userId, instanceName, reason = "recove
       } catch (err) {
         console.warn("[sync-health] resolveLidPhones:", err?.message || err)
       }
-      await backfillRecentCrmAfterRecovery(deps, { userId, instanceName })
+      const backfill = await backfillRecentCrmAfterRecovery(deps, { userId, instanceName })
       // Discovery parcial: se store voltou, puxa inventário (checkpointed).
       try {
         const { startCrmSync, isSyncRunning } = require("./lib/crmSync")
@@ -4001,6 +4005,46 @@ function scheduleCrmBackfillAfterRecovery(userId, instanceName, reason = "recove
         }
       } catch (err) {
         console.warn("[sync-health] discovery sync:", err?.message || err)
+      }
+      // Replay Meta ConversationStarted só com 1ª inbound real no CRM (janela 7d). Não inventa.
+      // Cobertura: max(48h, desde lastWebhookAt-2h) pra pegar o buraco do zombie no reconnect.
+      try {
+        const { replayConversationStartedGap } = require("./lib/metaConversions")
+        const connRow = await prisma.whatsAppConnection
+          .findUnique({
+            where: { userId },
+            select: { lastWebhookAt: true },
+          })
+          .catch(() => null)
+        const fortyEightH = new Date(Date.now() - 48 * 60 * 60 * 1000)
+        const fromWebhook = connRow?.lastWebhookAt
+          ? new Date(new Date(connRow.lastWebhookAt).getTime() - 2 * 60 * 60 * 1000)
+          : null
+        const since =
+          fromWebhook && fromWebhook.getTime() < fortyEightH.getTime() ? fromWebhook : fortyEightH
+        const replay = await replayConversationStartedGap(prisma, {
+          userId,
+          since,
+          dryRun: false,
+          limit: 500,
+        })
+        console.warn(
+          JSON.stringify({
+            tag: "meta-replay",
+            reason,
+            instanceName,
+            since: since.toISOString(),
+            lastWebhookAt: connRow?.lastWebhookAt?.toISOString?.() || null,
+            backfillImported: backfill?.importedTotal ?? null,
+            candidates: replay?.candidates ?? 0,
+            sent: replay?.sent ?? 0,
+            skipped: replay?.skipped ?? 0,
+            withAds: replay?.withAdsAttribution ?? 0,
+            withoutAds: replay?.withoutAdsAttribution ?? 0,
+          }),
+        )
+      } catch (err) {
+        console.warn("[meta-replay] after backfill:", err?.message || err)
       }
     })().catch((err) => console.error("[sync-health] backfill:", err?.message || err))
   }, 2500)
@@ -4354,6 +4398,11 @@ async function handleCrmIncomingRecord(userId, record, instanceName = null, opti
       },
       { priority: "normal" },
     )
+  } else if (!["flow", "ai"].includes(message.source)) {
+    // Humano no WhatsApp (ou espelho): cancela fila de fluxos com cancelIfHumanReplies.
+    onHumanOutboundMessage(getCrmDeps(), { conversationId: conversation.id, userId }).catch((err) =>
+      console.warn("[crm-flow] cancel on human webhook:", err?.message || err),
+    )
   }
 }
 
@@ -4686,12 +4735,25 @@ async function processEvolutionWebhookEvent(event, instanceName, body, options =
       select: { connected: true, userId: true, syncHealth: true, evolutionHost: true },
     })
     const conn = await updateConnectionFromWebhook(instanceName, body)
-    // Soft-restart de sessão STALE/RECOVERING também gera open de novo — NÃO marcar HEALTHY
-    // aqui (senão zera o contador de recovery). Só webhook de mensagem prova vida.
+    // Soft-restart / QR open NÃO prova sync viva — só mensagem realtime marca HEALTHY
+    // (anti falso-positivo: "conectado" com funil Meta parado).
     const prevHealth = String(before?.syncHealth || "").toUpperCase()
     const recovering = prevHealth === SYNC_HEALTH.STALE || prevHealth === SYNC_HEALTH.RECOVERING
-    if (conn?.connected && before && !before.connected && !recovering) {
-      await markSyncHealthy(prisma, { instanceName }).catch(() => {})
+    if (conn?.connected && before && !before.connected) {
+      if (!recovering) {
+        // Reconexão limpa: fica RECOVERING até 1ª msg realtime (não HEALTHY).
+        await prisma.whatsAppConnection
+          .update({
+            where: { instanceName },
+            data: {
+              syncHealth: SYNC_HEALTH.RECOVERING,
+              staleDetectedAt: null,
+              staleRecoveryCount: 0,
+              staleLastRecoveryAt: new Date(),
+            },
+          })
+          .catch(() => {})
+      }
       scheduleCrmBackfillAfterRecovery(conn.userId, instanceName, "connection-update")
     }
     // Queda real: tenta voltar sem logout/QR (keep-alive).
@@ -5067,6 +5129,15 @@ async function refreshConnectedInstanceWebhooks() {
   if (isSecondaryConfigured()) {
     console.log("[evolution] Evo2 (secondary) configurada — novas conexões WhatsApp usam a Evo2.")
   }
+  try {
+    const { refreshDynamicHostsFromDb } = require("./lib/evolutionHosts")
+    const dyn = await refreshDynamicHostsFromDb(prisma)
+    if (dyn?.length) {
+      console.log(`[evolution] ${dyn.length} host(s) dinâmico(s) ready (Evo3+).`)
+    }
+  } catch (err) {
+    console.warn("[evolution] hosts dinâmicos:", err?.message || err)
+  }
 }
 
 /**
@@ -5277,10 +5348,16 @@ httpServer.listen(port, () => {
       if (syncHealthBusy) return
       syncHealthBusy = true
       void (async () => {
-        const { cancelStuckCrmSyncJobs } = require("./lib/crmSync")
-        const stuck = await cancelStuckCrmSyncJobs(prisma).catch(() => null)
-        if (stuck?.cancelled) {
-          console.warn(`[crm-sync] cancelou ${stuck.cancelled} job(s) running órfão(s)`)
+        try {
+          const crmSync = require("./lib/crmSync")
+          if (typeof crmSync.cancelStuckCrmSyncJobs === "function") {
+            const stuck = await crmSync.cancelStuckCrmSyncJobs(prisma).catch(() => null)
+            if (stuck?.cancelled) {
+              console.warn(`[crm-sync] cancelou ${stuck.cancelled} job(s) running órfão(s)`)
+            }
+          }
+        } catch (err) {
+          console.warn("[crm-sync] cancelStuck:", err?.message || err)
         }
         await runWhatsappSyncHealthWatchdog({
           prisma,

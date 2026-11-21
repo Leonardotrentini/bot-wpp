@@ -19,8 +19,11 @@ export function emptyFlowMessageMedia() {
 
 export function flowMessageHasContent(action) {
   const body = String(action?.body || '').trim()
+  const variants = Array.isArray(action?.bodyVariants)
+    ? action.bodyVariants.some((v) => String(v || '').trim())
+    : false
   const mediaType = action?.mediaType || 'none'
-  return Boolean(body) || mediaType !== 'none'
+  return Boolean(body) || variants || mediaType !== 'none'
 }
 
 export const attachFlowMediaFromFile = attachQuickReplyMediaFromFile
@@ -43,8 +46,13 @@ function appendActionDelayFields(out, action) {
 
 export function stripFlowActionForSave(action) {
   if (action.type === 'send_message') {
-    const { mediaPreviewUrl, mediaSize, ...rest } = action
-    return appendActionDelayFields(rest, action)
+    const { mediaPreviewUrl, mediaSize, bodyVariants, ...rest } = action
+    const variants = Array.isArray(bodyVariants)
+      ? bodyVariants.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 2)
+      : []
+    const out = { ...rest }
+    if (variants.length) out.bodyVariants = variants
+    return appendActionDelayFields(out, action)
   }
   if (action.type === 'add_tag') {
     return appendActionDelayFields({ type: 'add_tag', tagId: String(action.tagId || '') }, action)
@@ -87,6 +95,8 @@ function cleanFlowTrigger(trigger) {
   if (type === 'no_reply') {
     const ui = getNoReplyDelayUi(trigger)
     Object.assign(out, buildNoReplyTriggerPatch(ui.value, ui.unit))
+    // Default ligado: só conversas criadas depois deste fluxo (não varre legado).
+    out.onlyAfterFlowCreated = trigger.onlyAfterFlowCreated !== false
   }
   if (type === 'stage_change' && trigger.stageId) {
     out.stageId = String(trigger.stageId)
@@ -97,8 +107,19 @@ function cleanFlowTrigger(trigger) {
   if (type === 'contact_reply') {
     const raw = Array.isArray(trigger.tagIds) ? trigger.tagIds : []
     out.tagIds = [...new Set(raw.map((id) => String(id || '').trim()).filter(Boolean))].slice(0, 20)
+    if (trigger.firstReplyOnly === true) out.firstReplyOnly = true
   }
   return out
+}
+
+function cleanFlowQuietHours(quietHours) {
+  if (!quietHours || quietHours.enabled !== true) return null
+  const re = /^([01]?\d|2[0-3]):[0-5]\d$/
+  return {
+    enabled: true,
+    start: re.test(quietHours.start) ? quietHours.start : '22:00',
+    end: re.test(quietHours.end) ? quietHours.end : '08:00',
+  }
 }
 
 /** Payload normalizado para API (salvar ou testar rascunho). */
@@ -110,6 +131,8 @@ export function buildFlowApiPayload(flow) {
     conditions: buildFlowConditions(flow),
     actions: (flow?.actions || []).map(stripFlowActionForSave),
     cooldownPerContactHours: normalizeFlowCooldown(flow?.cooldownPerContactHours),
+    quietHours: cleanFlowQuietHours(flow?.quietHours),
+    cancelIfHumanReplies: flow?.cancelIfHumanReplies !== false,
   }
 }
 

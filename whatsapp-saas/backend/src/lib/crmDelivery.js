@@ -14,6 +14,7 @@ const {
   assertOutboundRecipient,
   validateOutboundMediaPayload,
 } = require("./crmOutboundSend")
+const { bumpScheduledAtPastQuietHours, isWithinQuietHours } = require("./flowQuietHours")
 
 const CRM_DELIVERY_BATCH = Number(process.env.CRM_DELIVERY_BATCH || 5)
 const CRM_DELIVERY_GAP_MS = Number(process.env.CRM_DELIVERY_GAP_MS || 2000)
@@ -99,6 +100,15 @@ async function drainReadyDeliveriesForConversation(deps, conversationId) {
   }
 }
 
+async function resolveFlowQuietHours(prisma, delivery) {
+  if (!delivery?.sourceId || delivery.kind !== "flow") return null
+  const flow = await prisma.crmFlow.findUnique({
+    where: { id: delivery.sourceId },
+    select: { quietHours: true },
+  })
+  return flow?.quietHours || null
+}
+
 async function activateNextDelivery(prisma, completedRow) {
   const next = await prisma.crmDelivery.findFirst({
     where: {
@@ -110,9 +120,12 @@ async function activateNextDelivery(prisma, completedRow) {
   })
   if (!next) return
   const delayMs = Number(next.delayAfterPreviousMs) || 0
+  let scheduledAt = new Date(Date.now() + delayMs)
+  const quietHours = await resolveFlowQuietHours(prisma, next)
+  scheduledAt = bumpScheduledAtPastQuietHours(quietHours, scheduledAt)
   await prisma.crmDelivery.update({
     where: { id: next.id },
-    data: { scheduledAt: new Date(Date.now() + delayMs) },
+    data: { scheduledAt },
   })
 }
 
@@ -147,6 +160,30 @@ async function processOneDelivery(deps, delivery, options = {}) {
       data: { status: "failed", error: "WhatsApp desconectado." },
     })
     return
+  }
+
+  if (delivery.kind === "ai") {
+    const { materializeAiDelivery } = require("./crmAiAgent")
+    const ready = await materializeAiDelivery(deps, delivery)
+    if (!ready) return
+    delivery = ready
+  }
+
+  // Quiet hours do fluxo: se ainda estamos no silêncio, reagenda e não envia.
+  if (delivery.kind === "flow" && delivery.sourceId) {
+    const quietHours = await resolveFlowQuietHours(prisma, delivery)
+    if (isWithinQuietHours(quietHours)) {
+      const nextAt = bumpScheduledAtPastQuietHours(quietHours, new Date())
+      await prisma.crmDelivery.update({
+        where: { id: delivery.id },
+        data: {
+          status: "pending",
+          scheduledAt: nextAt,
+          error: null,
+        },
+      })
+      return
+    }
   }
 
   await prisma.crmDelivery.update({ where: { id: delivery.id }, data: { status: "sending" } })

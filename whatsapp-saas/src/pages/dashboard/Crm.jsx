@@ -14,6 +14,7 @@ import {
   Tag as TagIcon,
   Trash2,
   Unplug,
+  AlertTriangle,
   Upload,
   X,
   Zap,
@@ -38,7 +39,8 @@ import { FlowActionsEditor } from '../../components/crm/FlowActionsEditor.jsx'
 import { FlowPreview } from '../../components/crm/FlowPreview.jsx'
 import { FlowTester } from '../../components/crm/FlowTester.jsx'
 import { AgentEditorModal } from '../../components/crm/AgentEditorModal.jsx'
-import { ACTIVATION_MODE_LABELS } from '../../lib/agentPromptTemplates.js'
+import { AgentTestBench } from '../../components/crm/AgentPlayground.jsx'
+import { describeAgentAudience } from '../../lib/agentPromptTemplates.js'
 import { buildQuickReplyPayload, QUICK_REPLY_MEDIA_LABELS } from '../../lib/quickReplyMedia.js'
 import { contactTitle, contactSubtitle, resolveContactPhone, formatPhoneBr, mergeIncomingConversation } from '../../lib/contactDisplay.js'
 import { useCrmAvatarAutoFetch } from '../../hooks/useCrmAvatarAutoFetch.js'
@@ -65,7 +67,9 @@ import {
   flowExtraTriggersValid,
   PRIMARY_TRIGGER_LABELS,
 } from '../../lib/flowTriggers.js'
-import { onSocketEvent } from '../../services/socket.js'
+import { onSocketEvent, onSocketReconnect } from '../../services/socket.js'
+
+const KANBAN_POLL_MS = 25000
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { isConversationInScope } from '../../lib/crmConversationScope.js'
 import { contactHasTag, mergeCrmTagCatalog } from '../../lib/crmTags.js'
@@ -106,6 +110,9 @@ import {
   createCrmAgent,
   updateCrmAgent,
   deleteCrmAgent,
+  getCrmAiSettings,
+  saveCrmAiSettings,
+  deleteCrmAiSettings,
   fetchOrgMembers,
   getWhatsAppStatus,
   refreshCrmContactAvatar,
@@ -118,9 +125,9 @@ const TABS = [
   { id: 'agents', label: 'Agentes IA' },
 ]
 
-function readCrmInitialState() {
-  const boot = getCrmBootstrapCache()
-  const conversations = getBestCachedConversationsList() || []
+function readCrmInitialState(userId) {
+  const boot = getCrmBootstrapCache(userId)
+  const conversations = getBestCachedConversationsList(CRM_CONVERSATIONS_LIST_PARAMS, userId) || []
   const stages = boot?.stages || []
   const hasCachedKanban = conversations.length > 0 || stages.length > 0
   return {
@@ -129,7 +136,10 @@ function readCrmInitialState() {
     tags: boot?.tags || [],
     quickReplies: boot?.quickReplies || [],
     agents: boot?.agents || [],
+    aiConfigured: boot?.aiStatusLoaded ? Boolean(boot.aiConfigured) : false,
+    aiKeyLast4: boot?.aiStatusLoaded ? boot.aiKeyLast4 || null : null,
     waConnected: boot?.waConnected ?? true,
+    waSyncStale: Boolean(boot?.waSyncStale),
     loading: !hasCachedKanban,
   }
 }
@@ -429,6 +439,7 @@ function KanbanQuickEditModal({ conversation, stages, open, onClose, onSaved }) 
   const [notes, setNotes] = useState('')
   const [status, setStatus] = useState('open')
   const [stageId, setStageId] = useState('')
+  const [stageTouched, setStageTouched] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -437,6 +448,7 @@ function KanbanQuickEditModal({ conversation, stages, open, onClose, onSaved }) 
     setNotes(conversation.contact?.notes || '')
     setStatus(conversation.status || 'open')
     setStageId(conversation.kanbanStageId || '')
+    setStageTouched(false)
   }, [conversation])
 
   const save = async () => {
@@ -447,10 +459,11 @@ function KanbanQuickEditModal({ conversation, stages, open, onClose, onSaved }) 
         name: name.trim() || null,
         notes: notes.trim() || null,
       })
-      const convoRes = await patchCrmConversation(conversation.id, {
-        status,
-        kanbanStageId: stageId || null,
-      })
+      const convoPayload = { status }
+      // Só manda estágio se o usuário alterou o select — evita gravar snapshot velho
+      // (ex.: etiqueta WA já moveu o card enquanto o modal estava aberto).
+      if (stageTouched) convoPayload.kanbanStageId = stageId || null
+      const convoRes = await patchCrmConversation(conversation.id, convoPayload)
       onSaved({
         ...convoRes.data.conversation,
         contact: contactRes.data.contact || {
@@ -489,7 +502,14 @@ function KanbanQuickEditModal({ conversation, stages, open, onClose, onSaved }) 
           <option value="resolved">Resolvida</option>
           <option value="archived">Arquivada</option>
         </Select>
-        <Select label="Estágio" value={stageId} onChange={(e) => setStageId(e.target.value)}>
+        <Select
+          label="Estágio"
+          value={stageId}
+          onChange={(e) => {
+            setStageTouched(true)
+            setStageId(e.target.value)
+          }}
+        >
           <option value="">Sem estágio</option>
           {stages.map((s) => (
             <option key={s.id} value={s.id}>
@@ -759,8 +779,10 @@ const EMPTY_FLOW = {
   trigger: { type: 'new_conversation' },
   conditions: [],
   extraTriggers: [],
-  actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }],
+  actions: [{ type: 'send_message', body: '', bodyVariants: [], ...emptyFlowMessageMedia() }],
   cooldownPerContactHours: DEFAULT_FLOW_COOLDOWN_HOURS,
+  quietHours: null,
+  cancelIfHumanReplies: true,
 }
 
 function normalizeKeywordChip(value) {
@@ -869,8 +891,19 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
           ? {
               ...hydrateFlowForEditor(initial),
               cooldownPerContactHours: normalizeFlowCooldown(initial.cooldownPerContactHours),
+              quietHours: initial.quietHours?.enabled
+                ? {
+                    enabled: true,
+                    start: initial.quietHours.start || '22:00',
+                    end: initial.quietHours.end || '08:00',
+                  }
+                : null,
+              cancelIfHumanReplies: initial.cancelIfHumanReplies !== false,
             }
-          : { ...EMPTY_FLOW, actions: [{ type: 'send_message', body: '', ...emptyFlowMessageMedia() }] },
+          : {
+              ...EMPTY_FLOW,
+              actions: [{ type: 'send_message', body: '', bodyVariants: [], ...emptyFlowMessageMedia() }],
+            },
       )
     }
   }, [isOpen, initial])
@@ -906,7 +939,6 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
     flow.actions.length > 0 &&
     (flow.trigger.type !== 'keyword' || (flow.trigger.keywords || []).length > 0) &&
     (flow.trigger.type !== 'tag_added' || Boolean(flow.trigger.tagId)) &&
-    (flow.trigger.type !== 'contact_reply' || (flow.trigger.tagIds || []).length > 0) &&
     flowExtraTriggersValid(flow.extraTriggers || []) &&
     flow.actions.every((a) => {
       if (a.type === 'send_message') return flowMessageHasContent(a)
@@ -1001,6 +1033,20 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
                 <p className="w-full text-[11px] text-stone-500">
                   Ex.: 30 minutos ou 24 horas após a última mensagem sua sem resposta do contato.
                 </p>
+                <label className="mt-2 flex w-full cursor-pointer items-start gap-2 rounded-xl border border-brand-700/60 bg-brand-950/30 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={flow.trigger.onlyAfterFlowCreated !== false}
+                    onChange={(e) => setTrigger({ onlyAfterFlowCreated: e.target.checked })}
+                  />
+                  <span className="text-xs text-stone-300">
+                    Só em conversas criadas depois que o fluxo foi ativado
+                    <span className="mt-0.5 block text-[11px] text-stone-500">
+                      Ligado = não varre histórico antigo. Cada vez que você liga o fluxo, a contagem recomeça desse momento.
+                    </span>
+                  </span>
+                </label>
               </div>
             )
           })()}
@@ -1022,6 +1068,11 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
               <p className="mt-1.5 text-[11px] text-stone-500">
                 “Sem estágio” é a coluna dos cards que ainda não estão em nenhum estágio do Kanban.
               </p>
+              <p className="mt-2 rounded-xl border border-brand-700/60 bg-brand-950/30 px-3 py-2 text-[11px] text-stone-400">
+                Só dispara quando o card <span className="text-stone-200">entra</span> no estágio{' '}
+                <span className="text-stone-200">depois que o fluxo estiver ativo</span>. Ativar não envia para quem já
+                está nele.
+              </p>
             </div>
           )}
           {flow.trigger.type === 'tag_added' && (
@@ -1041,11 +1092,11 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             </div>
           )}
           {flow.trigger.type === 'contact_reply' && (
-            <div className="mt-2">
+            <div className="mt-2 space-y-2">
               <p className="mb-1.5 text-sm font-medium text-stone-300">Somente se o contato tiver a(s) tag(s)</p>
               <div className="max-h-40 space-y-1.5 overflow-y-auto rounded-xl border border-brand-700/70 bg-brand-950/40 p-2">
                 {tags.length === 0 ? (
-                  <p className="px-1 py-2 text-xs text-stone-500">Crie tags no CRM antes de usar este gatilho.</p>
+                  <p className="px-1 py-2 text-xs text-stone-500">Crie tags no CRM para filtrar (opcional).</p>
                 ) : (
                   tags.map((t) => {
                     const checked = (flow.trigger.tagIds || []).includes(t.id)
@@ -1066,10 +1117,24 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
                   })
                 )}
               </div>
-              <p className="mt-1.5 text-[11px] text-stone-500">
-                Dispara na resposta do lead (conversa já existente) se tiver qualquer uma das tags. Obrigatório escolher ao
-                menos 1.
+              <p className="text-[11px] text-stone-500">
+                Opcional. Sem tags = qualquer resposta do lead (conversa já existente). Com tags = dispara se tiver
+                qualquer uma delas. Combine com “Estágio do Kanban é” nos gatilhos adicionais se quiser.
               </p>
+              <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-brand-700/60 bg-brand-950/30 px-3 py-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={flow.trigger.firstReplyOnly === true}
+                  onChange={(e) => setTrigger({ firstReplyOnly: e.target.checked })}
+                />
+                <span className="text-xs text-stone-300">
+                  Somente na primeira resposta do lead nesta conversa
+                  <span className="mt-0.5 block text-[11px] text-stone-500">
+                    Ignora respostas seguintes do mesmo contato nesta conversa.
+                  </span>
+                </span>
+              </label>
             </div>
           )}
         </div>
@@ -1144,6 +1209,76 @@ function FlowModal({ isOpen, onClose, initial, tags, stages, agents, conversatio
             este fluxo repetido em sequência.
           </p>
         </div>
+
+        <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-brand-700/60 bg-brand-950/30 px-3 py-2">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={flow.cancelIfHumanReplies !== false}
+            onChange={(e) => setFlow((f) => ({ ...f, cancelIfHumanReplies: e.target.checked }))}
+          />
+          <span className="text-xs text-stone-300">
+            Cancelar se um humano responder antes
+            <span className="mt-0.5 block text-[11px] text-stone-500">
+              Cancela mensagens ainda em “Aguardar…” se alguém enviar pelo CRM ou pelo WhatsApp. Também cancela se o
+              card sair do estágio/tag que era condição do gatilho.
+            </span>
+          </span>
+        </label>
+
+        <div className="rounded-xl border border-brand-700/60 bg-brand-950/30 p-3">
+          <label className="flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={flow.quietHours?.enabled === true}
+              onChange={(e) =>
+                setFlow((f) => ({
+                  ...f,
+                  quietHours: e.target.checked
+                    ? { enabled: true, start: f.quietHours?.start || '22:00', end: f.quietHours?.end || '08:00' }
+                    : null,
+                }))
+              }
+            />
+            <span className="text-xs text-stone-300">
+              Horário silencioso
+              <span className="mt-0.5 block text-[11px] text-stone-500">
+                Mensagens que cairiam neste intervalo ficam na fila e saem no fim (fuso America/Sao_Paulo).
+              </span>
+            </span>
+          </label>
+          {flow.quietHours?.enabled === true && (
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <div className="w-28">
+                <Input
+                  label="Início"
+                  type="time"
+                  value={flow.quietHours.start || '22:00'}
+                  onChange={(e) =>
+                    setFlow((f) => ({
+                      ...f,
+                      quietHours: { ...(f.quietHours || { enabled: true }), enabled: true, start: e.target.value },
+                    }))
+                  }
+                />
+              </div>
+              <div className="w-28">
+                <Input
+                  label="Fim"
+                  type="time"
+                  value={flow.quietHours.end || '08:00'}
+                  onChange={(e) =>
+                    setFlow((f) => ({
+                      ...f,
+                      quietHours: { ...(f.quietHours || { enabled: true }), enabled: true, end: e.target.value },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+          )}
+        </div>
         </div>
 
         <div className="space-y-4 lg:sticky lg:top-0 lg:self-start">
@@ -1206,6 +1341,10 @@ function buildAgentPayload(agent, overrides = {}) {
     knowledgeText: merged.knowledgeText || '',
     promptTemplateId: merged.promptTemplateId || null,
     locale: merged.locale || 'pt-BR',
+    numberScope: merged.numberScope === 'member' ? 'member' : 'all',
+    numberUserId: merged.numberScope === 'member' ? merged.numberUserId || null : null,
+    boardScope: merged.boardScope === 'member' ? 'member' : 'all',
+    boardUserId: merged.boardScope === 'member' ? merged.boardUserId || null : null,
   }
 }
 
@@ -1213,6 +1352,7 @@ function buildAgentPayload(agent, overrides = {}) {
 
 function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, setQuickReplies, openPanel, onClosePanel }) {
   const toast = useToast()
+  const { user } = useAuth()
   const [tagName, setTagName] = useState('')
   const [tagColor, setTagColor] = useState('#22c55e')
   const [stageName, setStageName] = useState('')
@@ -1311,7 +1451,7 @@ function CrmSettingsPanels({ tags, setTags, stages, setStages, quickReplies, set
       const { data } = await reorderCrmStages(next.map((s) => s.id))
       const ordered = data?.stages || next
       setStages(ordered)
-      setCrmBootstrapCache({ stages: ordered })
+      setCrmBootstrapCache({ stages: ordered }, user?.id)
     } catch (err) {
       setStages(prev)
       toast.error(err?.response?.data?.message || 'Falha ao reordenar estágios.')
@@ -1811,10 +1951,23 @@ export function Crm() {
   const canImportPack = isAdmin || isImpersonating
   const [sellerFilter, setSellerFilter] = useState('')
   const [orgMembers, setOrgMembers] = useState([])
-  const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '' })
-  scopeRef.current = { userId: user?.id, isOrgOwner, filterSellerUserId: sellerFilter || '' }
+  const orgUserIds = useMemo(() => {
+    const ids = new Set()
+    if (user?.id) ids.add(user.id)
+    for (const m of orgMembers) {
+      if (m?.userId) ids.add(m.userId)
+    }
+    return [...ids]
+  }, [user?.id, orgMembers])
+  const scopeRef = useRef({ userId: user?.id, isOrgOwner, filterSellerUserId: '', orgUserIds: [] })
+  scopeRef.current = {
+    userId: user?.id,
+    isOrgOwner,
+    filterSellerUserId: sellerFilter || '',
+    orgUserIds,
+  }
   const [tab, setTab] = useState('kanban')
-  const initial = useMemo(() => readCrmInitialState(), [])
+  const initial = useMemo(() => readCrmInitialState(user?.id), [user?.id])
 
   const [conversations, setConversations] = useState(initial.conversations)
   const [stages, setStages] = useState(initial.stages)
@@ -1822,18 +1975,23 @@ export function Crm() {
   const [quickReplies, setQuickReplies] = useState(initial.quickReplies)
   const [flows, setFlows] = useState([])
   const [agents, setAgents] = useState(initial.agents)
-  const [aiConfigured, setAiConfigured] = useState(false)
+  const [aiConfigured, setAiConfigured] = useState(initial.aiConfigured)
+  const [aiKeyLast4, setAiKeyLast4] = useState(initial.aiKeyLast4)
+  const [aiKeyDraft, setAiKeyDraft] = useState('')
+  const [aiKeySaving, setAiKeySaving] = useState(false)
   const [loading, setLoading] = useState(initial.loading)
   const [refreshing, setRefreshing] = useState(false)
   const [flowsLoading, setFlowsLoading] = useState(false)
   const [agentsLoading, setAgentsLoading] = useState(false)
 
   const conversationsRef = useRef(conversations)
+  const loadKanbanDataRef = useRef(() => {})
   const flowsLoadedRef = useRef(false)
   const agentsLoadedRef = useRef(initial.agents.length > 0)
   const sessionUserIdRef = useRef(user?.id)
   const [flowToggleId, setFlowToggleId] = useState(null)
   const kanbanLoadSeq = useRef(0)
+  const aiStatusSeq = useRef(0)
 
   useEffect(() => {
     conversationsRef.current = conversations
@@ -1856,7 +2014,8 @@ export function Crm() {
   const [deletingLeads, setDeletingLeads] = useState(false)
   const [settingsPanel, setSettingsPanel] = useState(null)
   const [waConnected, setWaConnected] = useState(initial.waConnected)
-  useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !loading })
+  const [waSyncStale, setWaSyncStale] = useState(Boolean(initial.waSyncStale))
+  useCrmAvatarAutoFetch(conversations, { enabled: waConnected && !waSyncStale && !loading })
 
   const kanbanListParams = useMemo(() => {
     const params = { ...CRM_CONVERSATIONS_LIST_PARAMS }
@@ -1866,6 +2025,7 @@ export function Crm() {
 
   const loadKanbanData = useCallback(async () => {
     const seq = ++kanbanLoadSeq.current
+    const requestUserId = user?.id
     const hasData = conversationsRef.current.length > 0
     if (!hasData) setLoading(true)
     else setRefreshing(true)
@@ -1876,13 +2036,14 @@ export function Crm() {
         getCrmTags(),
       ])
       if (seq !== kanbanLoadSeq.current) return
-      const nextBoot = { ...(getCrmBootstrapCache() || {}) }
+      if (requestUserId !== sessionUserIdRef.current) return
+      const nextBoot = { ...(getCrmBootstrapCache(requestUserId) || {}) }
       if (convos.status === 'fulfilled') {
         const rows = convos.value.data.conversations || []
         setConversations(rows)
         // Só espelha cache global da inbox quando não há filtro de vendedor
         if (!kanbanListParams.sellerUserId) {
-          mirrorConversationsListCache(rows, CRM_CONVERSATIONS_LIST_PARAMS)
+          mirrorConversationsListCache(rows, CRM_CONVERSATIONS_LIST_PARAMS, requestUserId)
         }
       }
       if (st.status === 'fulfilled') {
@@ -1893,14 +2054,14 @@ export function Crm() {
         setTags(tg.value.data.tags || [])
         nextBoot.tags = tg.value.data.tags || []
       }
-      if (nextBoot.stages || nextBoot.tags) setCrmBootstrapCache(nextBoot)
+      if (nextBoot.stages || nextBoot.tags) setCrmBootstrapCache(nextBoot, requestUserId)
     } finally {
-      if (seq === kanbanLoadSeq.current) {
+      if (seq === kanbanLoadSeq.current && requestUserId === sessionUserIdRef.current) {
         setLoading(false)
         setRefreshing(false)
       }
     }
-  }, [kanbanListParams])
+  }, [kanbanListParams, user?.id])
 
   useEffect(() => {
     if (!isOrgOwner) {
@@ -1943,19 +2104,25 @@ export function Crm() {
   }, [orgMembers, user])
 
   const loadSecondary = useCallback(async () => {
-    const nextBoot = { ...(getCrmBootstrapCache() || {}) }
+    const requestUserId = user?.id
+    const nextBoot = { ...(getCrmBootstrapCache(requestUserId) || {}) }
     const [qr, wa] = await Promise.allSettled([getCrmQuickReplies(), getWhatsAppStatus()])
+    if (requestUserId !== sessionUserIdRef.current) return
     if (qr.status === 'fulfilled') {
       setQuickReplies(qr.value.data.quickReplies || [])
       nextBoot.quickReplies = qr.value.data.quickReplies || []
     }
     if (wa.status === 'fulfilled') {
       const connected = Boolean(wa.value.data?.connected)
+      // Banner só com stale=true (bug comprovado). RECOVERING não alerta.
+      const stale = Boolean(connected && wa.value.data?.stale === true)
       setWaConnected(connected)
+      setWaSyncStale(stale)
       nextBoot.waConnected = connected
+      nextBoot.waSyncStale = stale
     }
-    setCrmBootstrapCache(nextBoot)
-  }, [])
+    setCrmBootstrapCache(nextBoot, requestUserId)
+  }, [user?.id])
 
   const loadFlows = useCallback(async () => {
     if (flowsLoadedRef.current) return
@@ -2002,11 +2169,14 @@ export function Crm() {
         const [tagsRes, stagesRes] = await Promise.all([getCrmTags(), getCrmStages()])
         setTags(tagsRes.data.tags || [])
         setStages(stagesRes.data.stages || [])
-        setCrmBootstrapCache({
-          ...(getCrmBootstrapCache() || {}),
-          tags: tagsRes.data.tags || [],
-          stages: stagesRes.data.stages || [],
-        })
+        setCrmBootstrapCache(
+          {
+            ...(getCrmBootstrapCache(user?.id) || {}),
+            tags: tagsRes.data.tags || [],
+            stages: stagesRes.data.stages || [],
+          },
+          user?.id,
+        )
         await reloadFlowsForce()
       } catch (err) {
         toast.error(err?.response?.data?.message || err?.message || 'Falha ao importar pack.')
@@ -2015,7 +2185,7 @@ export function Crm() {
         if (packFileRef.current) packFileRef.current.value = ''
       }
     },
-    [toast, reloadFlowsForce, canImportPack],
+    [toast, reloadFlowsForce, canImportPack, user?.id],
   )
 
   const loadAgents = useCallback(async () => {
@@ -2026,24 +2196,127 @@ export function Crm() {
       const { data } = await getCrmAgents()
       setAgents(data.agents || [])
       setAiConfigured(Boolean(data.aiConfigured))
-      setCrmBootstrapCache({ agents: data.agents || [] })
+      setAiKeyLast4(data.aiKeyLast4 || null)
+      setCrmBootstrapCache(
+        {
+          agents: data.agents || [],
+          aiConfigured: Boolean(data.aiConfigured),
+          aiKeyLast4: data.aiKeyLast4 || null,
+          aiStatusLoaded: true,
+        },
+        user?.id,
+      )
     } catch {
       agentsLoadedRef.current = false
       toast.error('Falha ao carregar agentes.')
     } finally {
       setAgentsLoading(false)
     }
-  }, [toast])
+  }, [toast, user?.id])
+
+  loadKanbanDataRef.current = loadKanbanData
 
   useEffect(() => {
     loadKanbanData()
     loadSecondary()
   }, [loadKanbanData, loadSecondary])
 
+  // Poll + reconnect: kanban/lista CRM também dependem de socket para tempo real.
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      loadKanbanDataRef.current()
+    }
+    const id = setInterval(tick, KANBAN_POLL_MS)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    const offReconnect = onSocketReconnect(() => loadKanbanDataRef.current())
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+      offReconnect()
+    }
+  }, [])
+
+  const applyAiStatus = useCallback(
+    (configured, keyLast4) => {
+      setAiConfigured(configured)
+      setAiKeyLast4(keyLast4)
+      setCrmBootstrapCache(
+        { aiConfigured: configured, aiKeyLast4: keyLast4, aiStatusLoaded: true },
+        sessionUserIdRef.current,
+      )
+    },
+    [],
+  )
+
+  const loadAiStatus = useCallback(async () => {
+    const seq = ++aiStatusSeq.current
+    try {
+      const { data } = await getCrmAiSettings()
+      if (seq !== aiStatusSeq.current) return
+      applyAiStatus(Boolean(data?.configured), data?.last4 || null)
+    } catch {
+      /* a lista de agentes continua; o status é relido na próxima abertura */
+    }
+  }, [applyAiStatus])
+
   useEffect(() => {
     if (tab === 'flows') loadFlows()
-    if (tab === 'agents') loadAgents()
-  }, [tab, loadFlows, loadAgents])
+    if (tab === 'agents') {
+      loadAgents()
+      loadAiStatus()
+    }
+  }, [tab, loadFlows, loadAgents, loadAiStatus, user?.id])
+
+  useEffect(() => {
+    if (tab !== 'agents' || !isOrgOwner) return undefined
+    let cancelled = false
+    fetchOrgMembers()
+      .then((data) => {
+        if (!cancelled) setOrgMembers(data.members || [])
+      })
+      .catch(() => {
+        if (!cancelled) setOrgMembers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, isOrgOwner])
+
+  const saveCompanyAiKey = async () => {
+    if (!aiKeyDraft.trim()) return toast.error('Cole a chave de API da empresa.')
+    const seq = ++aiStatusSeq.current
+    setAiKeySaving(true)
+    try {
+      const { data } = await saveCrmAiSettings({ apiKey: aiKeyDraft.trim() })
+      if (seq !== aiStatusSeq.current) return
+      applyAiStatus(Boolean(data.configured), data.last4 || null)
+      setAiKeyDraft('')
+      toast.success('API de IA conectada nesta empresa.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao salvar a chave.')
+    } finally {
+      setAiKeySaving(false)
+    }
+  }
+
+  const removeCompanyAiKey = async () => {
+    const seq = ++aiStatusSeq.current
+    setAiKeySaving(true)
+    try {
+      await deleteCrmAiSettings()
+      if (seq !== aiStatusSeq.current) return
+      applyAiStatus(false, null)
+      toast.success('Chave de IA removida.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao remover a chave.')
+    } finally {
+      setAiKeySaving(false)
+    }
+  }
 
   /** Ao trocar de conta (login / impersonação), recarrega fluxos e agentes do usuário correto. */
   useEffect(() => {
@@ -2051,11 +2324,17 @@ export function Crm() {
     sessionUserIdRef.current = user?.id
     flowsLoadedRef.current = false
     agentsLoadedRef.current = false
+    aiStatusSeq.current += 1
     setFlows([])
     setAgents([])
+    setAiConfigured(false)
+    setAiKeyLast4(null)
     if (tab === 'flows') loadFlows()
-    if (tab === 'agents') loadAgents()
-  }, [user?.id, tab, loadFlows, loadAgents])
+    if (tab === 'agents') {
+      loadAgents()
+      loadAiStatus()
+    }
+  }, [user?.id, tab, loadFlows, loadAgents, loadAiStatus])
 
   useEffect(() => {
     const offConvo = onSocketEvent('crm:conversation', ({ conversation }) => {
@@ -2103,9 +2382,9 @@ export function Crm() {
       )
       try {
         await patchCrmConversation(conversationId, { kanbanStageId: normalizedStageId })
-      } catch {
+      } catch (err) {
         setConversations(prev)
-        toast.error('Falha ao mover o card.')
+        toast.error(err?.response?.data?.message || 'Falha ao mover o card.')
       }
     },
     [conversations, toast],
@@ -2304,6 +2583,17 @@ export function Crm() {
               </Link>
             </div>
           )}
+          {waConnected && waSyncStale && (
+            <div className="flex flex-col gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-100 sm:flex-row sm:items-center">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+              <span className="min-w-0 flex-1">
+                WhatsApp sem sincronizar — o CRM pode estar atrasado. Estamos tentando recuperar; se persistir, reconecte.
+              </span>
+              <Link to="/dashboard/connect" className="w-full font-medium text-accent-300 underline hover:text-accent-200 sm:w-auto sm:shrink-0">
+                Ver conexão
+              </Link>
+            </div>
+          )}
           {conversations.length === 0 && (
             <Card className="flex flex-col items-center gap-3 py-5 text-center sm:flex-row sm:justify-between sm:px-6 sm:text-left">
               <div className="flex items-center gap-3">
@@ -2450,6 +2740,9 @@ export function Crm() {
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <Badge variant={flow.enabled ? 'success' : 'muted'}>{flow.enabled ? 'Ativo' : 'Pausado'}</Badge>
+                    {flow.enabled ? (
+                      <span className="text-[10px] text-stone-500">Só eventos após ativar</span>
+                    ) : null}
                     <div className="ml-auto flex gap-1">
                       <button
                         type="button"
@@ -2487,26 +2780,56 @@ export function Crm() {
 
       {tab === 'agents' && (
         <div className="space-y-3">
-          {!aiConfigured && (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-              <Bot className="mr-1.5 inline h-4 w-4" />
-              A chave de IA ainda não foi configurada no servidor (OPENAI_API_KEY). Você já pode criar e configurar os
-              agentes — eles começam a responder assim que a chave for adicionada.
-            </div>
+          {isOrgOwner ? (
+            <Card className="space-y-3">
+              <p className="text-sm font-medium text-stone-100">API de IA desta empresa</p>
+              <p className="text-xs text-stone-500">
+                {aiConfigured
+                  ? `Chave desta empresa conectada. Termina em ${aiKeyLast4 || '••••'}. O gerador, o teste e as respostas usam só ela.`
+                  : 'Cada empresa conecta a própria chave. Sem ela, o gerador, o teste e as respostas deste agente não abrem.'}
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="password"
+                  value={aiKeyDraft}
+                  onChange={(e) => setAiKeyDraft(e.target.value)}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-brand-700 bg-brand-900/60 px-3 py-2 text-sm text-stone-100 outline-none focus:border-accent-500/60"
+                />
+                <Button onClick={saveCompanyAiKey} disabled={aiKeySaving}>
+                  Salvar chave
+                </Button>
+                {aiConfigured && (
+                  <Button variant="ghost" onClick={removeCompanyAiKey} disabled={aiKeySaving}>
+                    Remover
+                  </Button>
+                )}
+              </div>
+            </Card>
+          ) : (
+            !aiConfigured && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                <Bot className="mr-1.5 inline h-4 w-4" />
+                A empresa ainda não conectou a API de IA. Peça ao dono para colar o token em Agentes.
+              </div>
+            )
           )}
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="min-w-0 text-sm text-stone-400">
-              Agentes respondem conversas automaticamente (ative a IA por conversa na aba Conversas).
+              Cada agente guarda identidade, onde atua, conhecimento e permissões. Salve e teste na lista.
             </p>
-            <Button
-              className="w-full sm:w-auto"
-              onClick={() => {
-                setAgentEditing(null)
-                setAgentModal(true)
-              }}
-            >
-              <Plus className="h-4 w-4" /> Novo agente
-            </Button>
+            {isOrgOwner && (
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => {
+                  setAgentEditing(null)
+                  setAgentModal(true)
+                }}
+              >
+                <Plus className="h-4 w-4" /> Novo agente
+              </Button>
+            )}
           </div>
           {agentsLoading ? (
             <div className="flex justify-center py-16">
@@ -2530,25 +2853,28 @@ export function Crm() {
                       </p>
                       <p className="mt-1 line-clamp-2 text-xs text-stone-500">{agent.systemPrompt}</p>
                       <p className="mt-1 text-[11px] text-stone-500">
-                        {agent.model} · {ACTIVATION_MODE_LABELS[agent.activationMode] || agent.activationMode || 'Manual'} ·
-                        delay {agent.replyDelayMinSec}–{agent.replyDelayMaxSec}s
+                        {agent.model} · {describeAgentAudience(agent, orgMembers)} · delay {agent.replyDelayMinSec}–{agent.replyDelayMaxSec}s
                       </p>
                     </div>
-                    <Toggle
-                      checked={agent.enabled}
-                      onChange={async (v) => {
-                        try {
-                          const { data } = await updateCrmAgent(agent.id, buildAgentPayload(agent, { enabled: v }))
-                          setAgents((prev) => prev.map((a) => (a.id === agent.id ? data.agent : a)))
-                        } catch (err) {
-                          toast.error(err?.response?.data?.message || 'Falha ao alterar o agente.')
-                        }
-                      }}
-                    />
+                    {isOrgOwner && (
+                      <Toggle
+                        checked={agent.enabled}
+                        onChange={async (v) => {
+                          try {
+                            const { data } = await updateCrmAgent(agent.id, buildAgentPayload(agent, { enabled: v }))
+                            setAgents((prev) => prev.map((a) => (a.id === agent.id ? data.agent : a)))
+                          } catch (err) {
+                            toast.error(err?.response?.data?.message || 'Falha ao alterar o agente.')
+                          }
+                        }}
+                      />
+                    )}
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <Badge variant={agent.enabled ? 'success' : 'muted'}>{agent.enabled ? 'Ativo' : 'Pausado'}</Badge>
                     <div className="ml-auto flex gap-1">
+                      {isOrgOwner && (
+                        <>
                       <button
                         type="button"
                         onClick={() => {
@@ -2566,12 +2892,15 @@ export function Crm() {
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </Card>
               ))}
             </div>
           )}
+          <AgentTestBench agents={agents} members={orgMembers} aiConfigured={aiConfigured} />
         </div>
       )}
 
@@ -2614,6 +2943,7 @@ export function Crm() {
         initial={agentEditing}
         tags={tags}
         stages={stages}
+        members={orgMembers}
         aiConfigured={aiConfigured}
         onSave={saveAgent}
         saving={agentSaving}

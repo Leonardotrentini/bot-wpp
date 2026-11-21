@@ -9,21 +9,60 @@
  * - Nunca reage a mensagens fromMe nem a mensagens geradas por fluxo/IA.
  * - Cooldown por contato (default 24h) via CrmFlowRun.
  * - Envios entram na fila CrmDelivery (processada com delay + jitter).
- * - Quiet hours opcionais por fluxo.
+ * - Quiet hours: adia só mensagens (não bloqueia o fluxo).
  * - tag_added só dispara quando o vínculo tag↔contato é criado de fato (não no re-add).
  * - no_reply ancora em noReplySinceAt (envio humano); flow/IA não reiniciam o timer.
- * - contact_reply exige tagIds e só roda em conversa já existente (!isNewConversation).
+ * - contact_reply: tags opcionais; só roda em conversa já existente (!isNewConversation).
+ * - cancelIfHumanReplies (default true): cancela fila pendente se humano falar.
+ * - Regra de ativação: fluxos só reagem a eventos DEPOIS de enabledAt (última vez que ficou ativo).
+ *   stage_change NÃO varre quem já está no estágio — só dispara na entrada após ativar.
  */
 
 const { CONVERSATION_INCLUDE, emitCrmEvent, formatConversationRow } = require("./crmCore")
 const { processPendingCrmDeliveries, flushCrmDeliveries } = require("./crmDelivery")
 const { isFlowsStopped, isFlowsStoppedForContact, stopFlowsForContact } = require("./crmFlowStop")
+const { resolveSendMessageBody } = require("./flowMessageText")
+const {
+  normalizeQuietHours,
+  isWithinQuietHours,
+  bumpScheduledAtPastQuietHours,
+} = require("./flowQuietHours")
 const CRM_DELIVERY_MIN_DELAY_MS = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 800)
 const CRM_DELIVERY_JITTER_MS = Number(process.env.CRM_DELIVERY_JITTER_MS || 1200)
 /** Pausa entre nota de voz e texto de continuação na mesma ação. */
 const TEXT_AFTER_AUDIO_MS = Number(process.env.CRM_TEXT_AFTER_AUDIO_MS || 2000)
 const { resolveActionDelayMs } = require("./flowActionDelay")
 const { resolveRecordingDelayMs, MAX_RECORDING_DELAY_SECONDS } = require("./flowRecordingDelay")
+
+/** Cancelamento in-memory de ações atrasadas via setTimeout (conversationId:flowId). */
+const cancelledDelayedActions = new Set()
+
+function delayedActionKey(conversationId, flowId) {
+  return `${conversationId || ""}:${flowId || ""}`
+}
+
+function markDelayedActionsCancelled(conversationId, flowId = null) {
+  if (!conversationId) return
+  if (flowId) {
+    cancelledDelayedActions.add(delayedActionKey(conversationId, flowId))
+    return
+  }
+  cancelledDelayedActions.add(delayedActionKey(conversationId, "*"))
+}
+
+function isDelayedActionCancelled(conversationId, flowId) {
+  if (!conversationId) return false
+  if (cancelledDelayedActions.has(delayedActionKey(conversationId, "*"))) return true
+  if (flowId && cancelledDelayedActions.has(delayedActionKey(conversationId, flowId))) return true
+  return false
+}
+
+function clearDelayedActionCancel(conversationId, flowId) {
+  if (!conversationId) return
+  // Novo run do fluxo: limpa cancelamento prévio desta conversa (inclui wildcard de humano).
+  cancelledDelayedActions.delete(delayedActionKey(conversationId, "*"))
+  if (flowId) cancelledDelayedActions.delete(delayedActionKey(conversationId, flowId))
+}
 
 function resolveNoReplyMinutes(trigger) {
   if (!trigger) return 24 * 60
@@ -46,26 +85,26 @@ function resolveNoReplyMinutes(trigger) {
   return 24 * 60
 }
 
-function normalizeQuietHours(value) {
-  if (!value || typeof value !== "object" || value.enabled !== true) return null
-  const re = /^([01]?\d|2[0-3]):[0-5]\d$/
-  const start = re.test(value.start) ? value.start : "22:00"
-  const end = re.test(value.end) ? value.end : "08:00"
-  return { enabled: true, start, end }
+/**
+ * Âncora temporal da ativação do fluxo.
+ * Preferência: enabledAt (última vez que ligou) → createdAt (legado / já ativo sem stamp).
+ * Eventos e varreduras (no_reply) só consideram o que veio depois disso.
+ */
+function resolveFlowActiveSince(flow) {
+  if (!flow) return null
+  const raw = flow.enabledAt || flow.createdAt
+  if (!raw) return null
+  const d = raw instanceof Date ? raw : new Date(raw)
+  return Number.isNaN(d.getTime()) ? null : d
 }
 
-/** true se agora está dentro do intervalo de silêncio (America/Sao_Paulo). */
-function isWithinQuietHours(quietHours, now = new Date()) {
-  const qh = normalizeQuietHours(quietHours)
-  if (!qh) return false
-  const sp = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }))
-  const minutes = sp.getHours() * 60 + sp.getMinutes()
-  const [sh, sm] = qh.start.split(":").map(Number)
-  const [eh, em] = qh.end.split(":").map(Number)
-  const start = sh * 60 + sm
-  const end = eh * 60 + em
-  if (start <= end) return minutes >= start && minutes < end
-  return minutes >= start || minutes < end // atravessa a meia-noite
+/** true se o evento (ex.: agora, createdAt da conversa) é estritamente após a ativação. */
+function isEventAfterFlowActivation(flow, eventAt = new Date()) {
+  const since = resolveFlowActiveSince(flow)
+  if (!since) return true
+  const at = eventAt instanceof Date ? eventAt : new Date(eventAt)
+  if (Number.isNaN(at.getTime())) return false
+  return at.getTime() >= since.getTime()
 }
 
 function normalizeTrigger(trigger) {
@@ -93,6 +132,8 @@ function normalizeTrigger(trigger) {
       out.delayUnit = trigger.delayUnit
       out.delayValue = Number(trigger.delayValue) || (trigger.delayUnit === "minutes" ? minutes : out.hours)
     }
+    // Default ON: não varre histórico antigo — só conversas criadas após a ativação do fluxo.
+    out.onlyAfterFlowCreated = trigger.onlyAfterFlowCreated !== false
   }
   if (type === "stage_change") {
     out.stageId = trigger.stageId ? String(trigger.stageId) : null
@@ -105,8 +146,8 @@ function normalizeTrigger(trigger) {
   if (type === "contact_reply") {
     const raw = Array.isArray(trigger.tagIds) ? trigger.tagIds : Array.isArray(trigger.conditionTags) ? trigger.conditionTags : []
     const tagIds = [...new Set(raw.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 20)
-    if (!tagIds.length) return null
     out.tagIds = tagIds
+    out.firstReplyOnly = trigger.firstReplyOnly === true
   }
   return out
 }
@@ -204,7 +245,7 @@ async function getFlowBlockReason(prisma, flow, conversation) {
   if (await isFlowsStoppedForContact(prisma, conversation?.contactId, conversation?.contact)) {
     return "flows_stopped"
   }
-  if (isWithinQuietHours(flow.quietHours)) return "quiet_hours"
+  // Quiet hours não bloqueiam o fluxo — só adiam mensagens na fila (CrmDelivery).
   if (!(await conditionsPass(prisma, flow, conversation))) return "conditions"
 
   const raw = Number(flow.cooldownPerContactHours ?? CRM_FLOW_DEFAULT_COOLDOWN_HOURS)
@@ -242,7 +283,7 @@ async function recordSkippedFlowRun(prisma, flow, conversation, reason, blockRea
   if (!flow?.id) return
 
   // Skips rotineiros (cooldown/conditions) não gravam no DB — inundavam disco e I/O.
-  const noisy = new Set(["cooldown_contact", "conditions", "quiet_hours", "daily_cap", "flows_stopped", "disabled"])
+  const noisy = new Set(["cooldown_contact", "conditions", "daily_cap", "flows_stopped", "disabled"])
   if (noisy.has(String(blockReason || ""))) return
 
   await prisma.crmFlowRun
@@ -299,6 +340,10 @@ async function executeActions(deps, flow, conversation, options = {}) {
   let deliveryQueued = false
   let flowsStopped = false
 
+  if (flow?.id && conversation?.id) {
+    clearDelayedActionCancel(conversation.id, flow.id)
+  }
+
   async function queueMessageDelivery(
     { body, mediaType, mediaBase64, mediaMime, mediaName, presenceDelayMs },
     { delayAfterPreviousMs = 0, requiresPreviousSent = false } = {},
@@ -315,6 +360,10 @@ async function executeActions(deps, flow, conversation, options = {}) {
     const chainDelayMs = deliveryQueued ? Math.max(0, Number(delayAfterPreviousMs) || 0) : 0
     deliveryQueued = true
     const jitter = immediate ? 0 : deliveryDelayMs()
+    let scheduledAt = new Date(Date.now() + (chainDelayMs > 0 ? 86400000 : jitter))
+    if (!immediate) {
+      scheduledAt = bumpScheduledAtPastQuietHours(flow.quietHours, scheduledAt)
+    }
     await prisma.crmDelivery.create({
       data: {
         userId: conversation.userId,
@@ -330,13 +379,17 @@ async function executeActions(deps, flow, conversation, options = {}) {
         presenceDelayMs: mt === "audio" ? Number(presenceDelayMs) || 0 : 0,
         delayAfterPreviousMs: chainDelayMs,
         requiresPreviousSent: Boolean(requiresPreviousSent),
-        scheduledAt: new Date(Date.now() + (chainDelayMs > 0 ? 86400000 : jitter)),
+        scheduledAt,
       },
     })
   }
 
   async function runOneAction(action, stepDelayMs) {
     if (flowsStopped) return true
+    if (isDelayedActionCancelled(conversation.id, flow.id)) {
+      flowsStopped = true
+      return true
+    }
     if (await isFlowsStoppedForContact(prisma, conversation.contactId, conversation.contact)) {
       flowsStopped = true
       return true
@@ -345,7 +398,7 @@ async function executeActions(deps, flow, conversation, options = {}) {
     const type = String(action?.type || "")
     try {
       if (type === "send_message") {
-        const body = String(action.body || "").trim()
+        const body = resolveSendMessageBody(action, conversation.contact)
         const mediaType = action.mediaType && action.mediaType !== "none" ? String(action.mediaType) : "none"
         const hasMedia = ["image", "video", "audio", "document"].includes(mediaType)
         if (!body && !hasMedia) return false
@@ -407,12 +460,17 @@ async function executeActions(deps, flow, conversation, options = {}) {
         detail.push("remove_tag")
       } else if (type === "move_stage" && action.stageId) {
         const stageId = String(action.stageId)
-        await prisma.crmConversation.update({
-          where: { id: conversation.id },
-          data: { kanbanStageId: stageId },
-        })
-        stageChangedTo = stageId
-        detail.push("move_stage")
+        if ((conversation.kanbanStageId || null) === stageId) {
+          detail.push("move_stage:already")
+        } else {
+          await prisma.crmConversation.update({
+            where: { id: conversation.id },
+            data: { kanbanStageId: stageId },
+          })
+          conversation.kanbanStageId = stageId
+          stageChangedTo = stageId
+          detail.push("move_stage")
+        }
       } else if (type === "assign_ai") {
         await prisma.crmConversation.update({
           where: { id: conversation.id },
@@ -451,7 +509,10 @@ async function executeActions(deps, flow, conversation, options = {}) {
 
     if (!immediate && cumulativeDelayMs > 0 && type !== "send_message") {
       const offset = cumulativeDelayMs
+      const flowId = flow.id || null
+      const conversationId = conversation.id
       setTimeout(() => {
+        if (isDelayedActionCancelled(conversationId, flowId)) return
         runOneAction(action, 0).then(async (stopped) => {
           if (stopped) flowsStopped = true
           if ((stageChangedTo || newlyAddedTagIds.length || tagsMutated) && io) {
@@ -550,6 +611,13 @@ async function runFlow(deps, flow, conversation, reason) {
   }
 
   const detail = await executeActions(deps, flow, conversation)
+  // Só no-op (ex.: já estava no estágio) → não grava run "ok" (senão queima cooldown e trava o lote).
+  const meaningful = detail.filter((d) => {
+    const s = String(d || "")
+    return s && !s.endsWith(":already")
+  })
+  if (!meaningful.length) return false
+
   await processPendingCrmDeliveries(deps).catch((err) =>
     console.error("[crm-flow] processPendingCrmDeliveries:", err?.message || err),
   )
@@ -558,7 +626,7 @@ async function runFlow(deps, flow, conversation, reason) {
     console.error("[crm-flow] flushCrmDeliveries:", err?.message || err),
   )
 
-  const hasSend = detail.some((d) => String(d).startsWith("send_message"))
+  const hasSend = meaningful.some((d) => String(d).startsWith("send_message"))
   let runStatus = "ok"
   if (hasSend && flow.id) {
     const deliveries = await prisma.crmDelivery.findMany({
@@ -582,7 +650,7 @@ async function runFlow(deps, flow, conversation, reason) {
       flowId: flow.id,
       conversationId: conversation.id,
       status: runStatus,
-      detail: `${reason}: ${detail.join(", ") || "sem ações"}${runStatus === "failed" ? " (envio falhou)" : ""}`,
+      detail: `${reason}: ${meaningful.join(", ") || "sem ações"}${runStatus === "failed" ? " (envio falhou)" : ""}`,
     },
   })
   return runStatus === "ok"
@@ -601,8 +669,11 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation, di
   if (await isFlowsStoppedForContact(deps.prisma, conversation.contactId, conversation.contact)) return
   const { prisma } = deps
 
+  const eventAt = message.timestamp || message.createdAt || new Date()
+
   if (isNewConversation || dispatchNewConversation) {
     for (const flow of await loadEnabledFlows(prisma, conversation.userId, "new_conversation")) {
+      if (!isEventAfterFlowActivation(flow, eventAt)) continue
       await runFlow(deps, flow, conversation, "new_conversation").catch((err) =>
         console.error("[crm-flow] new_conversation:", err?.message || err),
       )
@@ -612,43 +683,203 @@ async function onCrmMessage(deps, { conversation, message, isNewConversation, di
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "keyword")) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger && keywordMatches(trigger, message.body)) {
+      if (!isEventAfterFlowActivation(flow, eventAt)) continue
       await runFlow(deps, flow, conversation, "keyword").catch((err) =>
         console.error("[crm-flow] keyword:", err?.message || err),
       )
     }
   }
 
-  // Resposta do lead em conversa existente + filtro por tag (obrigatório).
+  // Resposta do lead em conversa existente; tags opcionais; firstReplyOnly opcional.
   if (!isNewConversation) {
     for (const flow of await loadEnabledFlows(prisma, conversation.userId, "contact_reply")) {
       const trigger = normalizeTrigger(flow.trigger)
-      if (!trigger?.tagIds?.length) continue
-      const ok = await contactHasAnyTag(prisma, conversation.contactId, trigger.tagIds)
-      if (ok) {
-        await runFlow(deps, flow, conversation, "contact_reply").catch((err) =>
-          console.error("[crm-flow] contact_reply:", err?.message || err),
-        )
+      if (!trigger) continue
+      if (!isEventAfterFlowActivation(flow, eventAt)) continue
+      if (trigger.tagIds?.length) {
+        const ok = await contactHasAnyTag(prisma, conversation.contactId, trigger.tagIds)
+        if (!ok) continue
       }
+      if (trigger.firstReplyOnly) {
+        const inboundCount = await prisma.crmMessage.count({
+          where: {
+            conversationId: conversation.id,
+            fromMe: false,
+            source: { notIn: ["flow", "ai"] },
+          },
+        })
+        // Conta inclui a mensagem atual já persistida → só a 1ª inbound.
+        if (inboundCount > 1) continue
+      }
+      await runFlow(deps, flow, conversation, "contact_reply").catch((err) =>
+        console.error("[crm-flow] contact_reply:", err?.message || err),
+      )
     }
   }
 }
 
-/** Chamado quando um card muda de estágio no Kanban. */
-async function onStageChange(deps, { conversation, stageId }) {
+/**
+ * Cancela CrmDelivery pendentes de fluxos (e ações setTimeout) para uma conversa.
+ * @param {{ flowIds?: string[]|null, reason?: string }} opts
+ *   flowIds null/undefined = todos os kind=flow da conversa com cancelIfHumanReplies
+ *   (quando reason é human). Para condition-broken, passa flowIds explícitos.
+ */
+async function cancelPendingFlowDeliveries(prisma, conversationId, opts = {}) {
+  if (!prisma || !conversationId) return { cancelled: 0 }
+  const reason = String(opts.reason || "cancelled")
+  const flowIds = Array.isArray(opts.flowIds) ? opts.flowIds.filter(Boolean) : null
+
+  const where = {
+    conversationId,
+    kind: "flow",
+    status: "pending",
+  }
+  if (flowIds?.length) {
+    where.sourceId = { in: flowIds }
+  } else if (opts.onlyCancelIfHumanReplies) {
+    const flows = await prisma.crmFlow.findMany({
+      where: { cancelIfHumanReplies: true },
+      select: { id: true },
+    })
+    const ids = flows.map((f) => f.id)
+    if (!ids.length) return { cancelled: 0 }
+    where.sourceId = { in: ids }
+  }
+
+  const result = await prisma.crmDelivery.updateMany({
+    where,
+    data: { status: "cancelled", error: reason },
+  })
+
+  if (flowIds?.length) {
+    for (const id of flowIds) markDelayedActionsCancelled(conversationId, id)
+  } else {
+    markDelayedActionsCancelled(conversationId, null)
+  }
+
+  return { cancelled: result.count || 0 }
+}
+
+/** Humano enviou mensagem na conversa (CRM manual ou WhatsApp fromMe não-flow/ai). */
+async function onHumanOutboundMessage(deps, { conversationId, userId = null }) {
   const { prisma } = deps
+  if (!conversationId) return { cancelled: 0 }
+  return cancelPendingFlowDeliveries(prisma, conversationId, {
+    onlyCancelIfHumanReplies: true,
+    reason: "Humano respondeu antes do envio automático.",
+  })
+}
+
+/** Extrai stageId / tagIds que o fluxo exige como condição de disparo. */
+function flowRequiredStageAndTags(flow) {
+  const stages = new Set()
+  const tags = new Set()
+  const trigger = normalizeTrigger(flow?.trigger)
+  if (trigger?.type === "stage_change" && trigger.stageId) stages.add(String(trigger.stageId))
+  if (trigger?.type === "contact_reply" && Array.isArray(trigger.tagIds)) {
+    for (const id of trigger.tagIds) tags.add(String(id))
+  }
+  if (trigger?.type === "tag_added" && trigger.tagId) tags.add(String(trigger.tagId))
+
+  const conditions = Array.isArray(flow?.conditions) ? flow.conditions : []
+  for (const cond of conditions) {
+    const type = String(cond?.type || "")
+    if (type === "stage_is") {
+      stages.add(cond.value === "__none__" || cond.value == null ? "__none__" : String(cond.value))
+    } else if (type === "has_tag") {
+      if (cond.value) tags.add(String(cond.value))
+    } else if (type === "has_any_tag") {
+      try {
+        const ids = JSON.parse(String(cond.value || "[]"))
+        if (Array.isArray(ids)) for (const id of ids) tags.add(String(id))
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return { stages, tags }
+}
+
+/**
+ * Quando o card sai do estágio ou perde tag que era condição do fluxo,
+ * cancela deliveries pendentes daquele fluxo nesta conversa.
+ */
+async function cancelFlowsBrokenByStageOrTag(deps, { conversation, previousStageId = undefined, removedTagId = null }) {
+  const { prisma } = deps
+  if (!conversation?.id || !conversation?.userId) return { cancelled: 0 }
+
+  const flows = await prisma.crmFlow.findMany({
+    where: { userId: conversation.userId, enabled: true },
+  })
+  const brokenIds = []
+  const currentStageKey =
+    conversation.kanbanStageId == null || conversation.kanbanStageId === ""
+      ? "__none__"
+      : String(conversation.kanbanStageId)
+
+  for (const flow of flows) {
+    const { stages, tags } = flowRequiredStageAndTags(flow)
+    let broken = false
+    if (previousStageId !== undefined && stages.size && !stages.has(currentStageKey)) {
+      broken = true
+    }
+    if (removedTagId && tags.has(String(removedTagId))) {
+      // Para has_any_tag / contact_reply com várias tags: só quebra se NÃO restar nenhuma.
+      if (tags.size <= 1) {
+        broken = true
+      } else {
+        const stillHas = await contactHasAnyTag(prisma, conversation.contactId, [...tags])
+        if (!stillHas) broken = true
+      }
+    }
+    if (broken) brokenIds.push(flow.id)
+  }
+
+  if (!brokenIds.length) return { cancelled: 0 }
+  return cancelPendingFlowDeliveries(prisma, conversation.id, {
+    flowIds: brokenIds,
+    reason: "Condição do fluxo deixou de ser verdadeira (estágio/tag).",
+  })
+}
+
+/**
+ * Chamado quando um card muda de estágio no Kanban (só na transição — não varre quem já está).
+ * `cancelBrokenConditions` + `previousStageId`: use em mudanças externas (UI/WA),
+ * NÃO ao mover estágio de dentro do próprio fluxo (senão cancela a fila do run atual).
+ */
+async function onStageChange(deps, { conversation, stageId, eventAt = null, previousStageId = undefined, cancelBrokenConditions = false }) {
+  const { prisma } = deps
+  if (cancelBrokenConditions) {
+    await cancelFlowsBrokenByStageOrTag(deps, {
+      conversation: { ...conversation, kanbanStageId: stageId },
+      previousStageId: previousStageId !== undefined ? previousStageId : conversation?.kanbanStageId,
+    }).catch((err) => console.warn("[crm-flow] cancel on stage leave:", err?.message || err))
+  }
   if (isFlowsStopped(conversation?.contact)) return
   if (await isFlowsStoppedForContact(prisma, conversation?.contactId, conversation?.contact)) return
   // Coluna virtual "Sem estágio" no board = kanbanStageId null → chave __none__ no trigger.
   const targetKey = stageId == null || stageId === "" ? "__none__" : String(stageId)
+  const happenedAt = eventAt ? new Date(eventAt) : new Date()
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "stage_change")) {
     const trigger = normalizeTrigger(flow.trigger)
     if (!trigger) continue
+    // Só dispara se a entrada no estágio for depois da ativação do fluxo.
+    if (!isEventAfterFlowActivation(flow, happenedAt)) continue
     if (!trigger.stageId || trigger.stageId === targetKey) {
       await runFlow(deps, flow, conversation, "stage_change").catch((err) =>
         console.error("[crm-flow] stage_change:", err?.message || err),
       )
     }
   }
+}
+
+/** Tag removida do contato — cancela filas cujas condições dependiam dela. */
+async function onTagRemoved(deps, { conversation, tagId }) {
+  if (!conversation || !tagId) return
+  await cancelFlowsBrokenByStageOrTag(deps, {
+    conversation,
+    removedTagId: String(tagId),
+  }).catch((err) => console.warn("[crm-flow] cancel on tag remove:", err?.message || err))
 }
 
 /** Chamado quando uma tag é vinculada de fato ao contato (não no re-add). */
@@ -658,9 +889,11 @@ async function onTagAdded(deps, { conversation, tagId }) {
   if (isFlowsStopped(conversation.contact)) return
   if (await isFlowsStoppedForContact(prisma, conversation.contactId, conversation.contact)) return
   const wanted = String(tagId)
+  const eventAt = new Date()
   for (const flow of await loadEnabledFlows(prisma, conversation.userId, "tag_added")) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger && trigger.tagId === wanted) {
+      if (!isEventAfterFlowActivation(flow, eventAt)) continue
       await runFlow(deps, flow, conversation, "tag_added").catch((err) =>
         console.error("[crm-flow] tag_added:", err?.message || err),
       )
@@ -695,10 +928,16 @@ function noReplyCandidateWhere(userId, threshold) {
   }
 }
 
+/** Lote por tick/fluxo — backlog grande (ex. Bina) não pode ficar preso em 20 cards. */
+const NO_REPLY_BATCH = Math.max(20, Math.min(200, Number(process.env.CRM_NO_REPLY_BATCH || 80)))
+
 /**
  * Tick do scheduler: fluxos "sem resposta há X tempo".
  * Usa `noReplySinceAt` (último outbound humano). Envios de flow/IA atualizam
  * lastMessageAt mas NÃO reiniciam este timer — só resposta do lead zera a âncora.
+ *
+ * Importante: exclui quem já está no estágio destino (move_stage-only) e quem
+ * está em cooldown — senão o mesmo take:N engasga o lote e o resto nunca move.
  */
 async function processNoReplyFlows(deps) {
   const { prisma } = deps
@@ -707,14 +946,64 @@ async function processNoReplyFlows(deps) {
     const trigger = normalizeTrigger(flow.trigger)
     if (trigger?.type !== "no_reply") continue
     const threshold = new Date(Date.now() - trigger.minutes * 60 * 1000)
+    const where = { ...noReplyCandidateWhere(flow.userId, threshold) }
+    const andFilters = []
+
+    // Default: só conversas criadas depois que o fluxo ficou ativo (não backfill).
+    if (trigger.onlyAfterFlowCreated !== false) {
+      const since = resolveFlowActiveSince(flow)
+      if (since) andFilters.push({ createdAt: { gte: since } })
+    }
+
+    const actions = Array.isArray(flow.actions) ? flow.actions : []
+    const moveOnly =
+      actions.length > 0 && actions.every((a) => a?.type === "move_stage" && a.stageId)
+    if (moveOnly) {
+      const stageIds = [...new Set(actions.map((a) => String(a.stageId)))]
+      // Prisma `{ not: id }` NÃO inclui null — precisa OR explícito.
+      andFilters.push({
+        OR: [{ kanbanStageId: null }, { kanbanStageId: { notIn: stageIds } }],
+      })
+    }
+    if (andFilters.length) where.AND = andFilters
+
+    const rawCd = Number(flow.cooldownPerContactHours ?? CRM_FLOW_DEFAULT_COOLDOWN_HOURS)
+    const cooldownHours = Number.isFinite(rawCd)
+      ? Math.min(720, Math.max(0, Math.round(rawCd)))
+      : CRM_FLOW_DEFAULT_COOLDOWN_HOURS
+    if (cooldownHours > 0) {
+      const since = new Date(Date.now() - cooldownHours * 3600 * 1000)
+      const recent = await prisma.crmFlowRun.findMany({
+        where: {
+          flowId: flow.id,
+          createdAt: { gte: since },
+          ...PROD_RUN_WHERE,
+        },
+        select: { conversationId: true },
+        distinct: ["conversationId"],
+        take: 8000,
+      })
+      const excludeIds = [...new Set(recent.map((r) => r.conversationId).filter(Boolean))]
+      if (excludeIds.length) where.id = { notIn: excludeIds }
+    }
+
     const candidates = await prisma.crmConversation.findMany({
-      where: noReplyCandidateWhere(flow.userId, threshold),
-      take: 20,
+      where,
+      take: NO_REPLY_BATCH,
+      orderBy: [{ noReplySinceAt: "asc" }, { lastMessageAt: "asc" }],
       include: CONVERSATION_INCLUDE,
     })
+    let moved = 0
     for (const conversation of candidates) {
-      await runFlow(deps, flow, conversation, "no_reply").catch((err) =>
-        console.error("[crm-flow] no_reply:", err?.message || err),
+      const ok = await runFlow(deps, flow, conversation, "no_reply").catch((err) => {
+        console.error("[crm-flow] no_reply:", err?.message || err)
+        return false
+      })
+      if (ok) moved += 1
+    }
+    if (candidates.length || moved) {
+      console.log(
+        `[crm-flow] no_reply flow=${flow.id.slice(0, 8)}… user=${flow.userId.slice(0, 8)}… candidates=${candidates.length} ranOk=${moved}`,
       )
     }
   }
@@ -744,7 +1033,11 @@ module.exports = {
   dispatchCrmMessageFlows,
   onStageChange,
   onTagAdded,
+  onTagRemoved,
   notifyTagAddedForContact,
+  onHumanOutboundMessage,
+  cancelPendingFlowDeliveries,
+  cancelFlowsBrokenByStageOrTag,
   processNoReplyFlows,
   noReplyCandidateWhere,
   contactHasAnyTag,
@@ -755,6 +1048,9 @@ module.exports = {
   conditionsPass,
   isWithinQuietHours,
   normalizeQuietHours,
+  bumpScheduledAtPastQuietHours,
   deliveryDelayMs,
   getFlowBlockReason,
+  resolveFlowActiveSince,
+  isEventAfterFlowActivation,
 }

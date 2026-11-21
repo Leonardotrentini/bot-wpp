@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "CrmFlow" ADD COLUMN IF NOT EXISTS "cancelIfHumanReplies" BOOLEAN NOT NULL DEFAULT true;

@@ -32,7 +32,14 @@ function compileTrigger(raw, tagByKey, stageByKey, flowName) {
     const delayUnit = raw.delayUnit === 'minutes' ? 'minutes' : 'hours'
     const delayValue = Math.max(1, Number(raw.delayValue) || (delayUnit === 'minutes' ? 60 : 24))
     const minutes = delayUnit === 'minutes' ? delayValue : delayValue * 60
-    return { type, delayUnit, delayValue, minutes, hours: Math.ceil(minutes / 60) }
+    return {
+      type,
+      delayUnit,
+      delayValue,
+      minutes,
+      hours: Math.ceil(minutes / 60),
+      onlyAfterFlowCreated: raw.onlyAfterFlowCreated !== false,
+    }
   }
   if (type === 'stage_change') {
     return {
@@ -46,8 +53,9 @@ function compileTrigger(raw, tagByKey, stageByKey, flowName) {
   if (type === 'contact_reply') {
     const keys = Array.isArray(raw.tagKeys) ? raw.tagKeys : []
     const tagIds = [...new Set(keys.map((k) => requireKey(tagByKey, k, `Fluxo "${flowName}"`)))]
-    if (!tagIds.length) throw new Error(`Fluxo "${flowName}": contact_reply exige tagKeys.`)
-    return { type, tagIds }
+    const out = { type, tagIds }
+    if (raw.firstReplyOnly === true) out.firstReplyOnly = true
+    return out
   }
   throw new Error(`Fluxo "${flowName}": trigger.type inválido.`)
 }
@@ -58,8 +66,15 @@ function compileActions(actions, tagByKey, stageByKey, flowName) {
     const type = String(action?.type || '')
     if (type === 'send_message') {
       const body = String(action.body || '').trim()
-      if (!body) throw new Error(`Fluxo "${flowName}" ação[${i}]: body obrigatório.`)
-      return { type, body, mediaType: 'none' }
+      const variants = Array.isArray(action.bodyVariants)
+        ? action.bodyVariants.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 2)
+        : []
+      if (!body && !variants.length) throw new Error(`Fluxo "${flowName}" ação[${i}]: body obrigatório.`)
+      const out = { type, body: body || variants[0], mediaType: 'none' }
+      if (variants.length) {
+        out.bodyVariants = variants.filter((v) => v !== out.body).slice(0, 2)
+      }
+      return out
     }
     if (type === 'add_tag' || type === 'remove_tag') {
       return { type, tagId: requireKey(tagByKey, action.tagKey, `Fluxo "${flowName}" ação[${i}]`) }
@@ -161,7 +176,8 @@ export function importCrmPackLocal(pack, store) {
       conditions: Array.isArray(row.conditions) ? row.conditions : [],
       actions,
       cooldownPerContactHours: Math.min(720, Math.max(0, Number(row.cooldownPerContactHours) ?? 24)),
-      quietHours: null,
+      quietHours: row.quietHours && typeof row.quietHours === 'object' ? row.quietHours : null,
+      cancelIfHumanReplies: row.cancelIfHumanReplies !== false,
       createdAt: new Date().toISOString(),
     }
     store.flows.push(flow)

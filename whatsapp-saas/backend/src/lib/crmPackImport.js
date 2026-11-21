@@ -140,7 +140,14 @@ function compileTrigger(raw, tagByKey, stageByKey, flowName) {
     const delayUnit = raw.delayUnit === "minutes" ? "minutes" : "hours"
     const delayValue = Math.max(1, Math.min(43200, Number(raw.delayValue) || (delayUnit === "minutes" ? 60 : 24)))
     const minutes = delayUnit === "minutes" ? delayValue : delayValue * 60
-    return { type, delayUnit, delayValue, minutes, hours: Math.ceil(minutes / 60) }
+    return {
+      type,
+      delayUnit,
+      delayValue,
+      minutes,
+      hours: Math.ceil(minutes / 60),
+      onlyAfterFlowCreated: raw.onlyAfterFlowCreated !== false,
+    }
   }
 
   if (type === "stage_change") {
@@ -160,8 +167,9 @@ function compileTrigger(raw, tagByKey, stageByKey, flowName) {
     const tagIds = [
       ...new Set(rawKeys.map((k) => resolveTagId(tagByKey, k, `Fluxo "${flowName}"`))),
     ]
-    if (!tagIds.length) throw new Error(`Fluxo "${flowName}": contact_reply exige tagKeys.`)
-    return { type, tagIds }
+    const out = { type, tagIds }
+    if (raw.firstReplyOnly === true) out.firstReplyOnly = true
+    return out
   }
 
   throw new Error(`Fluxo "${flowName}": trigger não suportado.`)
@@ -180,8 +188,20 @@ function compileActions(rawActions, tagByKey, stageByKey, flowName) {
     }
     if (type === "send_message") {
       const body = String(action.body || "").trim()
-      if (!body) throw new Error(`Fluxo "${flowName}" ação[${i}]: send_message exige body.`)
-      return { type, body: body.slice(0, 4096), mediaType: "none" }
+      const variants = Array.isArray(action.bodyVariants)
+        ? action.bodyVariants.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 2)
+        : []
+      if (!body && !variants.length) {
+        throw new Error(`Fluxo "${flowName}" ação[${i}]: send_message exige body.`)
+      }
+      const out = { type, body: (body || variants[0] || "").slice(0, 4096), mediaType: "none" }
+      if (variants.length) {
+        out.bodyVariants = variants
+          .filter((v) => v !== out.body)
+          .slice(0, 2)
+          .map((v) => v.slice(0, 4096))
+      }
+      return out
     }
     if (type === "add_tag" || type === "remove_tag") {
       const tagKey = action.tagKey || action.tag_key
@@ -227,6 +247,7 @@ function compileFlowDefs(rawFlows, tagByKey, stageByKey) {
       actions,
       cooldownPerContactHours: cooldown,
       quietHours: row.quietHours && typeof row.quietHours === "object" ? row.quietHours : null,
+      cancelIfHumanReplies: row.cancelIfHumanReplies !== false,
     }
   })
 }
@@ -342,11 +363,13 @@ async function importCrmPack(prisma, userId, pack) {
         userId,
         name: def.name,
         enabled: def.enabled,
+        enabledAt: def.enabled ? new Date() : null,
         trigger: def.trigger,
         conditions: def.conditions,
         actions: def.actions,
         cooldownPerContactHours: def.cooldownPerContactHours,
         quietHours: def.quietHours,
+        cancelIfHumanReplies: def.cancelIfHumanReplies !== false,
       },
     })
     summary.flowsCreated += 1

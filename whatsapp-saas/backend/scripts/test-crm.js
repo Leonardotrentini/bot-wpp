@@ -9,29 +9,41 @@ const {
   keywordMatches,
   isWithinQuietHours,
   normalizeQuietHours,
+  bumpScheduledAtPastQuietHours,
   deliveryDelayMs,
   onTagAdded,
   onCrmMessage,
+  onHumanOutboundMessage,
   noReplyCandidateWhere,
   conditionsPass,
+  getFlowBlockReason,
 } = require("../src/lib/crmFlows")
+const {
+  interpolateFlowBody,
+  pickMessageBody,
+  resolveSendMessageBody,
+} = require("../src/lib/flowMessageText")
 const { extractIndividualChats } = require("../src/lib/crmSync")
 const { buildContactDirectory, mergeChatsIntoDirectory, pickProfileFields, pickAvatarFromPicturePayload, contactNeedsProfile, contactNeedsAvatar, lookupDirectoryInfo } = require("../src/lib/crmProfile")
 const { containsHandoffKeyword } = require("../src/lib/crmAiAgent")
 
 let passed = 0
 let failed = 0
+/** Fila sequencial — testes async compartilham estado (fila delivery / cancel set). */
+let queue = Promise.resolve()
 
 function test(name, fn) {
-  try {
-    fn()
-    passed += 1
-    console.log(`  ✓ ${name}`)
-  } catch (err) {
-    failed += 1
-    console.error(`  ✗ ${name}`)
-    console.error(`    ${err.message}`)
-  }
+  queue = queue.then(async () => {
+    try {
+      await fn()
+      passed += 1
+      console.log(`  ✓ ${name}`)
+    } catch (err) {
+      failed += 1
+      console.error(`  ✗ ${name}`)
+      console.error(`    ${err.message}`)
+    }
+  })
 }
 
 console.log("\ncrm — testes unitários\n")
@@ -132,7 +144,8 @@ test("normalizeTrigger valida tipos e exige keywords", () => {
   assert.strictEqual(normalizeTrigger({ type: "keyword", keywords: [] }), null)
   assert.deepStrictEqual(normalizeTrigger({ type: "new_conversation" }), { type: "new_conversation" })
   const kw = normalizeTrigger({ type: "keyword", keywords: [" Preço ", "ORÇAMENTO"] })
-  assert.deepStrictEqual(kw.keywords, ["preço", "orçamento"])
+  // Keywords são normalizadas sem acento (match acento-insensível).
+  assert.deepStrictEqual(kw.keywords, ["preco", "orcamento"])
   assert.strictEqual(kw.matchMode, "contains")
 })
 
@@ -145,12 +158,21 @@ test("normalizeTrigger tag_added exige tagId", () => {
   })
 })
 
-test("normalizeTrigger contact_reply exige tagIds", () => {
-  assert.strictEqual(normalizeTrigger({ type: "contact_reply" }), null)
-  assert.strictEqual(normalizeTrigger({ type: "contact_reply", tagIds: [] }), null)
-  assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply", tagIds: ["t1", "t1", " t2 "] }), {
+test("normalizeTrigger contact_reply aceita tags opcionais e firstReplyOnly", () => {
+  assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply" }), {
+    type: "contact_reply",
+    tagIds: [],
+    firstReplyOnly: false,
+  })
+  assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply", tagIds: [] }), {
+    type: "contact_reply",
+    tagIds: [],
+    firstReplyOnly: false,
+  })
+  assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply", tagIds: ["t1", "t1", " t2 "], firstReplyOnly: true }), {
     type: "contact_reply",
     tagIds: ["t1", "t2"],
+    firstReplyOnly: true,
   })
   assert.deepStrictEqual(normalizeTrigger({ type: "contact_reply", conditionTags: ["c1"] }).tagIds, ["c1"])
 })
@@ -167,6 +189,7 @@ test("onCrmMessage contact_reply só dispara com tag e conversa existente", asyn
       actions: [{ type: "remove_tag", tagId: "tag-fup" }],
       cooldownPerContactHours: 24,
       quietHours: null,
+      cancelIfHumanReplies: true,
     },
   ]
   const conversation = {
@@ -190,12 +213,19 @@ test("onCrmMessage contact_reply só dispara com tag e conversa existente", asyn
       },
       count: async () => 0,
     },
+    crmContact: { findUnique: async () => ({ flowsStoppedAt: null }) },
     crmContactTag: {
       count: async ({ where }) => {
         if (!hasTag) return 0
         return where.tagId?.in?.includes("tag-fup") ? 1 : 0
       },
       deleteMany: async () => ({ count: 1 }),
+    },
+    crmMessage: { count: async () => 1 },
+    crmDelivery: {
+      findMany: async () => [],
+      updateMany: async () => ({ count: 0 }),
+      count: async () => 0,
     },
   }
   const deps = { prisma, io: null, sendText: async () => {} }
@@ -216,6 +246,158 @@ test("onCrmMessage contact_reply só dispara com tag e conversa existente", asyn
   assert.strictEqual(runs.length, 1)
   assert.ok(String(runs[0].detail).includes("contact_reply"))
   assert.ok(String(runs[0].detail).includes("remove_tag"))
+})
+
+test("onCrmMessage contact_reply sem tags dispara em qualquer resposta existente", async () => {
+  const runs = []
+  const flows = [
+    {
+      id: "f-any",
+      userId: "u1",
+      enabled: true,
+      trigger: { type: "contact_reply", tagIds: [] },
+      conditions: [],
+      actions: [{ type: "set_status", value: "pending" }],
+      cooldownPerContactHours: 0,
+      quietHours: null,
+    },
+  ]
+  const conversation = {
+    id: "c1",
+    userId: "u1",
+    contactId: "ct1",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    status: "open",
+    kanbanStageId: null,
+  }
+  const prisma = {
+    crmFlow: {
+      findMany: async ({ where }) => flows.filter((f) => f.userId === where.userId && f.enabled === where.enabled),
+    },
+    crmFlowRun: {
+      create: async ({ data }) => {
+        runs.push(data)
+        return data
+      },
+      count: async () => 0,
+    },
+    crmContact: { findUnique: async () => ({ flowsStoppedAt: null }) },
+    crmConversation: {
+      update: async ({ data }) => {
+        Object.assign(conversation, data)
+        return conversation
+      },
+    },
+    crmMessage: { count: async () => 1 },
+    crmDelivery: {
+      findMany: async () => [],
+      updateMany: async () => ({ count: 0 }),
+      count: async () => 0,
+    },
+  }
+  await onCrmMessage(
+    { prisma, io: null, sendText: async () => {} },
+    {
+      conversation,
+      message: { id: "m1", fromMe: false, source: "webhook", body: "oi" },
+      isNewConversation: false,
+    },
+  )
+  assert.strictEqual(runs.length, 1)
+  assert.ok(String(runs[0].detail).includes("contact_reply"))
+})
+
+test("onCrmMessage contact_reply firstReplyOnly ignora 2ª inbound", async () => {
+  const runs = []
+  let inboundCount = 2
+  const flows = [
+    {
+      id: "f-first",
+      userId: "u1",
+      enabled: true,
+      trigger: { type: "contact_reply", tagIds: [], firstReplyOnly: true },
+      conditions: [],
+      actions: [{ type: "set_status", value: "pending" }],
+      cooldownPerContactHours: 0,
+      quietHours: null,
+    },
+  ]
+  const conversation = {
+    id: "c1",
+    userId: "u1",
+    contactId: "ct1",
+    remoteJid: "5511999999999@s.whatsapp.net",
+    status: "open",
+    kanbanStageId: null,
+  }
+  const prisma = {
+    crmFlow: {
+      findMany: async ({ where }) => flows.filter((f) => f.userId === where.userId && f.enabled === where.enabled),
+    },
+    crmFlowRun: {
+      create: async ({ data }) => {
+        runs.push(data)
+        return data
+      },
+      count: async () => 0,
+    },
+    crmContact: { findUnique: async () => ({ flowsStoppedAt: null }) },
+    crmConversation: {
+      update: async ({ data }) => Object.assign(conversation, data),
+    },
+    crmMessage: { count: async () => inboundCount },
+    crmDelivery: {
+      findMany: async () => [],
+      updateMany: async () => ({ count: 0 }),
+      count: async () => 0,
+    },
+  }
+  const deps = { prisma, io: null, sendText: async () => {} }
+  const inbound = { id: "m2", fromMe: false, source: "webhook", body: "de novo" }
+
+  await onCrmMessage(deps, { conversation, message: inbound, isNewConversation: false })
+  assert.strictEqual(runs.length, 0, "2ª resposta não dispara com firstReplyOnly")
+
+  inboundCount = 1
+  await onCrmMessage(deps, { conversation, message: inbound, isNewConversation: false })
+  assert.strictEqual(runs.length, 1)
+})
+
+test("onHumanOutboundMessage cancela deliveries pending de fluxos com cancelIfHumanReplies", async () => {
+  const updates = []
+  const prisma = {
+    crmFlow: {
+      findMany: async () => [{ id: "f1" }, { id: "f2" }],
+    },
+    crmDelivery: {
+      updateMany: async ({ where, data }) => {
+        updates.push({ where, data })
+        return { count: 2 }
+      },
+    },
+  }
+  const result = await onHumanOutboundMessage({ prisma }, { conversationId: "c1" })
+  assert.strictEqual(result.cancelled, 2)
+  assert.strictEqual(updates[0].where.kind, "flow")
+  assert.strictEqual(updates[0].where.status, "pending")
+  assert.ok(updates[0].where.sourceId.in.includes("f1"))
+  assert.strictEqual(updates[0].data.status, "cancelled")
+})
+
+test("getFlowBlockReason não bloqueia por quiet hours", async () => {
+  const flow = {
+    id: "f1",
+    quietHours: { enabled: true, start: "22:00", end: "08:00" },
+    conditions: [],
+    cooldownPerContactHours: 0,
+  }
+  const conversation = { id: "c1", contactId: "ct1", contact: null }
+  const prisma = {
+    crmContact: { findUnique: async () => ({ flowsStoppedAt: null }) },
+    crmFlowRun: { count: async () => 0 },
+  }
+  const reason = await getFlowBlockReason(prisma, flow, conversation)
+  assert.strictEqual(reason, null)
 })
 
 test("onTagAdded só roda fluxo com a tag correspondente", async () => {
@@ -262,8 +444,12 @@ test("onTagAdded só roda fluxo com a tag correspondente", async () => {
       },
       count: async () => 0,
     },
+    crmContact: { findUnique: async () => ({ flowsStoppedAt: null }) },
     crmDelivery: {
-      create: async ({ data }) => data,
+      create: async ({ data }) => ({ id: "d1", ...data }),
+      findMany: async () => [],
+      updateMany: async () => ({ count: 0 }),
+      count: async () => 0,
     },
   }
   await onTagAdded({ prisma, io: null, sendText: async () => {} }, { conversation, tagId: "tag-follow" })
@@ -333,6 +519,31 @@ test("isWithinQuietHours respeita intervalo que atravessa a meia-noite", () => {
   assert.strictEqual(isWithinQuietHours(null, night), false)
 })
 
+test("bumpScheduledAtPastQuietHours empurra para o fim do silêncio", () => {
+  const qh = { enabled: true, start: "22:00", end: "08:00" }
+  const night = new Date("2026-07-08T02:00:00Z") // 23h SP
+  const bumped = bumpScheduledAtPastQuietHours(qh, night)
+  assert.ok(bumped.getTime() > night.getTime())
+  assert.strictEqual(isWithinQuietHours(qh, bumped), false)
+  const noon = new Date("2026-07-07T15:00:00Z")
+  assert.strictEqual(bumpScheduledAtPastQuietHours(qh, noon).getTime(), noon.getTime())
+})
+
+test("interpolateFlowBody substitui nome e limpa vírgula quando vazio", () => {
+  assert.strictEqual(interpolateFlowBody("Oi, {nome}!", { name: "Ana" }), "Oi, Ana!")
+  assert.strictEqual(interpolateFlowBody("Oi, {nome}!", { name: "", pushName: "" }), "Oi!")
+  assert.strictEqual(interpolateFlowBody("Oi {primeiro_nome}, tudo bem?", { pushName: "Maria Silva" }), "Oi Maria, tudo bem?")
+  assert.strictEqual(interpolateFlowBody("Oi {nome}", {}), "Oi")
+})
+
+test("pickMessageBody sorteia entre body e bodyVariants", () => {
+  const action = { body: "A", bodyVariants: ["B", "C"] }
+  assert.strictEqual(pickMessageBody(action, () => 0), "A")
+  assert.strictEqual(pickMessageBody(action, () => 0.5), "B")
+  assert.strictEqual(pickMessageBody(action, () => 0.99), "C")
+  assert.strictEqual(resolveSendMessageBody({ body: "Oi {nome}" }, { name: "Leo" }, () => 0), "Oi Leo")
+})
+
 test("normalizeMessageMediaKind detecta áudio e vídeo", () => {
   const { normalizeMessageMediaKind } = require("../src/lib/crmCore")
   assert.strictEqual(normalizeMessageMediaKind("audioMessage"), "audio")
@@ -352,9 +563,10 @@ test("extractMediaBase64Payload lê base64 da resposta Evolution", () => {
 })
 
 test("deliveryDelayMs sempre com delay mínimo", () => {
+  const min = Number(process.env.CRM_DELIVERY_MIN_DELAY_MS || 800)
   for (let i = 0; i < 20; i += 1) {
     const d = deliveryDelayMs()
-    assert.ok(d >= 3000, `delay ${d} < 3000`)
+    assert.ok(d >= min, `delay ${d} < ${min}`)
   }
 })
 
@@ -541,8 +753,12 @@ test("onCrmMessage dispara new_conversation com dispatchNewConversation", async 
       },
       count: async () => 0,
     },
+    crmContact: { findUnique: async () => ({ flowsStoppedAt: null }) },
     crmDelivery: {
-      create: async ({ data }) => data,
+      create: async ({ data }) => ({ id: "d1", ...data }),
+      findMany: async () => [],
+      updateMany: async () => ({ count: 0 }),
+      count: async () => 0,
     },
   }
   const inbound = { id: "m1", fromMe: false, source: "webhook", body: "mi carta secreta" }
@@ -926,5 +1142,12 @@ test("containsHandoffKeyword detecta palavra em qualquer posição", () => {
   assert.strictEqual(containsHandoffKeyword({ handoffKeywords: [] }, "humano"), false)
 })
 
-console.log(`\n${passed} passou, ${failed} falhou\n`)
-process.exit(failed > 0 ? 1 : 0)
+queue
+  .then(() => {
+    console.log(`\n${passed} passou, ${failed} falhou\n`)
+    process.exit(failed > 0 ? 1 : 0)
+  })
+  .catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })

@@ -129,7 +129,7 @@ export function FlowExtraTriggerRow({
 
       {type === 'contact_reply' && (
         <div>
-          <p className="mb-1 text-xs font-medium text-stone-400">Tag(s) obrigatória(s)</p>
+          <p className="mb-1 text-xs font-medium text-stone-400">Filtro por tag(s)</p>
           <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg border border-brand-700/70 bg-brand-950/40 p-2">
             {tags.length === 0 ? (
               <p className="text-xs text-stone-500">Crie tags no CRM.</p>

@@ -210,9 +210,14 @@ export function formatFlowTriggerSummary(flow, tags = [], stages = [], { formatN
     const name = tags.find((t) => t.id === flow.trigger.tagId)?.name
     if (name) main += ` (${name})`
   }
-  if (type === 'contact_reply' && flow.trigger.tagIds?.length) {
-    const names = flow.trigger.tagIds.map((id) => tags.find((t) => t.id === id)?.name || 'tag')
-    main += ` (${names.join(', ')})`
+  if (type === 'contact_reply') {
+    if (flow.trigger.firstReplyOnly) main += ' (1ª resposta)'
+    if (flow.trigger.tagIds?.length) {
+      const names = flow.trigger.tagIds.map((id) => tags.find((t) => t.id === id)?.name || 'tag')
+      main += ` (${names.join(', ')})`
+    } else {
+      main += ' (qualquer resposta)'
+    }
   }
 
   const extras = flow.extraTriggers?.length ? flow.extraTriggers : extraTriggersFromConditions(flow.conditions)

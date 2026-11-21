@@ -26,8 +26,37 @@ export function FlowActionsEditor({ actions, tags, stages, agents, onChange, onE
   const addAction = () => {
     onChange([
       ...actions,
-      { type: 'send_message', body: '', delayValue: 0, delayUnit: 'minutes', ...emptyFlowMessageMedia() },
+      {
+        type: 'send_message',
+        body: '',
+        bodyVariants: [],
+        delayValue: 0,
+        delayUnit: 'minutes',
+        ...emptyFlowMessageMedia(),
+      },
     ])
+  }
+
+  const setBodyVariant = (actionIndex, variantIndex, value) => {
+    const action = actions[actionIndex]
+    const current = Array.isArray(action.bodyVariants) ? [...action.bodyVariants] : []
+    while (current.length <= variantIndex) current.push('')
+    current[variantIndex] = value
+    setAction(actionIndex, { bodyVariants: current.slice(0, 2) })
+  }
+
+  const addBodyVariant = (actionIndex) => {
+    const action = actions[actionIndex]
+    const current = Array.isArray(action.bodyVariants) ? [...action.bodyVariants] : []
+    if (current.length >= 2) return
+    setAction(actionIndex, { bodyVariants: [...current, ''] })
+  }
+
+  const removeBodyVariant = (actionIndex, variantIndex) => {
+    const action = actions[actionIndex]
+    const current = Array.isArray(action.bodyVariants) ? [...action.bodyVariants] : []
+    current.splice(variantIndex, 1)
+    setAction(actionIndex, { bodyVariants: current })
   }
 
   const removeAction = (i) => {
@@ -99,6 +128,7 @@ export function FlowActionsEditor({ actions, tags, stages, agents, onChange, onE
                     setAction(i, {
                       type: e.target.value,
                       body: '',
+                      bodyVariants: [],
                       tagId: '',
                       stageId: '',
                       value: '',
@@ -135,6 +165,43 @@ export function FlowActionsEditor({ actions, tags, stages, agents, onChange, onE
                     onChange={(patch) => setAction(i, patch)}
                     onError={onError}
                   />
+                  <p className="mt-1.5 text-[11px] text-stone-500">
+                    Variáveis: <span className="text-stone-400">{'{nome}'}</span> (nome salvo ou pushName) e{' '}
+                    <span className="text-stone-400">{'{primeiro_nome}'}</span>. Se o nome estiver vazio, a vírgula/espaço
+                    sobrando é removido.
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-stone-400">Variações (até 3 no total)</p>
+                      {(action.bodyVariants || []).length < 2 && (
+                        <Button type="button" size="sm" variant="ghost" onClick={() => addBodyVariant(i)}>
+                          <Plus className="h-3.5 w-3.5" /> Variação
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-stone-500">
+                      O sistema sorteia uma versão por envio. A mensagem principal conta como a 1ª.
+                    </p>
+                    {(action.bodyVariants || []).map((variant, vi) => (
+                      <div key={`variant-${i}-${vi}`} className="flex items-start gap-2">
+                        <textarea
+                          value={variant || ''}
+                          onChange={(e) => setBodyVariant(i, vi, e.target.value)}
+                          rows={2}
+                          placeholder={`Variação ${vi + 2}`}
+                          className="min-h-[56px] flex-1 rounded-xl border border-brand-700/70 bg-brand-950/40 px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:border-accent-500/50 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeBodyVariant(i, vi)}
+                          className="rounded-lg p-2 text-stone-500 hover:bg-white/5 hover:text-red-400"
+                          aria-label={`Remover variação ${vi + 2}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                   {action.mediaType === 'audio' ? (
                     <FlowRecordingDelay action={action} onChange={(patch) => setAction(i, patch)} />
                   ) : null}

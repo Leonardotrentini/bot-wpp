@@ -138,12 +138,31 @@ model TrackedLinkEvent {
   updatedAt  DateTime @updatedAt
 }
 
+/// Evolution API hosts dinâmicos (Evo3+). primary/secondary continuam via env.
+model EvolutionApiHost {
+  id               String   @id @default(cuid())
+  /// evo3, evo4, …
+  slug             String   @unique
+  label            String
+  baseUrl          String
+  apiKey           String
+  /// provisioning | ready | error
+  status           String   @default("provisioning")
+  railwayServiceId String?
+  lastError        String?
+  provisionStep    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([status])
+}
+
 model WhatsAppConnection {
   id                  String    @id @default(cuid())
   userId              String    @unique
   user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   instanceName        String    @unique
-  /// primary = Evo1 (legado); secondary = Evo2 (novas conexões)
+  /// primary | secondary | evo3+ (hosts dinâmicos em EvolutionApiHost)
   evolutionHost       String    @default("primary")
   status              String    @default("DISCONNECTED")
   connected           Boolean   @default(false)
@@ -587,6 +606,8 @@ model CrmFlow {
   actions                 Json // [{ type: "send_message" | "add_tag" | "move_stage" | "assign_ai" | "set_status", ... }]
   cooldownPerContactHours Int          @default(24)
   quietHours              Json? // { enabled, start: "22:00", end: "08:00" }
+  /// Se true, cancela CrmDelivery pendentes deste fluxo quando um humano responde na conversa.
+  cancelIfHumanReplies    Boolean      @default(true)
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
   runs                    CrmFlowRun[]
