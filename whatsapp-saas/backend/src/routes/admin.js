@@ -1039,6 +1039,29 @@ router.get("/zombie-events", authMiddleware, requireAdmin, async (req, res) => {
   }
 })
 
+/**
+ * Relatório agregado (peça em 3–5 dias):
+ * GET /api/admin/zombie-report?days=5
+ * GET /api/admin/zombie-report?days=5&host=primary
+ */
+router.get("/zombie-report", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { summarizeZombieReport } = require("../lib/zombieEvents")
+    const days = Math.min(30, Math.max(1, Number(req.query.days) || 5))
+    const result = await summarizeZombieReport(prisma, {
+      days,
+      host: req.query.host || null,
+    })
+    return res.json(result)
+  } catch (err) {
+    console.error("[admin] zombie-report:", err)
+    return res.status(500).json({
+      error: "ZOMBIE_REPORT_FAILED",
+      message: err?.message || "Falha ao montar relatório de zumbis.",
+    })
+  }
+})
+
 /** Checagem de sucesso do canário Evolution (72h / findChats / msgs pós-ociosidade). */
 router.get("/canary-sync-health", authMiddleware, requireAdmin, async (req, res) => {
   try {

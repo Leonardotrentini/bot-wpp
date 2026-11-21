@@ -27,8 +27,12 @@ const {
 } = require("./evolution")
 
 /** Lazy require: evita circular dep whatsappSyncHealth ↔ crmSync (syncSingleChat virava undefined). */
+let _crmSyncCache = null
 function crmSyncApi() {
-  return require("./crmSync")
+  if (_crmSyncCache && typeof _crmSyncCache.syncSingleChat === "function") return _crmSyncCache
+  const mod = require("./crmSync")
+  if (typeof mod?.syncSingleChat === "function") _crmSyncCache = mod
+  return mod
 }
 
 /**
@@ -743,16 +747,13 @@ async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinc
     let api = crmSyncApi()
     let syncSingleChat = api?.syncSingleChat
     let extractIndividualChats = api?.extractIndividualChats
-    // Fallback: re-require se circular dep ainda deixar export incompleto.
+    // Sem delete de cache (piora corrida). Retry curto se export ainda incompleto no boot.
     if (typeof syncSingleChat !== "function") {
-      try {
-        delete require.cache[require.resolve("./crmSync")]
-        api = require("./crmSync")
-        syncSingleChat = api?.syncSingleChat
-        extractIndividualChats = api?.extractIndividualChats
-      } catch (err) {
-        console.warn(`[sync-health] crmSync re-require failed:`, err?.message || err)
-      }
+      await wait(1500)
+      _crmSyncCache = null
+      api = crmSyncApi()
+      syncSingleChat = api?.syncSingleChat
+      extractIndividualChats = api?.extractIndividualChats
     }
     if (typeof syncSingleChat !== "function") {
       console.error(`[sync-health] backfill aborted ${instanceName}: syncSingleChat unavailable`)
@@ -766,6 +767,10 @@ async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinc
         outcome: "failed",
         messagesRecovered: 0,
       })
+      // Reagenda uma vez — costuma ser corrida de boot/deploy.
+      setTimeout(() => {
+        void backfillRecentCrmAfterRecovery(deps, { userId, instanceName }).catch(() => {})
+      }, 10000)
       return { ok: false, error: "syncSingleChat_unavailable", chatsTried: 0, importedTotal: 0 }
     }
 

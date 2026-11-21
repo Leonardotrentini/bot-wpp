@@ -13,23 +13,35 @@ function mapHostLabel(hostId) {
   return hostLabel(id) || id
 }
 
+const KNOWN_DISCONNECT_CODES = new Set([401, 403, 408, 411, 428, 440, 500, 503, 515])
+
 function extractDisconnectCode(body) {
   const payload = body?.data || body?.payload || body || {}
+  const state = String(payload?.state || payload?.status || body?.state || body?.status || "")
+    .toLowerCase()
+    .trim()
+  // CONNECTION_UPDATE open/connecting com HTTP 200 NÃO é queda.
+  if (state === "open" || state === "connecting") return null
+
   const candidates = [
     payload?.statusReason,
-    payload?.statusCode,
     payload?.disconnectReason,
-    payload?.reason,
-    payload?.error?.statusCode,
     payload?.error?.output?.statusCode,
+    payload?.error?.statusCode,
     payload?.lastDisconnect?.error?.output?.statusCode,
     payload?.lastDisconnect?.error?.data?.statusCode,
+    // statusCode genérico só conta se for código conhecido de queda
+    payload?.statusCode,
     body?.statusReason,
     body?.statusCode,
   ]
   for (const raw of candidates) {
     const n = Number(raw)
-    if (Number.isFinite(n) && n > 0) return Math.trunc(n)
+    if (!Number.isFinite(n) || n <= 0) continue
+    const code = Math.trunc(n)
+    if (KNOWN_DISCONNECT_CODES.has(code)) return code
+    // reason numérico Boom fora da lista, mas estado close/refused
+    if (state === "close" || state === "refused" || state.includes("close")) return code
   }
   const msg = String(payload?.error?.message || payload?.message || body?.message || "")
   const m = msg.match(/\b(401|403|408|411|428|440|500|503|515)\b/)
@@ -110,9 +122,103 @@ async function queryZombieEvents(prisma, { days = 7, host = null, instanceName =
   }
 }
 
+/**
+ * Relatório agregado 3–30d: por instância/host, provas, soft-restart vs QR, disconnect, backfill.
+ */
+async function summarizeZombieReport(prisma, { days = 5, host = null } = {}) {
+  const base = await queryZombieEvents(prisma, {
+    days,
+    host,
+    limit: 1000,
+  })
+  if (!base.ok) return base
+
+  const byInstance = {}
+  let messagesRecoveredTotal = 0
+  let softRestartOk = 0
+  let softRestartFailed = 0
+  let bannerQr = 0
+  let cured = 0
+
+  for (const ev of base.events) {
+    const key = `${ev.host || "primary"}::${ev.instanceName}`
+    if (!byInstance[key]) {
+      byInstance[key] = {
+        host: mapHostLabel(ev.host),
+        hostId: ev.host,
+        instanceName: ev.instanceName,
+        userId: ev.userId || null,
+        total: 0,
+        byEventType: {},
+        byProof: {},
+        byOutcome: {},
+        softRestartsTriedMax: 0,
+        messagesRecovered: 0,
+        disconnectCodes: {},
+        bannerQr: 0,
+        softRestartOk: 0,
+        softRestartFailed: 0,
+        lastAt: null,
+      }
+    }
+    const row = byInstance[key]
+    row.total += 1
+    row.byEventType[ev.eventType] = (row.byEventType[ev.eventType] || 0) + 1
+    const proof = ev.proofReason || ev.eventType || "unknown"
+    row.byProof[proof] = (row.byProof[proof] || 0) + 1
+    if (ev.outcome) row.byOutcome[ev.outcome] = (row.byOutcome[ev.outcome] || 0) + 1
+    row.softRestartsTriedMax = Math.max(row.softRestartsTriedMax, Number(ev.softRestartsTried) || 0)
+    if (ev.messagesRecovered != null) {
+      row.messagesRecovered += Number(ev.messagesRecovered) || 0
+      messagesRecoveredTotal += Number(ev.messagesRecovered) || 0
+    }
+    if (ev.disconnectCode != null) {
+      const c = String(ev.disconnectCode)
+      row.disconnectCodes[c] = (row.disconnectCodes[c] || 0) + 1
+    }
+    if (ev.eventType === "banner_qr" || ev.outcome === "banner_qr") {
+      row.bannerQr += 1
+      bannerQr += 1
+    }
+    if (ev.outcome === "soft_restart_ok") {
+      row.softRestartOk += 1
+      softRestartOk += 1
+    }
+    if (ev.outcome === "soft_restart_failed") {
+      row.softRestartFailed += 1
+      softRestartFailed += 1
+    }
+    if (ev.outcome === "cured" || ev.outcome === "recovered") cured += 1
+    const ts = ev.createdAt ? new Date(ev.createdAt).toISOString() : null
+    if (ts && (!row.lastAt || ts > row.lastAt)) row.lastAt = ts
+  }
+
+  const instances = Object.values(byInstance).sort((a, b) => b.total - a.total)
+
+  return {
+    ok: true,
+    days: base.days,
+    since: base.since,
+    totalEvents: base.total,
+    totals: {
+      byHost: base.byHost,
+      byProof: base.byProof,
+      byOutcome: base.byOutcome,
+      disconnectCodes: base.disconnectCodes,
+      messagesRecovered: messagesRecoveredTotal,
+      softRestartOk,
+      softRestartFailed,
+      bannerQr,
+      cured,
+    },
+    instances,
+  }
+}
+
 module.exports = {
   mapHostLabel,
   extractDisconnectCode,
   recordZombieEvent,
   queryZombieEvents,
+  summarizeZombieReport,
 }
