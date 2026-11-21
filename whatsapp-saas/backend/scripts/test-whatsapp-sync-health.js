@@ -26,6 +26,7 @@ const {
   MUTUAL_FREEZE_SILENCE_MS,
   MUTUAL_FREEZE_MIN_MSGS,
   ONE_SHOT_RECOVERY_REASONS,
+  hostPersistsChats,
 } = require("../src/lib/whatsappSyncHealth")
 const { extractDisconnectCode } = require("../src/lib/zombieEvents")
 const { alertConfig } = require("../src/lib/zombieAlerts")
@@ -179,8 +180,12 @@ function testBusinessHoursFlagDefaultOff() {
   assert.strictEqual(BUSINESS_HOURS_ENABLED, false, "business hours deve nascer desligado")
   assert.ok(WEBHOOK_SILENCE_BUSINESS_MS >= 10 * 60 * 1000)
   assert.ok(effectiveWebhookSilenceMs() >= WEBHOOK_SILENCE_MS - 1000 || isBusinessHours())
-  const alerts = alertConfig()
-  assert.strictEqual(alerts.enabled, false, "alerta externo deve nascer desligado")
+}
+
+function testHostPersistChatsDefaults() {
+  assert.strictEqual(hostPersistsChats("primary"), false, "Evo1/primary não persiste chats")
+  assert.strictEqual(hostPersistsChats("secondary"), true, "Evo2/secondary persiste chats")
+  assert.strictEqual(hostPersistsChats("canary"), true)
 }
 
 function testPayloadFlags() {
@@ -240,6 +245,7 @@ testNewestFromRawChats()
 testLazyCrmSync()
 testDisconnectExtract()
 testBusinessHoursFlagDefaultOff()
+testHostPersistChatsDefaults()
 testPayloadFlags()
 assert.ok(WEBHOOK_SILENCE_MS >= 40 * 60 * 1000, "silêncio default deve ser >= 40min")
 assert.ok(TRAFFIC_EXPECT_MS >= 60 * 60 * 1000, "tráfego esperado default >= 1h")

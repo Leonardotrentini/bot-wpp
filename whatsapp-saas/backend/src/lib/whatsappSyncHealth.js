@@ -94,6 +94,28 @@ const HARD_ZOMBIE_PROOF_REASONS = new Set([
 ])
 /** Motivos em que soft-restart quase nunca cura → 1 tentativa → banner QR. */
 const ONE_SHOT_RECOVERY_REASONS = new Set(["empty_store_zombie", "mutual_freeze_zombie"])
+/**
+ * Quais hosts persistem chats no DB da Evolution (findChats confiável).
+ * Evo1 produção: DATABASE_SAVE_DATA_CHATS=false → findChats=0 mesmo open/saudável.
+ * Formato: primary:false,secondary:true,canary:true
+ */
+const HOST_PERSIST_CHATS = (() => {
+  const raw = String(process.env.WHATSAPP_HOST_PERSIST_CHATS || "primary:false,secondary:true")
+  const map = new Map()
+  for (const part of raw.split(",")) {
+    const [k, v] = part.split(":").map((s) => String(s || "").trim().toLowerCase())
+    if (!k) continue
+    map.set(k, v === "1" || v === "true" || v === "yes")
+  }
+  return map
+})()
+function hostPersistsChats(evolutionHost) {
+  const id = String(evolutionHost || "primary").trim().toLowerCase() || "primary"
+  if (HOST_PERSIST_CHATS.has(id)) return HOST_PERSIST_CHATS.get(id)
+  if (id === "primary" || id === "evo1" || id === "1") return false
+  // secondary / evoN / canary: assume persistido (como Evo2)
+  return true
+}
 /** Mínimo de contatos no CRM para store vazio / freeze contar como zombie (não conta nova). */
 const EMPTY_STORE_CONTACT_MIN = Math.max(
   10,
@@ -449,10 +471,23 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
     evoNewestFromChats = newestActivityMsFromRawChats(raw)
     const chats = extractIndividualChats(raw, { limit: 80 })
     if (!chats.length && evoNewestFromChats == null) {
-      // Store vazio + CRM maduro + silêncio já filtrado pelo watchdog = zombie (Baseset).
-      // Conta nova / poucos contatos → ainda não prova (evita storm em onboarding).
       contactCountCache = await prisma.crmContact.count({ where: { userId: row.userId } })
-      if (contactCountCache >= EMPTY_STORE_CONTACT_MIN) {
+      // Evo1 (SAVE_DATA_CHATS=false): findChats=0 é NORMAL mesmo com sessão viva.
+      // Usar isso como empty_store_zombie causa soft-restart/QR falso.
+      if (!hostPersistsChats(row.evolutionHost)) {
+        console.warn(
+          JSON.stringify({
+            tag: "sync-health",
+            action: "skip_empty_store_proof",
+            instance: row.instanceName,
+            host: row.evolutionHost || "primary",
+            contactCount: contactCountCache,
+            message: "findChats vazio ignorado — host sem persistência de chats",
+          }),
+        )
+        // segue para probes findMessages / no_gap (sem marcar empty_store)
+      } else if (contactCountCache >= EMPTY_STORE_CONTACT_MIN) {
+        // Store vazio + CRM maduro + silêncio já filtrado = zombie (só hosts que persistem).
         return {
           proven: true,
           reason: "empty_store_zombie",
@@ -462,15 +497,16 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
           gapMs: Date.now() - crmNewestMs,
           contactCount: contactCountCache,
         }
-      }
-      return {
-        proven: false,
-        reason: "empty_findChats_store",
-        sampleJid: null,
-        evoNewestMs: null,
-        crmNewestMs,
-        gapMs: Date.now() - crmNewestMs,
-        contactCount: contactCountCache,
+      } else {
+        return {
+          proven: false,
+          reason: "empty_findChats_store",
+          sampleJid: null,
+          evoNewestMs: null,
+          crmNewestMs,
+          gapMs: Date.now() - crmNewestMs,
+          contactCount: contactCountCache,
+        }
       }
     }
     for (const chat of chats) {
@@ -1446,6 +1482,7 @@ module.exports = {
   REALTIME_MAX_AGE_MS,
   ZOMBIE_GAP_MS,
   EMPTY_STORE_CONTACT_MIN,
+  hostPersistsChats,
   MUTUAL_FREEZE_SILENCE_MS,
   MUTUAL_FREEZE_BASELINE_MS,
   MUTUAL_FREEZE_MIN_MSGS,
