@@ -96,7 +96,8 @@ async function probeOneInstance(prisma, conn) {
   }
 
   const stateOpen = /^open$/i.test(String(connectionState || ""))
-  const zombieSuspect = Boolean(stateOpen && !probeOk)
+  // Sem telefone próprio não dá pra sondar o socket — não é zumbi.
+  const zombieSuspect = Boolean(stateOpen && !probeOk && error !== "missing_own_phone")
 
   if (zombieSuspect) {
     probeFailStreak.set(instanceName, (probeFailStreak.get(instanceName) || 0) + 1)
