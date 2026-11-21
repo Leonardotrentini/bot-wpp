@@ -95,6 +95,7 @@ const HARD_ZOMBIE_PROOF_REASONS = new Set([
   "findMessages",
   "empty_store_zombie",
   "mutual_freeze_zombie",
+  "socket_probe_fail",
 ])
 /** Motivos em que soft-restart quase nunca cura → 1 tentativa → banner QR. */
 const ONE_SHOT_RECOVERY_REASONS = new Set(["empty_store_zombie", "mutual_freeze_zombie"])
@@ -313,6 +314,14 @@ async function touchLastWebhookAt(prisma, instanceName, { at = new Date(), recor
   const newestMsgMs = extractNewestMessageMs(Array.isArray(list) ? list : [])
   const realtime = isRealtimeMessageMs(newestMsgMs, at.getTime())
 
+  // Batimento passivo: fromMe / inbound (mesmo em replay antigo atualiza direção se houver key).
+  try {
+    const { touchMessageDirection } = require("./whatsappSocketProbe")
+    await touchMessageDirection(prisma, instanceName, Array.isArray(list) ? list : [])
+  } catch {
+    /* ignore */
+  }
+
   // Replay/histórico: não prova vida — só refresca lastSync leve.
   if (!realtime) {
     const conn = await prisma.whatsAppConnection.update({
@@ -466,6 +475,25 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
 
   bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
   const { extractIndividualChats } = crmSyncApi()
+
+  // Prova opcional por sonda de socket (flag WHATSAPP_PROBE_AS_HARD_PROOF — desligada por padrão).
+  try {
+    const { getProbeHardProof } = require("./whatsappSocketProbe")
+    const probeProof = getProbeHardProof(row.instanceName)
+    if (probeProof?.proven) {
+      return {
+        proven: true,
+        reason: probeProof.reason || "socket_probe_fail",
+        sampleJid: null,
+        evoNewestMs: null,
+        crmNewestMs,
+        gapMs: Date.now() - crmNewestMs,
+        streak: probeProof.streak,
+      }
+    }
+  } catch {
+    /* ignore */
+  }
 
   // 1) findChats: lastActivityAt à frente do CRM — ou store vazio com CRM cheio (sessão morta).
   let evoNewestFromChats = null

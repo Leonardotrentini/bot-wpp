@@ -5418,6 +5418,32 @@ httpServer.listen(port, () => {
       `Job órfãos LID ativo (a cada ${LID_ORPHAN_INTERVAL_MS / 1000}s — resolve telefone + arquiva LID legado inativo).`,
     )
 
+    // Sonda ativa Evo1 vs Evo2 — só leitura (whatsappNumbers no próprio número). Sem envio.
+    const {
+      runWhatsappSocketProbeTick,
+      PROBE_ENABLED,
+      PROBE_INTERVAL_MS,
+      PROBE_AS_HARD_PROOF,
+    } = require("./lib/whatsappSocketProbe")
+    if (PROBE_ENABLED) {
+      let probeBusy = false
+      const runProbe = () => {
+        if (probeBusy) return
+        probeBusy = true
+        void runWhatsappSocketProbeTick(prisma)
+          .catch((err) => console.error("[socket-probe]", err?.message || err))
+          .finally(() => {
+            probeBusy = false
+          })
+      }
+      // Primeira rodada ~90s após boot (não competir com warm/webhooks).
+      setTimeout(runProbe, 90_000)
+      setInterval(runProbe, PROBE_INTERVAL_MS)
+      console.log(
+        `Sonda socket WhatsApp ativa (a cada ${PROBE_INTERVAL_MS / 1000}s — whatsappNumbers self, sem envio; hardProof=${PROBE_AS_HARD_PROOF}).`,
+      )
+    }
+
     // Após subir, limpa mídia legada em entregas já concluídas (recuperação pós disco cheio).
     setTimeout(() => {
       void runCrmStorageMaintenance(prisma, { full: true }).catch((err) =>

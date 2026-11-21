@@ -173,6 +173,10 @@ model WhatsAppConnection {
   lastSync            DateTime?
   /// Último webhook de mensagem (MESSAGES_UPSERT/SET) recebido desta instância.
   lastWebhookAt       DateTime?
+  /// Último webhook de mensagem fromMe=true (vendedor pelo celular / CRM).
+  lastFromMeAt        DateTime?
+  /// Último webhook de mensagem fromMe=false (cliente).
+  lastInboundAt       DateTime?
   /// HEALTHY | STALE | RECOVERING | UNKNOWN — health real além do state "open" da Evolution.
   syncHealth          String    @default("UNKNOWN")
   staleDetectedAt     DateTime?
@@ -938,6 +942,30 @@ model CrmConversationAnalysis {
   @@index([userId, analyzedAt])
   @@index([runId])
   @@index([conversationId])
+}
+
+/// Sonda ativa Evo1 vs Evo2 (whatsappNumbers no próprio número — sem envio).
+model WhatsAppProbeResult {
+  id               String   @id @default(cuid())
+  instanceName     String
+  /// primary | secondary | canary | evoN
+  host             String   @default("primary")
+  probedAt         DateTime @default(now())
+  probeOk          Boolean
+  latencyMs        Int?
+  error            String?
+  /// open | close | connecting | …
+  connectionState  String?
+  lastFromMeAt     DateTime?
+  lastInboundAt    DateTime?
+  /// true se Evolution reportou open mas a sonda falhou
+  zombieSuspect    Boolean  @default(false)
+  meta             Json?
+
+  @@index([instanceName, probedAt])
+  @@index([host, probedAt])
+  @@index([probeOk, probedAt])
+  @@index([zombieSuspect, probedAt])
 }
 
 /// Observabilidade de zumbis WhatsApp + códigos de disconnect Evolution.

@@ -1062,6 +1062,30 @@ router.get("/zombie-report", authMiddleware, requireAdmin, async (req, res) => {
   }
 })
 
+/**
+ * Relatório da sonda ativa Evo1 vs Evo2 (72h):
+ * GET /api/admin/probe-report?hours=72
+ */
+router.get("/probe-report", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { buildProbeReport, PROBE_ENABLED, PROBE_AS_HARD_PROOF, PROBE_INTERVAL_MS } = require("../lib/whatsappSocketProbe")
+    const hours = Math.min(168, Math.max(1, Number(req.query.hours) || 72))
+    const result = await buildProbeReport(prisma, { hours })
+    return res.json({
+      ...result,
+      probeEnabled: PROBE_ENABLED,
+      probeIntervalMs: PROBE_INTERVAL_MS,
+      probeAsHardProof: PROBE_AS_HARD_PROOF,
+    })
+  } catch (err) {
+    console.error("[admin] probe-report:", err)
+    return res.status(500).json({
+      error: "PROBE_REPORT_FAILED",
+      message: err?.message || "Falha ao montar relatório de sonda.",
+    })
+  }
+})
+
 /** Checagem de sucesso do canário Evolution (72h / findChats / msgs pós-ociosidade). */
 router.get("/canary-sync-health", authMiddleware, requireAdmin, async (req, res) => {
   try {

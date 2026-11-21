@@ -443,11 +443,15 @@ async function fetchGroupParticipants(instanceName, groupJid) {
  * Verifica se número(s) existem no WhatsApp (Evolution: /chat/whatsappNumbers).
  * Retorno normalizado: [{ number, exists, jid }].
  */
-async function checkWhatsappNumbers(instanceName, numbers) {
+async function checkWhatsappNumbers(instanceName, numbers, { timeoutMs } = {}) {
   const list = (Array.isArray(numbers) ? numbers : [numbers])
     .map((n) => String(n || "").replace(/\D/g, ""))
     .filter(Boolean)
   if (!list.length) return []
+
+  const to = Number.isFinite(timeoutMs)
+    ? Math.max(1000, Number(timeoutMs))
+    : Math.min(DEFAULT_TIMEOUT_MS, 15000)
 
   const data = await firstSuccess([
     () =>
@@ -455,14 +459,14 @@ async function checkWhatsappNumbers(instanceName, numbers) {
         method: "POST",
         body: { numbers: list },
         instanceName,
-        timeoutMs: Math.min(DEFAULT_TIMEOUT_MS, 15000),
+        timeoutMs: to,
       }),
     () =>
       requestEvolution(`/chat/whatsappNumbers/${encodeURIComponent(instanceName)}`, {
         method: "POST",
         body: { number: list[0], numbers: list },
         instanceName,
-        timeoutMs: Math.min(DEFAULT_TIMEOUT_MS, 15000),
+        timeoutMs: to,
       }),
   ])
 
