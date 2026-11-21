@@ -85,6 +85,8 @@ const {
   runWhatsappSyncHealthWatchdog,
   backfillRecentCrmAfterRecovery,
   tryKeepAliveAfterClose,
+  inBootGrace,
+  BOOT_GRACE_MS,
   SYNC_HEALTH,
 } = require("./lib/whatsappSyncHealth")
 const { warmInstanceHostCache, isSecondaryConfigured } = require("./lib/evolutionHosts")
@@ -4211,11 +4213,30 @@ async function updateConnectionFromWebhook(instanceName, body) {
   bindInstanceHost(instanceName, existing.evolutionHost || "primary")
 
   const payload = getWebhookPayload(body)
-  const connected = pickConnected(payload) || pickConnected(body)
+  let connected = pickConnected(payload) || pickConnected(body)
   const qr = (await resolveQrForStorage(payload)) || (await resolveQrForStorage(body)) || existing.qrCode
   const nextStatus = pickStatus(payload) || pickStatus(body)
   const status = nextStatus && nextStatus !== "unknown" ? nextStatus.toUpperCase() : existing.status
   let phone = pickPhone(payload) || pickPhone(body)
+
+  // Histerese: 1º close/connecting após open NÃO derruba CRM nem dispara keep-alive restart.
+  // Sem isso, webhook transitório (comum pós-deploy) reinicia a sessão do cliente.
+  let deferredDisconnect = false
+  if (!connected && existing.connected) {
+    const streak = bumpProbeFailStreak(existing.userId, "notOpen")
+    if (streak.notOpen < PROBE_FAIL_STREAK) {
+      deferredDisconnect = true
+      connected = true
+      console.warn(
+        `[whatsapp] webhook defer disconnect ${instanceName} (${streak.notOpen}/${PROBE_FAIL_STREAK}) status=${status}`,
+      )
+    } else {
+      clearProbeFailStreak(existing.userId)
+    }
+  } else if (connected) {
+    clearProbeFailStreak(existing.userId)
+  }
+
   // O evento de conexão não traz o número. Sem isso a tela fica “conectada” sem telefone.
   if (connected && !phone && !existing.phone) {
     const info = await fetchInstanceInfo(instanceName).catch((err) => {
@@ -4225,12 +4246,15 @@ async function updateConnectionFromWebhook(instanceName, body) {
     phone = pickPhone(info)
   }
 
-  const phoneRaw = connected
-    ? phone
-      ? String(phone)
-      : existing.phone
-    : null
-  const phoneData = connected ? connectionPhoneData(phoneRaw) : clearConnectionPhoneData()
+  // Em defer / connected sem número novo: não sobrescrever phone com null.
+  let phoneData = {}
+  if (connected) {
+    if (phone) phoneData = connectionPhoneData(String(phone))
+    else if (!existing.phone) phoneData = {}
+    // senão mantém phone atual (não manda phone:null)
+  } else if (!deferredDisconnect) {
+    phoneData = clearConnectionPhoneData()
+  }
 
   if (connected && phoneData.phone) {
     const enforcedEarly = await enforceOrgNumberConflict({
@@ -4247,8 +4271,9 @@ async function updateConnectionFromWebhook(instanceName, body) {
       where: { instanceName },
       data: {
         connected,
-        status,
-        qrCode: connected ? null : qr,
+        // Mantém status reportado (CLOSE/CONNECTING) mesmo em defer — visibilidade sem derrubar.
+        status: deferredDisconnect && status ? status : status,
+        qrCode: connected && !deferredDisconnect ? null : qr,
         ...phoneData,
         lastSync: new Date(),
       },
@@ -4784,6 +4809,7 @@ async function processEvolutionWebhookEvent(event, instanceName, body, options =
       scheduleCrmBackfillAfterRecovery(conn.userId, instanceName, "connection-update")
     }
     // Queda real: tenta voltar sem logout/QR (keep-alive).
+    // Nunca durante boot grace (deploy do CRM não pode reiniciar sessões).
     if (before?.connected && conn && !conn.connected && before.userId) {
       void tryKeepAliveAfterClose(
         { prisma, emitWhatsAppToUser, formatConnectionPayload },
@@ -4791,6 +4817,7 @@ async function processEvolutionWebhookEvent(event, instanceName, body, options =
           userId: before.userId,
           instanceName,
           evolutionHost: before.evolutionHost || conn.evolutionHost,
+          reason: conn.status || "",
         },
       ).catch((err) => console.warn("[sync-health] keep-alive:", err?.message || err))
     }
@@ -4989,7 +5016,8 @@ app.get("/api/whatsapp/status", authMiddleware, async (req, res) => {
       !pickConnected(stateData) &&
       !existing.qrCode &&
       (stateLabel === "CONNECTING" || existing.status === "CONNECTING")
-    if (stuckConnecting) {
+    // Nunca restart via status durante boot grace (UI polling pós-deploy).
+    if (stuckConnecting && !inBootGrace() && !existing.connected) {
       const last = qrRecoverCooldown.get(userId) || 0
       if (Date.now() - last > QR_RECOVER_COOLDOWN_MS) {
         qrRecoverCooldown.set(userId, Date.now())
@@ -5231,19 +5259,21 @@ async function reconcileConnectedWhatsAppInstances() {
             return
           }
           const streak = bumpReconcileFailStreak(row.instanceName, "notConnected")
-          if (streak.notConnected < RECONCILE_NOT_CONNECTED_STREAK) {
+          if (streak.notConnected < RECONCILE_NOT_CONNECTED_STREAK || inBootGrace()) {
             deferred += 1
             console.warn(
-              `[whatsapp-reconcile] ${row.instanceName} not-connected (${streak.notConnected}/${RECONCILE_NOT_CONNECTED_STREAK}) — aguardando confirmação`,
+              `[whatsapp-reconcile] ${row.instanceName} not-connected (${streak.notConnected}/${RECONCILE_NOT_CONNECTED_STREAK})${inBootGrace() ? " boot-grace" : ""} — aguardando confirmação`,
             )
             // Tentativa precoce de keep-alive (sem esperar streak completo).
-            if (streak.notConnected === 1) {
+            // Bloqueada no boot grace — deploy do CRM não reinicia sessão.
+            if (streak.notConnected === 1 && !inBootGrace()) {
               void tryKeepAliveAfterClose(
                 { prisma, emitWhatsAppToUser, formatConnectionPayload },
                 {
                   userId: row.userId,
                   instanceName: row.instanceName,
                   evolutionHost: row.evolutionHost,
+                  reason: row.status || "not_connected",
                 },
               ).catch(() => {})
             }
@@ -5256,10 +5286,10 @@ async function reconcileConnectedWhatsAppInstances() {
         } catch (err) {
           if (isEvolutionUnreachableError(err)) {
             const streak = bumpReconcileFailStreak(row.instanceName, "unreachable")
-            if (streak.unreachable < RECONCILE_UNREACHABLE_STREAK) {
+            if (streak.unreachable < RECONCILE_UNREACHABLE_STREAK || inBootGrace()) {
               deferred += 1
               console.warn(
-                `[whatsapp-reconcile] ${row.instanceName} unreachable (${streak.unreachable}/${RECONCILE_UNREACHABLE_STREAK}): ${err?.message || err}`,
+                `[whatsapp-reconcile] ${row.instanceName} unreachable (${streak.unreachable}/${RECONCILE_UNREACHABLE_STREAK})${inBootGrace() ? " boot-grace" : ""}: ${err?.message || err}`,
               )
               return
             }
@@ -5315,6 +5345,11 @@ httpServer.listen(port, () => {
       console.error("[bootstrap] evolution hosts/webhooks:", err?.message || err),
     )
   console.log(`Backend online na porta ${port}`)
+  if (BOOT_GRACE_MS > 0) {
+    console.log(
+      `[boot-grace] ${Math.round(BOOT_GRACE_MS / 1000)}s — sem restart/logout/keep-alive em instâncias (deploy-safe).`,
+    )
+  }
   logStartupSecurityChecks()
   if (ENABLE_SCHEDULER) {
     setInterval(() => {

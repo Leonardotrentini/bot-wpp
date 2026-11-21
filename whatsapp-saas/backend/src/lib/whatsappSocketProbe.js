@@ -147,7 +147,43 @@ async function probeOneInstance(prisma, conn) {
 }
 
 /**
- * Ciclo completo: todas as connected/open, com gap entre chamadas.
+ * Inventário sem sonda: instâncias close/connecting/disconnected de clientes CRM.
+ * Não chama Evolution — só registra o estado conhecido para o relatório.
+ */
+async function recordStateInventory(prisma, conn) {
+  const host = normalizeHostId(conn.evolutionHost || "primary")
+  const status = String(conn.status || "UNKNOWN").toUpperCase()
+  const row = {
+    instanceName: conn.instanceName,
+    host,
+    probeOk: false,
+    latencyMs: null,
+    error: "skipped_not_open",
+    connectionState: status.toLowerCase(),
+    lastFromMeAt: conn.lastFromMeAt || null,
+    lastInboundAt: conn.lastInboundAt || null,
+    zombieSuspect: false,
+    meta: {
+      skipped: true,
+      reason: "state_inventory",
+      crmConnected: Boolean(conn.connected),
+      crmStatus: status,
+    },
+  }
+  if (prisma?.whatsAppProbeResult) {
+    try {
+      await prisma.whatsAppProbeResult.create({ data: row })
+    } catch (err) {
+      console.warn("[socket-probe] inventory persist failed:", err?.message || err)
+    }
+  }
+  return row
+}
+
+/**
+ * Ciclo completo:
+ * 1) Sonda ativa só em open/connected (whatsappNumbers).
+ * 2) Inventário passivo das demais (close/connecting) — sem chamada Evolution.
  */
 async function runWhatsappSocketProbeTick(prisma) {
   if (!PROBE_ENABLED) return { skipped: true, reason: "disabled" }
@@ -155,7 +191,6 @@ async function runWhatsappSocketProbeTick(prisma) {
 
   const connections = await prisma.whatsAppConnection.findMany({
     where: {
-      connected: true,
       status: { not: "NUMBER_CONFLICT" },
     },
     select: {
@@ -172,11 +207,17 @@ async function runWhatsappSocketProbeTick(prisma) {
     orderBy: [{ evolutionHost: "asc" }, { instanceName: "asc" }],
   })
 
-  // Preferir status OPEN; ainda assim tenta connected.
-  const targets = connections.filter((c) => {
+  const targets = []
+  const inventory = []
+  for (const c of connections) {
     const st = String(c.status || "").toUpperCase()
-    return st === "OPEN" || st === "CONNECTED" || c.connected
-  })
+    // Sonda só open/connected; close/connecting/disconnected → inventário (sem Evolution).
+    if (c.connected && (st === "OPEN" || st === "CONNECTED")) {
+      targets.push(c)
+    } else {
+      inventory.push(c)
+    }
+  }
 
   const results = []
   for (let i = 0; i < targets.length; i += 1) {
@@ -196,6 +237,11 @@ async function runWhatsappSocketProbeTick(prisma) {
     if (i < targets.length - 1) await wait(PROBE_GAP_MS)
   }
 
+  const inventoryRows = []
+  for (const conn of inventory) {
+    inventoryRows.push(await recordStateInventory(prisma, conn))
+  }
+
   const ok = results.filter((r) => r.probeOk).length
   const suspects = results.filter((r) => r.zombieSuspect).length
   console.log(
@@ -205,10 +251,18 @@ async function runWhatsappSocketProbeTick(prisma) {
       total: results.length,
       ok,
       suspects,
+      inventory: inventoryRows.length,
       gapMs: PROBE_GAP_MS,
     }),
   )
-  return { total: results.length, ok, suspects, results }
+  return {
+    total: results.length,
+    ok,
+    suspects,
+    inventory: inventoryRows.length,
+    results,
+    inventoryRows,
+  }
 }
 
 /**
@@ -255,6 +309,7 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
 
   const byInstance = new Map()
   for (const r of rows) {
+    const isInventory = r.error === "skipped_not_open"
     const key = `${r.host}::${r.instanceName}`
     if (!byInstance.has(key)) {
       byInstance.set(key, {
@@ -263,6 +318,8 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
         total: 0,
         ok: 0,
         fail: 0,
+        inventoryTicks: 0,
+        lastInventoryState: null,
         zombieSuspects: 0,
         latencies: [],
         failHours: {},
@@ -271,6 +328,11 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
       })
     }
     const agg = byInstance.get(key)
+    if (isInventory) {
+      agg.inventoryTicks += 1
+      agg.lastInventoryState = r.connectionState || agg.lastInventoryState
+      continue
+    }
     agg.total += 1
     if (r.probeOk) agg.ok += 1
     else agg.fail += 1
@@ -324,10 +386,35 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
 
   const instances = [...byInstance.values()].sort((a, b) => String(a.host).localeCompare(b.host) || a.instanceName.localeCompare(b.instanceName))
 
+  // Separar sondas ativas vs inventário (skipped_not_open)
+  const activeProbeRows = rows.filter((r) => r.error !== "skipped_not_open")
+  const inventoryLatest = new Map()
+  for (const r of rows) {
+    if (r.error !== "skipped_not_open") continue
+    const prev = inventoryLatest.get(r.instanceName)
+    if (!prev || new Date(r.probedAt) > new Date(prev.probedAt)) {
+      inventoryLatest.set(r.instanceName, r)
+    }
+  }
+
   const byHost = {}
   for (const inst of instances) {
     const h = inst.host === "primary" ? "Evo1" : inst.host === "secondary" ? "Evo2" : inst.host
-    if (!byHost[h]) byHost[h] = { host: h, total: 0, ok: 0, fail: 0, zombieSuspects: 0, instances: 0 }
+    if (!byHost[h]) {
+      byHost[h] = {
+        host: h,
+        total: 0,
+        ok: 0,
+        fail: 0,
+        zombieSuspects: 0,
+        instances: 0,
+        inventoryInstances: 0,
+      }
+    }
+    if (inst.total === 0 && inst.inventoryTicks > 0) {
+      byHost[h].inventoryInstances += 1
+      continue
+    }
     byHost[h].total += inst.total
     byHost[h].ok += inst.ok
     byHost[h].fail += inst.fail
@@ -336,6 +423,37 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
   }
   for (const h of Object.values(byHost)) {
     h.okPct = h.total ? Math.round((1000 * h.ok) / h.total) / 10 : null
+  }
+
+  // Snapshot atual do CRM (todas as conexões) — evita invisíveis mesmo sem tick recente
+  let crmSnapshot = []
+  if (prisma.whatsAppConnection) {
+    const crmRows = await prisma.whatsAppConnection.findMany({
+      where: { status: { not: "NUMBER_CONFLICT" } },
+      select: {
+        instanceName: true,
+        evolutionHost: true,
+        status: true,
+        connected: true,
+        lastWebhookAt: true,
+        lastFromMeAt: true,
+        lastInboundAt: true,
+        syncHealth: true,
+      },
+      orderBy: [{ evolutionHost: "asc" }, { instanceName: "asc" }],
+    })
+    crmSnapshot = crmRows.map((c) => ({
+      instanceName: c.instanceName,
+      host: normalizeHostId(c.evolutionHost || "primary"),
+      status: c.status,
+      connected: c.connected,
+      syncHealth: c.syncHealth,
+      lastWebhookAt: c.lastWebhookAt,
+      lastFromMeAt: c.lastFromMeAt,
+      lastInboundAt: c.lastInboundAt,
+      probed: activeProbeRows.some((r) => r.instanceName === c.instanceName),
+      inventoryState: inventoryLatest.get(c.instanceName)?.connectionState || null,
+    }))
   }
 
   // Cruzamento com WhatsAppZombieEvent
@@ -349,8 +467,10 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
   }
   const cross = instances.map((inst) => {
     const related = zombieEvents.filter((z) => z.instanceName === inst.instanceName)
+    const inventoryOnly = inst.total === 0 && inst.inventoryTicks > 0
     return {
       ...inst,
+      inventoryOnly,
       watchdogEvents: related.length,
       watchdogTypes: related.reduce((acc, z) => {
         acc[z.eventType] = (acc[z.eventType] || 0) + 1
@@ -372,6 +492,8 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
       evo2: byHost.Evo2 || null,
     },
     instances: cross,
+    crmSnapshot,
+    inventoryCount: inventoryLatest.size,
   }
 }
 
@@ -395,6 +517,7 @@ module.exports = {
   PROBE_AS_HARD_PROOF,
   PROBE_HARD_PROOF_STREAK,
   probeOneInstance,
+  recordStateInventory,
   runWhatsappSocketProbeTick,
   touchMessageDirection,
   buildProbeReport,

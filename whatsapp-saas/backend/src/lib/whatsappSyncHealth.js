@@ -21,10 +21,13 @@ const {
   logoutInstance,
   pickConnected,
   pickStatus,
+  pickPhone,
   findChats,
   fetchChatMessages,
+  fetchInstanceInfo,
   reassertInstanceWebhook,
 } = require("./evolution")
+const { connectionPhoneData } = require("./whatsappPhoneClaim")
 
 /** Lazy require: evita circular dep whatsappSyncHealth ↔ crmSync (syncSingleChat virava undefined). */
 let _crmSyncCache = null
@@ -74,6 +77,23 @@ const KEEP_ALIVE_ENABLED =
   String(process.env.WHATSAPP_KEEP_ALIVE_ENABLED || "true").toLowerCase() !== "false"
 /** Antes 3min: keep-alive em rajada flapa UI. 8min reduz restart em loop. */
 const KEEP_ALIVE_COOLDOWN_MS = Number(process.env.WHATSAPP_KEEP_ALIVE_COOLDOWN_MS || 8 * 60 * 1000)
+/**
+ * Janela pós-boot do CRM: NUNCA restart/logout/connect em instância.
+ * Evita que deploy do backend derrube sessões (keep-alive / reconcile / soft-restart).
+ * Webhook refresh (só URL) continua permitido — não reinicia socket.
+ */
+const PROCESS_BOOT_AT_MS = Date.now()
+const BOOT_GRACE_MS = Math.max(
+  0,
+  Number(process.env.WHATSAPP_BOOT_GRACE_MS || 5 * 60 * 1000),
+)
+function inBootGrace(now = Date.now()) {
+  return BOOT_GRACE_MS > 0 && now - PROCESS_BOOT_AT_MS < BOOT_GRACE_MS
+}
+function bootGraceRemainingMs(now = Date.now()) {
+  if (!inBootGrace(now)) return 0
+  return Math.max(0, BOOT_GRACE_MS - (now - PROCESS_BOOT_AT_MS))
+}
 /** Evo precisa estar pelo menos isto à frente do CRM para contar como gap de zombie. */
 const ZOMBIE_GAP_MS = Number(process.env.WHATSAPP_ZOMBIE_GAP_MS || 2 * 60 * 1000)
 const ZOMBIE_PROBE_CHATS = Math.max(2, Math.min(10, Number(process.env.WHATSAPP_ZOMBIE_PROBE_CHATS || 5)))
@@ -1098,6 +1118,12 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
       const maxRecoveries = ONE_SHOT_RECOVERY_REASONS.has(proof.reason) ? 1 : MAX_SOFT_RECOVERIES
 
       if (recoveryCount < maxRecoveries) {
+        if (inBootGrace()) {
+          console.warn(
+            `[sync-health] soft-restart skipped (boot grace) ${row.instanceName} proof=${proof.reason}`,
+          )
+          continue
+        }
         recovering += 1
         const recoveringConn = await prisma.whatsAppConnection.update({
           where: { userId: row.userId },
@@ -1253,6 +1279,10 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
     }
 
     if (recoveryCount < MAX_SOFT_RECOVERIES) {
+      if (inBootGrace()) {
+        console.warn(`[sync-health] aggressive restart skipped (boot grace) ${row.instanceName}`)
+        continue
+      }
       recovering += 1
       const recoveringConn = await prisma.whatsAppConnection.update({
         where: { userId: row.userId },
@@ -1356,9 +1386,21 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
  * Após CLOSE real: tenta restart da instância (sem logout) para voltar online sem QR.
  * Cooldown por instância para não loopar.
  */
-async function tryKeepAliveAfterClose(deps, { userId, instanceName, evolutionHost }) {
+async function tryKeepAliveAfterClose(deps, { userId, instanceName, evolutionHost, reason } = {}) {
   if (!KEEP_ALIVE_ENABLED || !instanceName || !userId) {
     return { attempted: false, reason: "disabled_or_missing" }
+  }
+  if (inBootGrace()) {
+    console.warn(
+      `[sync-health] keep-alive skipped (boot grace ${Math.round(bootGraceRemainingMs() / 1000)}s) ${instanceName}`,
+    )
+    return { attempted: false, reason: "boot_grace" }
+  }
+  // connecting é transitório — restart aqui flapa sessão saudável (ex.: pós-deploy).
+  const why = String(reason || "").toLowerCase()
+  if (why.includes("connecting")) {
+    console.warn(`[sync-health] keep-alive skipped (connecting) ${instanceName}`)
+    return { attempted: false, reason: "connecting_transient" }
   }
   const failStreak = keepAliveFailStreak.get(instanceName) || 0
   const cooldown = KEEP_ALIVE_COOLDOWN_MS * Math.min(4, 1 + failStreak)
@@ -1394,6 +1436,19 @@ async function tryKeepAliveAfterClose(deps, { userId, instanceName, evolutionHos
   const probe = await probeEvolutionStillOpen(instanceName, evolutionHost)
   if (probe.open) {
     keepAliveFailStreak.delete(instanceName)
+    const prev = await prisma.whatsAppConnection
+      .findUnique({ where: { userId }, select: { phone: true, phoneDigits: true } })
+      .catch(() => null)
+    let phonePatch = {}
+    if (!prev?.phone) {
+      try {
+        const info = await fetchInstanceInfo(instanceName).catch(() => null)
+        const phone = pickPhone(info)
+        if (phone) phonePatch = connectionPhoneData(phone)
+      } catch (_) {
+        /* phone restore best-effort */
+      }
+    }
     const conn = await prisma.whatsAppConnection.update({
       where: { userId },
       data: {
@@ -1404,6 +1459,7 @@ async function tryKeepAliveAfterClose(deps, { userId, instanceName, evolutionHos
         syncHealth: SYNC_HEALTH.RECOVERING,
         staleLastRecoveryAt: new Date(),
         lastSync: new Date(),
+        ...phonePatch,
       },
     })
     if (emitWhatsAppToUser && formatConnectionPayload) {
@@ -1523,6 +1579,9 @@ module.exports = {
   ONE_SHOT_RECOVERY_REASONS,
   AUTO_RECOVER,
   KEEP_ALIVE_ENABLED,
+  BOOT_GRACE_MS,
+  inBootGrace,
+  bootGraceRemainingMs,
   MAX_SOFT_RECOVERIES,
   touchLastWebhookAt,
   markSyncHealthy,
