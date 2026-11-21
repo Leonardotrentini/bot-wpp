@@ -939,3 +939,31 @@ model CrmConversationAnalysis {
   @@index([runId])
   @@index([conversationId])
 }
+
+/// Observabilidade de zumbis WhatsApp + códigos de disconnect Evolution.
+model WhatsAppZombieEvent {
+  id                String   @id @default(cuid())
+  /// instanceName Evolution / CRM
+  instanceName      String
+  userId            String?
+  /// primary | secondary | canary | evoN
+  host              String   @default("primary")
+  /// empty_store_zombie | mutual_freeze_zombie | silence | soft_restart | banner_qr | disconnect | backfill | canary_check
+  eventType         String
+  /// Motivo/prova (chat_activity, findMessages, empty_store_zombie, statusCode, …)
+  proofReason       String?
+  /// soft_restart_ok | soft_restart_failed | banner_qr | cured | ignored | recorded
+  outcome           String?
+  softRestartsTried Int      @default(0)
+  messagesRecovered Int?
+  /// Código Boom/DisconnectReason (401, 408, 428, 440, 503, 515…)
+  disconnectCode    Int?
+  meta              Json?
+  createdAt         DateTime @default(now())
+
+  @@index([instanceName, createdAt])
+  @@index([host, createdAt])
+  @@index([eventType, createdAt])
+  @@index([userId, createdAt])
+  @@index([disconnectCode, createdAt])
+}

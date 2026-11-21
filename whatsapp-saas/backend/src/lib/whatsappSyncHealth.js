@@ -4,10 +4,12 @@
  * Problema: sessão Baileys zombie reporta open, mas para de emitir MESSAGES_UPSERT.
  *
  * Padrão (híbrido / always-on):
- * - Silêncio / no_gap sem store vazio → NÃO é bug (limpa STALE/RECOVERING falso)
- * - Prova DURA (Evo>CRM OU empty_store_zombie) → soft-restart SEM logout + webhook reassert + backfill
+ * - Silêncio quieto (sem baseline de tráfego) → NÃO é bug (limpa STALE falso)
+ * - Prova DURA (Evo>CRM | empty_store | mutual_freeze) → soft-restart SEM logout + webhook reassert + backfill
+ * - Conta quente + no_gap → NÃO limpa pra HEALTHY (anti falso-positivo Outlet)
  * - Soft-restarts esgotados COM prova dura → banner UI pedindo Reconectar
  * - RECOVERING não gera banner de erro (só chip discreto)
+ * - HEALTHY só via webhook de mensagem realtime (não via CONNECTION_UPDATE open)
  *
  * Opt-in agressivo: WHATSAPP_STALE_AUTO_RECOVER=true → soft-restart + logout (legado).
  */
@@ -23,13 +25,29 @@ const {
   fetchChatMessages,
   reassertInstanceWebhook,
 } = require("./evolution")
-const { syncSingleChat, extractIndividualChats } = require("./crmSync")
+
+/** Lazy require: evita circular dep whatsappSyncHealth ↔ crmSync (syncSingleChat virava undefined). */
+function crmSyncApi() {
+  return require("./crmSync")
+}
 
 /**
  * Silêncio sem mensagem *nova* antes de marcar STALE.
  * 45 min (antes 20): horário parado / almoço não deve reiniciar sessão saudável.
  */
 const WEBHOOK_SILENCE_MS = Number(process.env.WHATSAPP_WEBHOOK_SILENCE_MS || 45 * 60 * 1000)
+/**
+ * Detecção mais rápida em horário comercial — DESLIGADA por padrão.
+ * WHATSAPP_STALE_BUSINESS_HOURS_ENABLED=true
+ */
+const BUSINESS_HOURS_ENABLED =
+  String(process.env.WHATSAPP_STALE_BUSINESS_HOURS_ENABLED || "false").toLowerCase() === "true"
+const WEBHOOK_SILENCE_BUSINESS_MS = Number(
+  process.env.WHATSAPP_WEBHOOK_SILENCE_BUSINESS_MS || 15 * 60 * 1000,
+)
+const BUSINESS_HOURS_TZ = String(process.env.WHATSAPP_STALE_BUSINESS_TZ || "America/Sao_Paulo")
+const BUSINESS_HOUR_START = Math.max(0, Math.min(23, Number(process.env.WHATSAPP_STALE_BUSINESS_HOUR_START || 8)))
+const BUSINESS_HOUR_END = Math.max(1, Math.min(24, Number(process.env.WHATSAPP_STALE_BUSINESS_HOUR_END || 20)))
 /** Conta “interessante” pro watchdog (teve msg no CRM recentemente). */
 const ACTIVE_RECENT_MS = Number(process.env.WHATSAPP_STALE_ACTIVE_RECENT_MS || 6 * 60 * 60 * 1000)
 /**
@@ -66,12 +84,40 @@ const BACKFILL_CHAT_DELAY_MS = Number(process.env.WHATSAPP_STALE_BACKFILL_DELAY_
 /**
  * Motivos que autorizam soft-restart / banner de “bug real”.
  * empty_store_zombie: Evolution open + findChats vazio + CRM com volume — caso Baseset/Luis.
+ * mutual_freeze_zombie: Evo e CRM congelados juntos após conta quente — caso Outlet.
  */
-const HARD_ZOMBIE_PROOF_REASONS = new Set(["chat_activity", "findMessages", "empty_store_zombie"])
-/** Mínimo de contatos no CRM para store vazio contar como zombie (não conta nova). */
+const HARD_ZOMBIE_PROOF_REASONS = new Set([
+  "chat_activity",
+  "findMessages",
+  "empty_store_zombie",
+  "mutual_freeze_zombie",
+])
+/** Motivos em que soft-restart quase nunca cura → 1 tentativa → banner QR. */
+const ONE_SHOT_RECOVERY_REASONS = new Set(["empty_store_zombie", "mutual_freeze_zombie"])
+/** Mínimo de contatos no CRM para store vazio / freeze contar como zombie (não conta nova). */
 const EMPTY_STORE_CONTACT_MIN = Math.max(
   10,
   Math.min(200, Number(process.env.WHATSAPP_EMPTY_STORE_CONTACT_MIN || 30)),
+)
+/**
+ * Silêncio mínimo (Evo+CRM) pra mutual_freeze. Default 60min — acima do WEBHOOK_SILENCE
+ * pra não confundir almoço curto com zombie.
+ */
+const MUTUAL_FREEZE_SILENCE_MS = Number(
+  process.env.WHATSAPP_MUTUAL_FREEZE_SILENCE_MS || 60 * 60 * 1000,
+)
+/** Janela ANTES do silêncio pra medir se a conta era “quente”. */
+const MUTUAL_FREEZE_BASELINE_MS = Number(
+  process.env.WHATSAPP_MUTUAL_FREEZE_BASELINE_MS || 12 * 60 * 60 * 1000,
+)
+/** Mínimo de msgs na baseline pra mutual_freeze (anti falso-positivo noturno). */
+const MUTUAL_FREEZE_MIN_MSGS = Math.max(
+  5,
+  Math.min(500, Number(process.env.WHATSAPP_MUTUAL_FREEZE_MIN_MSGS || 25)),
+)
+/** Evo e CRM “juntos” se a diferença de newest for menor que isto. */
+const MUTUAL_FREEZE_ALIGN_MS = Number(
+  process.env.WHATSAPP_MUTUAL_FREEZE_ALIGN_MS || 30 * 60 * 1000,
 )
 /**
  * Msg com timestamp mais velho que isto = replay/histórico, NÃO prova sessão viva.
@@ -315,6 +361,35 @@ async function accountHasExpectedTraffic(prisma, userId, { sinceMs = TRAFFIC_EXP
 }
 
 /**
+ * Conta msgs na janela ANTES do silêncio começar.
+ * Usado pra distinguir conta quente congelada vs loja fechada à noite.
+ */
+async function countBaselineMessagesBeforeSilence(prisma, userId, silenceRefMs, {
+  windowMs = MUTUAL_FREEZE_BASELINE_MS,
+} = {}) {
+  if (!userId || !silenceRefMs) return 0
+  const end = new Date(silenceRefMs)
+  const start = new Date(silenceRefMs - windowMs)
+  const row = await prisma.crmMessage
+    .count({
+      where: {
+        userId,
+        timestamp: { gte: start, lt: end },
+      },
+    })
+    .catch(() => 0)
+  return Number(row) || 0
+}
+
+async function accountHadBaselineTraffic(prisma, userId, silenceRefMs, {
+  windowMs = MUTUAL_FREEZE_BASELINE_MS,
+  minMsgs = MUTUAL_FREEZE_MIN_MSGS,
+} = {}) {
+  const n = await countBaselineMessagesBeforeSilence(prisma, userId, silenceRefMs, { windowMs })
+  return { hot: n >= minMsgs, count: n, minMsgs, windowMs }
+}
+
+/**
  * Confirma se a Evolution ainda reporta sessão open (candidato a zombie).
  * Se já fechou, o reconcile normal cuida — não reiniciar/logout à toa.
  */
@@ -330,6 +405,29 @@ async function probeEvolutionStillOpen(instanceName, evolutionHost) {
   }
 }
 
+/** Newest activity em findChats bruto (1:1 + grupos) — freeze Outlet congela em @g.us. */
+function newestActivityMsFromRawChats(raw) {
+  const { toIsoFromEvolutionTimestamp } = require("./evolutionMessages")
+  const list = Array.isArray(raw) ? raw : raw?.chats || raw?.data || raw?.records || []
+  let newest = null
+  for (const chat of list) {
+    const lm = chat?.lastMessage || {}
+    const iso = toIsoFromEvolutionTimestamp(
+      lm.messageTimestamp ||
+        lm.msgTimestamp ||
+        chat?.updatedAt ||
+        chat?.lastMsgTimestamp ||
+        chat?.lastMessageTimestamp ||
+        chat?.conversationTimestamp ||
+        null,
+    )
+    if (!iso) continue
+    const ms = new Date(iso).getTime()
+    if (Number.isFinite(ms) && (newest == null || ms > newest)) newest = ms
+  }
+  return newest
+}
+
 /**
  * Prova de zombie: Evolution tem atividade/msg mais nova que o CRM (gap >= ZOMBIE_GAP_MS).
  * Silêncio sozinho NÃO prova — evita soft-restart em horário parado.
@@ -341,16 +439,20 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
   if (!crmNewestMs) return { proven: false, reason: "no_crm_baseline" }
 
   bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
+  const { extractIndividualChats } = crmSyncApi()
 
   // 1) findChats: lastActivityAt à frente do CRM — ou store vazio com CRM cheio (sessão morta).
+  let evoNewestFromChats = null
+  let contactCountCache = null
   try {
     const raw = await findChats(row.instanceName, { limit: 80 })
+    evoNewestFromChats = newestActivityMsFromRawChats(raw)
     const chats = extractIndividualChats(raw, { limit: 80 })
-    if (!chats.length) {
+    if (!chats.length && evoNewestFromChats == null) {
       // Store vazio + CRM maduro + silêncio já filtrado pelo watchdog = zombie (Baseset).
       // Conta nova / poucos contatos → ainda não prova (evita storm em onboarding).
-      const contactCount = await prisma.crmContact.count({ where: { userId: row.userId } })
-      if (contactCount >= EMPTY_STORE_CONTACT_MIN) {
+      contactCountCache = await prisma.crmContact.count({ where: { userId: row.userId } })
+      if (contactCountCache >= EMPTY_STORE_CONTACT_MIN) {
         return {
           proven: true,
           reason: "empty_store_zombie",
@@ -358,7 +460,7 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
           evoNewestMs: null,
           crmNewestMs,
           gapMs: Date.now() - crmNewestMs,
-          contactCount,
+          contactCount: contactCountCache,
         }
       }
       return {
@@ -368,8 +470,12 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
         evoNewestMs: null,
         crmNewestMs,
         gapMs: Date.now() - crmNewestMs,
-        contactCount,
+        contactCount: contactCountCache,
       }
+    }
+    for (const chat of chats) {
+      const evoMs = chat.lastActivityAt ? new Date(chat.lastActivityAt).getTime() : 0
+      if (evoMs && evoMs > (evoNewestFromChats || 0)) evoNewestFromChats = evoMs
     }
     for (const chat of chats.slice(0, ZOMBIE_PROBE_CHATS)) {
       const evoMs = chat.lastActivityAt ? new Date(chat.lastActivityAt).getTime() : 0
@@ -381,6 +487,39 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
           evoNewestMs: evoMs,
           crmNewestMs,
           gapMs: evoMs - crmNewestMs,
+        }
+      }
+    }
+
+    // Mutual freeze: Evo e CRM parados juntos após conta quente (Outlet).
+    const nowMs = Date.now()
+    const crmSilenceMs = nowMs - crmNewestMs
+    const evoSilenceMs = evoNewestFromChats ? nowMs - evoNewestFromChats : null
+    const aligned =
+      evoNewestFromChats != null &&
+      Math.abs(evoNewestFromChats - crmNewestMs) <= Math.max(ZOMBIE_GAP_MS, MUTUAL_FREEZE_ALIGN_MS)
+    if (
+      crmSilenceMs >= MUTUAL_FREEZE_SILENCE_MS &&
+      evoSilenceMs != null &&
+      evoSilenceMs >= MUTUAL_FREEZE_SILENCE_MS &&
+      aligned
+    ) {
+      if (contactCountCache == null) {
+        contactCountCache = await prisma.crmContact.count({ where: { userId: row.userId } })
+      }
+      const baseline = await accountHadBaselineTraffic(prisma, row.userId, crmNewestMs)
+      if (contactCountCache >= EMPTY_STORE_CONTACT_MIN && baseline.hot) {
+        return {
+          proven: true,
+          reason: "mutual_freeze_zombie",
+          sampleJid: null,
+          evoNewestMs: evoNewestFromChats,
+          crmNewestMs,
+          gapMs: 0,
+          contactCount: contactCountCache,
+          baselineMsgs: baseline.count,
+          crmSilenceMs,
+          evoSilenceMs,
         }
       }
     }
@@ -475,6 +614,35 @@ function silenceReferenceMs(conn) {
   return webhookMs || createdMs || 0
 }
 
+/** Hora local (0–23) em America/Sao_Paulo (ou TZ configurado). */
+function localHourInBusinessTz(now = Date.now()) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: BUSINESS_HOURS_TZ,
+      hour: "numeric",
+      hour12: false,
+    }).formatToParts(new Date(now))
+    const hour = Number(parts.find((p) => p.type === "hour")?.value)
+    return Number.isFinite(hour) ? hour % 24 : new Date(now).getHours()
+  } catch {
+    return new Date(now).getHours()
+  }
+}
+
+function isBusinessHours(now = Date.now()) {
+  if (!BUSINESS_HOURS_ENABLED) return false
+  const hour = localHourInBusinessTz(now)
+  return hour >= BUSINESS_HOUR_START && hour < BUSINESS_HOUR_END
+}
+
+/** Limiar de silêncio efetivo (comercial mais curto só com flag ligada). */
+function effectiveWebhookSilenceMs(now = Date.now()) {
+  if (isBusinessHours(now)) {
+    return Math.min(WEBHOOK_SILENCE_MS, Math.max(5 * 60 * 1000, WEBHOOK_SILENCE_BUSINESS_MS))
+  }
+  return WEBHOOK_SILENCE_MS
+}
+
 function shouldEvaluateStale(conn, now = Date.now()) {
   if (!conn?.connected || !conn.instanceName) return false
   if (conn.status === NUMBER_CONFLICT_STATUS) return false
@@ -488,7 +656,7 @@ function shouldEvaluateStale(conn, now = Date.now()) {
   if (!ref) return false
   const age = now - ref
   if (!conn.lastWebhookAt && !conn.newestMsgAt && age < NEW_CONNECTION_GRACE_MS) return false
-  return age >= WEBHOOK_SILENCE_MS
+  return age >= effectiveWebhookSilenceMs(now)
 }
 
 async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinceMs }) {
@@ -503,11 +671,13 @@ async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinc
   const cutoffMs = Date.now() - (sinceMs || BACKFILL_LOOKBACK_MS)
   let importedTotal = 0
   let chatsTried = 0
+  let evolutionHost = deps?.evolutionHost || "primary"
 
   try {
     const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
     if (!conn?.connected) return { skipped: true, reason: "disconnected" }
-    bindInstanceHost(instanceName, conn.evolutionHost || "primary")
+    evolutionHost = conn.evolutionHost || evolutionHost
+    bindInstanceHost(instanceName, evolutionHost)
 
     // Preferir conversas recentes do CRM (Evo muitas vezes não persiste findChats).
     // Evitar `{ not: null }` no Prisma 6 — filtrar remoteJid em JS.
@@ -534,7 +704,36 @@ async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinc
       .filter((t) => t.remoteJid && !String(t.remoteJid).endsWith("@g.us"))
       .slice(0, BACKFILL_CHAT_LIMIT)
 
-    if (!targets.length) {
+    let api = crmSyncApi()
+    let syncSingleChat = api?.syncSingleChat
+    let extractIndividualChats = api?.extractIndividualChats
+    // Fallback: re-require se circular dep ainda deixar export incompleto.
+    if (typeof syncSingleChat !== "function") {
+      try {
+        delete require.cache[require.resolve("./crmSync")]
+        api = require("./crmSync")
+        syncSingleChat = api?.syncSingleChat
+        extractIndividualChats = api?.extractIndividualChats
+      } catch (err) {
+        console.warn(`[sync-health] crmSync re-require failed:`, err?.message || err)
+      }
+    }
+    if (typeof syncSingleChat !== "function") {
+      console.error(`[sync-health] backfill aborted ${instanceName}: syncSingleChat unavailable`)
+      const { recordZombieEvent } = require("./zombieEvents")
+      await recordZombieEvent(prisma, {
+        instanceName,
+        userId,
+        host: evolutionHost,
+        eventType: "backfill",
+        proofReason: "syncSingleChat_unavailable",
+        outcome: "failed",
+        messagesRecovered: 0,
+      })
+      return { ok: false, error: "syncSingleChat_unavailable", chatsTried: 0, importedTotal: 0 }
+    }
+
+    if (!targets.length && typeof extractIndividualChats === "function") {
       try {
         const raw = await findChats(instanceName, { limit: 500 })
         targets = extractIndividualChats(raw)
@@ -561,14 +760,14 @@ async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinc
       const t = targets[i]
       chatsTried += 1
       try {
-        const { imported } = await syncSingleChat(syncDeps, {
+        const result = await syncSingleChat(syncDeps, {
           userId,
           instanceName,
           remoteJid: t.remoteJid,
           cutoffMs,
           alternateJids: t.alternateJids || [],
         })
-        importedTotal += imported || 0
+        importedTotal += Number(result?.imported) || 0
       } catch (err) {
         console.warn(`[sync-health] backfill chat ${t.remoteJid}:`, err?.message || err)
       }
@@ -576,9 +775,30 @@ async function backfillRecentCrmAfterRecovery(deps, { userId, instanceName, sinc
     }
 
     console.log(
-      `[sync-health] backfill ${instanceName}: chats=${chatsTried} imported=${importedTotal}`,
+      JSON.stringify({
+        tag: "sync-health",
+        action: "backfill",
+        instance: instanceName,
+        chatsTried,
+        messagesRecovered: importedTotal,
+      }),
     )
-    return { ok: true, chatsTried, importedTotal }
+    try {
+      const { recordZombieEvent } = require("./zombieEvents")
+      await recordZombieEvent(prisma, {
+        instanceName,
+        userId,
+        host: evolutionHost,
+        eventType: "backfill",
+        proofReason: "post_recovery",
+        outcome: importedTotal > 0 ? "recovered" : "empty",
+        messagesRecovered: importedTotal,
+        meta: { chatsTried },
+      })
+    } catch {
+      /* ignore */
+    }
+    return { ok: true, chatsTried, importedTotal, messagesRecovered: importedTotal }
   } catch (err) {
     console.error(`[sync-health] backfill failed ${instanceName}:`, err?.message || err)
     return { ok: false, error: err?.message || String(err) }
@@ -689,36 +909,19 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
     if (!shouldEvaluateStale(row, now) && !unhealthy) continue
 
     const active = await accountLooksActive(prisma, row.userId)
-    if (!active && !unhealthy) continue
-
-    // Conta quieta: não reinicia. Se estava STALE/RECOVERING por falso positivo, limpa.
-    const expectedTraffic = await accountHasExpectedTraffic(prisma, row.userId)
-    if (!expectedTraffic) {
-      if (unhealthy) {
-        const cleared = await prisma.whatsAppConnection.update({
-          where: { userId: row.userId },
-          data: {
-            syncHealth: SYNC_HEALTH.HEALTHY,
-            staleDetectedAt: null,
-            staleRecoveryCount: 0,
-            staleLastRecoveryAt: null,
-          },
-        })
-        emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(cleared))
-        console.warn(`[sync-health] cleared quiet ${row.instanceName} (sem tráfego esperado — tira falso STALE)`)
-      } else {
-        console.warn(
-          `[sync-health] skip quiet ${row.instanceName} silenceMs=${now - silenceReferenceMs(row)} (sem tráfego nas últimas ${Math.round(TRAFFIC_EXPECT_MS / 60000)}m)`,
-        )
-      }
-      continue
-    }
+    const contactCount = await prisma.crmContact
+      .count({ where: { userId: row.userId } })
+      .catch(() => 0)
+    // Conta madura (muitos contatos) + silêncio longo: CRM quieto PODE ser o próprio zombie.
+    // Antes pulávamos por "sem tráfego esperado" e o Luis ficava 3–4h congelado.
+    const matureAccount = contactCount >= EMPTY_STORE_CONTACT_MIN
+    if (!active && !unhealthy && !matureAccount) continue
 
     const probe = await probeEvolutionStillOpen(row.instanceName, row.evolutionHost)
     const recoveryCount = Number(row.staleRecoveryCount || 0)
     const scheduleBackfill = typeof ctx.scheduleBackfill === "function" ? ctx.scheduleBackfill : null
 
-    // --- Híbrido (padrão): só soft-restart com prova DURA (Evo > CRM) ---
+    // --- Híbrido (padrão): só soft-restart com prova DURA (Evo > CRM | empty_store) ---
     if (!AUTO_RECOVER) {
       if (!probe.open) {
         console.warn(
@@ -737,29 +940,53 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
       const hard = isHardZombieProof(proof)
 
       if (!hard) {
-        // Silêncio / no_gap (sem empty_store_zombie) → NÃO é bug comprovado. Limpa alerta preso.
-        // Nunca limpar quando proof.reason === empty_store_zombie (é HARD).
-        if (unhealthy) {
-          const cleared = await prisma.whatsAppConnection.update({
-            where: { userId: row.userId },
-            data: {
-              syncHealth: SYNC_HEALTH.HEALTHY,
-              staleDetectedAt: null,
-              staleRecoveryCount: 0,
-              staleLastRecoveryAt: null,
-            },
-          })
-          emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(cleared))
-          console.warn(
-            JSON.stringify({
-              tag: "sync-health",
-              action: "clear",
-              instance: row.instanceName,
-              proof: proof?.reason || "no_gap",
-              silenceMs: now - silenceReferenceMs(row),
-            }),
-          )
+        const silenceRef =
+          silenceReferenceMs(row) ||
+          (row.newestMsgAt ? new Date(row.newestMsgAt).getTime() : 0) ||
+          now
+        const expectedTraffic = await accountHasExpectedTraffic(prisma, row.userId)
+        const baseline = await accountHadBaselineTraffic(prisma, row.userId, silenceRef)
+        const hotAccount =
+          expectedTraffic ||
+          baseline.hot ||
+          (matureAccount && baseline.count >= Math.ceil(MUTUAL_FREEZE_MIN_MSGS / 2))
+
+        // Conta quieta de verdade → pode limpar falso STALE.
+        if (!hotAccount) {
+          if (unhealthy) {
+            const cleared = await prisma.whatsAppConnection.update({
+              where: { userId: row.userId },
+              data: {
+                syncHealth: SYNC_HEALTH.HEALTHY,
+                staleDetectedAt: null,
+                staleRecoveryCount: 0,
+                staleLastRecoveryAt: null,
+              },
+            })
+            emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(cleared))
+            console.warn(`[sync-health] cleared quiet ${row.instanceName} (sem baseline quente — tira falso STALE)`)
+          } else {
+            console.warn(
+              `[sync-health] skip quiet ${row.instanceName} silenceMs=${now - silenceRef} baseline=${baseline.count}`,
+            )
+          }
+          continue
         }
+
+        // Conta quente + open + silêncio + sem prova dura ainda:
+        // NÃO limpar pra HEALTHY (falso positivo Outlet). Mantém observação.
+        console.warn(
+          JSON.stringify({
+            tag: "sync-health",
+            action: "hold_hot_silence",
+            instance: row.instanceName,
+            proof: proof?.reason || "no_gap",
+            silenceMs: now - silenceRef,
+            baselineMsgs: baseline.count,
+            unhealthy,
+            message: "não limpa HEALTHY — aguarda mutual_freeze/gap ou mensagem realtime",
+          }),
+        )
         continue
       }
 
@@ -772,11 +999,36 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
           gapMs: proof.gapMs || null,
           jid: proof.sampleJid || null,
           contactCount: proof.contactCount || null,
+          baselineMsgs: proof.baselineMsgs || null,
           silenceMs: now - silenceReferenceMs(row),
         }),
       )
 
-      if (recoveryCount < MAX_SOFT_RECOVERIES) {
+      try {
+        const { recordZombieEvent } = require("./zombieEvents")
+        await recordZombieEvent(prisma, {
+          instanceName: row.instanceName,
+          userId: row.userId,
+          host: row.evolutionHost || "primary",
+          eventType: String(proof.reason || "zombie"),
+          proofReason: proof.reason,
+          outcome: "proven",
+          softRestartsTried: recoveryCount,
+          meta: {
+            gapMs: proof.gapMs || null,
+            sampleJid: proof.sampleJid || null,
+            contactCount: proof.contactCount || null,
+            baselineMsgs: proof.baselineMsgs || null,
+          },
+        })
+      } catch {
+        /* ignore */
+      }
+
+      // empty_store / mutual_freeze: soft-restart quase nunca basta → 1 tentativa → banner QR.
+      const maxRecoveries = ONE_SHOT_RECOVERY_REASONS.has(proof.reason) ? 1 : MAX_SOFT_RECOVERIES
+
+      if (recoveryCount < maxRecoveries) {
         recovering += 1
         const recoveringConn = await prisma.whatsAppConnection.update({
           where: { userId: row.userId },
@@ -790,8 +1042,10 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
         emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(recoveringConn))
 
         bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
+        let restartOk = false
         try {
           await restartInstance(row.instanceName)
+          restartOk = true
           console.warn(
             JSON.stringify({
               tag: "sync-health",
@@ -800,7 +1054,7 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
               instance: row.instanceName,
               proof: proof.reason,
               attempt: recoveryCount + 1,
-              max: MAX_SOFT_RECOVERIES,
+              max: maxRecoveries,
             }),
           )
         } catch (err) {
@@ -820,6 +1074,21 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
             `[sync-health] pós-restart não-open ${row.instanceName} — mantém connected=false via keep-alive/reconcile (sem logout)`,
           )
         }
+        try {
+          const { recordZombieEvent } = require("./zombieEvents")
+          await recordZombieEvent(prisma, {
+            instanceName: row.instanceName,
+            userId: row.userId,
+            host: row.evolutionHost || "primary",
+            eventType: "soft_restart",
+            proofReason: proof.reason,
+            outcome: restartOk && post.open ? "soft_restart_ok" : "soft_restart_failed",
+            softRestartsTried: recoveryCount + 1,
+            meta: { postOpen: Boolean(post.open), maxRecoveries },
+          })
+        } catch {
+          /* ignore */
+        }
         continue
       }
 
@@ -830,12 +1099,50 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
         data: {
           syncHealth: SYNC_HEALTH.STALE,
           staleDetectedAt: row.staleDetectedAt || new Date(),
+          // needsManualReconnect exige >= MAX_SOFT_RECOVERIES (mesmo se empty_store usou max=1)
+          staleRecoveryCount: Math.max(recoveryCount, MAX_SOFT_RECOVERIES),
         },
       })
       console.error(
-        `[sync-health] zombie unresolved ${row.instanceName} after ${recoveryCount} soft-restarts — alert UI, no logout`,
+        JSON.stringify({
+          tag: "sync-health",
+          action: "stale",
+          instance: row.instanceName,
+          proof: proof.reason,
+          recoveries: recoveryCount,
+          message: "alert UI reconnect — soft-restart esgotado",
+        }),
       )
       emitWhatsAppToUser(row.userId, "whatsapp:status", formatConnectionPayload(conn))
+      try {
+        const { recordZombieEvent } = require("./zombieEvents")
+        await recordZombieEvent(prisma, {
+          instanceName: row.instanceName,
+          userId: row.userId,
+          host: row.evolutionHost || "primary",
+          eventType: "banner_qr",
+          proofReason: proof.reason,
+          outcome: "banner_qr",
+          softRestartsTried: Math.max(recoveryCount, MAX_SOFT_RECOVERIES),
+        })
+      } catch {
+        /* ignore */
+      }
+      try {
+        const { sendZombieExternalAlert } = require("./zombieAlerts")
+        await sendZombieExternalAlert(
+          { prisma },
+          {
+            userId: row.userId,
+            instanceName: row.instanceName,
+            host: row.evolutionHost || "primary",
+            proofReason: proof.reason,
+            softRestartsTried: Math.max(recoveryCount, MAX_SOFT_RECOVERIES),
+          },
+        )
+      } catch (err) {
+        console.warn("[sync-health] external alert:", err?.message || err)
+      }
       continue
     }
 
@@ -1130,11 +1437,20 @@ async function getWebhookSilenceAlerts(prisma, { limit = 25, now = Date.now() } 
 module.exports = {
   SYNC_HEALTH,
   WEBHOOK_SILENCE_MS,
+  WEBHOOK_SILENCE_BUSINESS_MS,
+  BUSINESS_HOURS_ENABLED,
+  BUSINESS_HOUR_START,
+  BUSINESS_HOUR_END,
   TRAFFIC_EXPECT_MS,
   RECOVERY_COOLDOWN_MS,
   REALTIME_MAX_AGE_MS,
   ZOMBIE_GAP_MS,
   EMPTY_STORE_CONTACT_MIN,
+  MUTUAL_FREEZE_SILENCE_MS,
+  MUTUAL_FREEZE_BASELINE_MS,
+  MUTUAL_FREEZE_MIN_MSGS,
+  MUTUAL_FREEZE_ALIGN_MS,
+  ONE_SHOT_RECOVERY_REASONS,
   AUTO_RECOVER,
   KEEP_ALIVE_ENABLED,
   MAX_SOFT_RECOVERIES,
@@ -1154,8 +1470,13 @@ module.exports = {
   proveEvolutionAheadOfCrm,
   accountLooksActive,
   accountHasExpectedTraffic,
+  accountHadBaselineTraffic,
+  countBaselineMessagesBeforeSilence,
+  newestActivityMsFromRawChats,
   shouldEvaluateStale,
   silenceReferenceMs,
+  effectiveWebhookSilenceMs,
+  isBusinessHours,
   isRealtimeMessageMs,
   extractNewestMessageMs,
   getWebhookSilenceAlerts,

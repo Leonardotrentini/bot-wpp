@@ -4734,6 +4734,33 @@ async function processEvolutionWebhookEvent(event, instanceName, body, options =
       where: { instanceName },
       select: { connected: true, userId: true, syncHealth: true, evolutionHost: true },
     })
+    if (event === "CONNECTION_UPDATE") {
+      try {
+        const { extractDisconnectCode, recordZombieEvent } = require("./lib/zombieEvents")
+        const code = extractDisconnectCode(body)
+        if (code != null) {
+          await recordZombieEvent(prisma, {
+            instanceName,
+            userId: before?.userId || null,
+            host: before?.evolutionHost || "primary",
+            eventType: "disconnect",
+            proofReason: `statusCode_${code}`,
+            outcome: "recorded",
+            disconnectCode: code,
+            meta: {
+              state:
+                body?.data?.state ||
+                body?.data?.status ||
+                body?.state ||
+                body?.status ||
+                null,
+            },
+          })
+        }
+      } catch (err) {
+        console.warn("[zombie-event] disconnect capture:", err?.message || err)
+      }
+    }
     const conn = await updateConnectionFromWebhook(instanceName, body)
     // Soft-restart / QR open NÃO prova sync viva — só mensagem realtime marca HEALTHY
     // (anti falso-positivo: "conectado" com funil Meta parado).

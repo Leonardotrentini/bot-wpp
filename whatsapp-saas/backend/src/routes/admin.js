@@ -863,4 +863,266 @@ router.post("/maintenance/crm-storage", authMiddleware, requireAdmin, async (req
   }
 })
 
+/** Uso / Performance por Evolution host + conexões (admin). */
+router.get("/evo-usage", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { getEvoUsageReport } = require("../lib/evoUsage")
+    const unhealthyRaw = String(req.query.unhealthy || "").trim().toLowerCase()
+    const payload = await getEvoUsageReport(prisma, {
+      q: req.query.q,
+      host: req.query.host,
+      weight: req.query.weight,
+      unhealthy: unhealthyRaw === "1" || unhealthyRaw === "true",
+      bypassCache: String(req.query.refresh || "") === "1",
+    })
+    return res.json(payload)
+  } catch (err) {
+    console.error("[admin] evo-usage:", err)
+    return res.status(500).json({
+      error: "EVO_USAGE_FAILED",
+      message: err?.message || "Falha ao medir uso das Evolutions.",
+    })
+  }
+})
+
+/** Lista hosts dinâmicos (Evo3+) + capability de provisionamento. */
+router.get("/evo-hosts", authMiddleware, requireAdmin, async (_req, res) => {
+  try {
+    const { listEvoHosts, getProvisionCapability } = require("../lib/evoProvision")
+    const { refreshDynamicHostsFromDb } = require("../lib/evolutionHosts")
+    await refreshDynamicHostsFromDb(prisma).catch(() => [])
+    const hosts = await listEvoHosts()
+    return res.json({ ok: true, hosts, provision: getProvisionCapability() })
+  } catch (err) {
+    console.error("[admin] evo-hosts list:", err)
+    return res.status(500).json({
+      error: "EVO_HOSTS_FAILED",
+      message: err?.message || "Falha ao listar hosts Evolution.",
+    })
+  }
+})
+
+/** Provisiona nova Evolution no Railway (EvoN). */
+router.post("/evo-hosts", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { startEvoHostProvision } = require("../lib/evoProvision")
+    const host = await startEvoHostProvision({ triggeredBy: req.user?.id || req.userId })
+    return res.status(202).json({ ok: true, host })
+  } catch (err) {
+    console.error("[admin] evo-hosts create:", err)
+    const status = err?.code === "EVO_PROVISION_DISABLED" ? 400 : 500
+    return res.status(status).json({
+      error: err?.code || "EVO_PROVISION_FAILED",
+      message: err?.message || "Falha ao provisionar Evolution.",
+      missingEnv: err?.missingEnv || undefined,
+    })
+  }
+})
+
+/** Status de um host provisionado. */
+router.get("/evo-hosts/:id", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { getEvoHostById } = require("../lib/evoProvision")
+    const host = await getEvoHostById(String(req.params.id || "").trim())
+    if (!host) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Host não encontrado." })
+    }
+    return res.json({ ok: true, host })
+  } catch (err) {
+    console.error("[admin] evo-hosts get:", err)
+    return res.status(500).json({
+      error: "EVO_HOST_FAILED",
+      message: err?.message || "Falha ao obter host Evolution.",
+    })
+  }
+})
+
+/** Métricas de órfãos LID + silêncio de webhook — saúde de sync CRM platform-wide. */
+router.get("/crm-sync-health", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { getOrphanLidStats } = require("../lib/crmLidOrphanJob")
+    const {
+      getWebhookSilenceAlerts,
+      WEBHOOK_SILENCE_MS,
+      WEBHOOK_SILENCE_BUSINESS_MS,
+      BUSINESS_HOURS_ENABLED,
+      EMPTY_STORE_CONTACT_MIN,
+      effectiveWebhookSilenceMs,
+      isBusinessHours,
+    } = require("../lib/whatsappSyncHealth")
+    const { CRM_SYNC_STUCK_JOB_MS } = require("../lib/crmSync")
+    const { queryZombieEvents } = require("../lib/zombieEvents")
+    const { alertConfig } = require("../lib/zombieAlerts")
+    const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 25))
+    const zombieDays = Math.min(30, Math.max(1, Number(req.query.zombieDays) || 7))
+    const stats = await getOrphanLidStats(prisma, { limit })
+    const silence = await getWebhookSilenceAlerts(prisma, { limit })
+    const zombie = await queryZombieEvents(prisma, {
+      days: zombieDays,
+      host: req.query.host || null,
+      instanceName: req.query.instanceName || null,
+      limit: Math.min(500, Number(req.query.zombieLimit) || 200),
+    }).catch((err) => ({ ok: false, error: err?.message || String(err), events: [] }))
+    const partialJobs = await prisma.crmSyncJob.count({
+      where: { status: "partial", finishedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+    })
+    const emptyStorePartials7d = await prisma.crmSyncJob.count({
+      where: {
+        status: "partial",
+        discoveryStatus: "empty_store",
+        finishedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+      },
+    })
+    const stuckRunning = await prisma.crmSyncJob.count({
+      where: {
+        status: "running",
+        startedAt: { lt: new Date(Date.now() - CRM_SYNC_STUCK_JOB_MS) },
+      },
+    })
+    const runningJobs = await prisma.crmSyncJob.count({ where: { status: "running" } })
+    const staleRecovering = await prisma.whatsAppConnection.count({
+      where: {
+        connected: true,
+        syncHealth: { in: ["STALE", "RECOVERING"] },
+        status: { not: "NUMBER_CONFLICT" },
+      },
+    })
+    const recoveringNow = await prisma.whatsAppConnection.count({
+      where: { connected: true, syncHealth: "RECOVERING", status: { not: "NUMBER_CONFLICT" } },
+    })
+    return res.json({
+      ok: true,
+      ...stats,
+      partialSyncJobs7d: partialJobs,
+      emptyStorePartials7d,
+      stuckRunningJobs: stuckRunning,
+      runningJobs,
+      connectedStaleOrRecovering: staleRecovering,
+      recoveringNow,
+      webhookSilenceMs: WEBHOOK_SILENCE_MS,
+      webhookSilenceBusinessMs: WEBHOOK_SILENCE_BUSINESS_MS,
+      businessHoursEnabled: BUSINESS_HOURS_ENABLED,
+      businessHoursNow: isBusinessHours(),
+      effectiveWebhookSilenceMs: effectiveWebhookSilenceMs(),
+      emptyStoreContactMin: EMPTY_STORE_CONTACT_MIN,
+      webhookSilence: silence,
+      zombieEvents: zombie,
+      zombieAlert: alertConfig(),
+    })
+  } catch (err) {
+    console.error("[admin] crm-sync-health:", err)
+    return res.status(500).json({
+      error: "CRM_SYNC_HEALTH_FAILED",
+      message: err?.message || "Falha ao medir órfãos LID.",
+    })
+  }
+})
+
+/** Query pronta: eventos de zumbi / disconnect 7d ou 30d. */
+router.get("/zombie-events", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { queryZombieEvents } = require("../lib/zombieEvents")
+    const days = Math.min(30, Math.max(1, Number(req.query.days) || 7))
+    const result = await queryZombieEvents(prisma, {
+      days,
+      host: req.query.host || null,
+      instanceName: req.query.instanceName || null,
+      limit: Math.min(1000, Number(req.query.limit) || 200),
+    })
+    return res.json(result)
+  } catch (err) {
+    console.error("[admin] zombie-events:", err)
+    return res.status(500).json({
+      error: "ZOMBIE_EVENTS_FAILED",
+      message: err?.message || "Falha ao listar eventos de zumbi.",
+    })
+  }
+})
+
+/** Checagem de sucesso do canário Evolution (72h / findChats / msgs pós-ociosidade). */
+router.get("/canary-sync-health", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const instanceName = String(req.query.instanceName || "").trim()
+    const userId = String(req.query.userId || "").trim() || null
+    if (!instanceName && !userId) {
+      return res.status(400).json({
+        error: "MISSING_INSTANCE",
+        message: "Informe instanceName ou userId da conta canário.",
+      })
+    }
+    const { evaluateCanaryInstance } = require("../lib/canarySyncHealth")
+    const { findChats } = require("../lib/evolution")
+    const result = await evaluateCanaryInstance(
+      { prisma, findChats },
+      { instanceName, userId, host: req.query.host || "canary" },
+    )
+    return res.json({ ok: true, canary: result })
+  } catch (err) {
+    console.error("[admin] canary-sync-health:", err)
+    return res.status(500).json({
+      error: "CANARY_CHECK_FAILED",
+      message: err?.message || "Falha ao avaliar canário.",
+    })
+  }
+})
+
+/** Força resolução LID↔telefone + unify + archive inativo numa conta. */
+router.post("/users/:id/crm-lid-resolve", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const userId = String(req.params.id || "").trim()
+    const conn = await prisma.whatsAppConnection.findUnique({ where: { userId } })
+    if (!conn?.instanceName) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Conta sem WhatsApp conectado." })
+    }
+    const {
+      findChats,
+      findChatsPaginated,
+      findContacts,
+      bindInstanceHost,
+    } = require("../lib/evolution")
+    bindInstanceHost(conn.instanceName, conn.evolutionHost || "primary")
+    const { processAccount } = require("../lib/crmLidOrphanJob")
+    const result = await processAccount(
+      { prisma, io: req.app?.get?.("io") || null, findChats, findChatsPaginated, findContacts, bindInstanceHost },
+      {
+        userId,
+        instanceName: conn.instanceName,
+        evolutionHost: conn.evolutionHost,
+      },
+    )
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    console.error("[admin] crm-lid-resolve:", err)
+    return res.status(500).json({
+      error: "LID_RESOLVE_FAILED",
+      message: err?.message || "Falha ao resolver LID.",
+    })
+  }
+})
+
+/** Arquiva só LID legado inativo (sem resolve Evolution) — limpa dívida que o mapa não cobre. */
+router.post("/users/:id/crm-lid-archive-inactive", authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const userId = String(req.params.id || "").trim()
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } })
+    if (!user) {
+      return res.status(404).json({ error: "NOT_FOUND", message: "Conta não encontrada." })
+    }
+    const { archiveInactiveLidOrphans, countOrphanLids, countArchivedLidOrphans, LID_LEGACY_INACTIVE_DAYS } =
+      require("../lib/crmLidOrphanJob")
+    const inactiveDays = req.body?.inactiveDays != null ? Number(req.body.inactiveDays) : LID_LEGACY_INACTIVE_DAYS
+    const limit = req.body?.limit != null ? Number(req.body.limit) : undefined
+    const result = await archiveInactiveLidOrphans(prisma, userId, { inactiveDays, limit })
+    const orphansAfter = await countOrphanLids(prisma, userId)
+    const archivedOrphans = await countArchivedLidOrphans(prisma, userId)
+    return res.json({ ok: true, ...result, orphansAfter, archivedOrphans })
+  } catch (err) {
+    console.error("[admin] crm-lid-archive-inactive:", err)
+    return res.status(500).json({
+      error: "LID_ARCHIVE_FAILED",
+      message: err?.message || "Falha ao arquivar LID inativo.",
+    })
+  }
+})
+
 module.exports = router
