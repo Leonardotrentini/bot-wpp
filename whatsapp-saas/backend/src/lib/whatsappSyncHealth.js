@@ -77,23 +77,7 @@ const KEEP_ALIVE_ENABLED =
   String(process.env.WHATSAPP_KEEP_ALIVE_ENABLED || "true").toLowerCase() !== "false"
 /** Antes 3min: keep-alive em rajada flapa UI. 8min reduz restart em loop. */
 const KEEP_ALIVE_COOLDOWN_MS = Number(process.env.WHATSAPP_KEEP_ALIVE_COOLDOWN_MS || 8 * 60 * 1000)
-/**
- * Janela pós-boot do CRM: NUNCA restart/logout/connect em instância.
- * Evita que deploy do backend derrube sessões (keep-alive / reconcile / soft-restart).
- * Webhook refresh (só URL) continua permitido — não reinicia socket.
- */
-const PROCESS_BOOT_AT_MS = Date.now()
-const BOOT_GRACE_MS = Math.max(
-  0,
-  Number(process.env.WHATSAPP_BOOT_GRACE_MS || 5 * 60 * 1000),
-)
-function inBootGrace(now = Date.now()) {
-  return BOOT_GRACE_MS > 0 && now - PROCESS_BOOT_AT_MS < BOOT_GRACE_MS
-}
-function bootGraceRemainingMs(now = Date.now()) {
-  if (!inBootGrace(now)) return 0
-  return Math.max(0, BOOT_GRACE_MS - (now - PROCESS_BOOT_AT_MS))
-}
+const { BOOT_GRACE_MS, inBootGrace, bootGraceRemainingMs } = require("./bootGrace")
 /** Evo precisa estar pelo menos isto à frente do CRM para contar como gap de zombie. */
 const ZOMBIE_GAP_MS = Number(process.env.WHATSAPP_ZOMBIE_GAP_MS || 2 * 60 * 1000)
 const ZOMBIE_PROBE_CHATS = Math.max(2, Math.min(10, Number(process.env.WHATSAPP_ZOMBIE_PROBE_CHATS || 5)))
@@ -487,6 +471,25 @@ function newestActivityMsFromRawChats(raw) {
  * Prova de zombie: Evolution tem atividade/msg mais nova que o CRM (gap >= ZOMBIE_GAP_MS).
  * Silêncio sozinho NÃO prova — evita soft-restart em horário parado.
  */
+async function recentSocketProbeOk(prisma, instanceName, withinMs = 20 * 60 * 1000) {
+  if (!prisma?.whatsAppProbeResult || !instanceName) return false
+  try {
+    const row = await prisma.whatsAppProbeResult.findFirst({
+      where: {
+        instanceName,
+        probeOk: true,
+        probedAt: { gte: new Date(Date.now() - withinMs) },
+        NOT: { error: "skipped_not_open" },
+      },
+      orderBy: { probedAt: "desc" },
+      select: { id: true, probedAt: true, latencyMs: true },
+    })
+    return Boolean(row)
+  } catch {
+    return false
+  }
+}
+
 async function proveEvolutionAheadOfCrm(prisma, row) {
   const crmNewestMs = row.newestMsgAt
     ? new Date(row.newestMsgAt).getTime()
@@ -495,6 +498,32 @@ async function proveEvolutionAheadOfCrm(prisma, row) {
 
   bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
   const { extractIndividualChats } = crmSyncApi()
+
+  // Webhook recente = socket entregando ao CRM — não é zumbi para restart/banner.
+  const lastWhMs = row.lastWebhookAt ? new Date(row.lastWebhookAt).getTime() : 0
+  if (lastWhMs && Date.now() - lastWhMs < 15 * 60 * 1000) {
+    return {
+      proven: false,
+      reason: "recent_webhook_overrides",
+      sampleJid: null,
+      evoNewestMs: null,
+      crmNewestMs,
+      gapMs: Date.now() - crmNewestMs,
+    }
+  }
+
+  // Sonda socket OK recente: store/findChats local NÃO autoriza restart/banner.
+  // (mutual_freeze / chat_activity / empty_store podem mentir com socket vivo)
+  if (await recentSocketProbeOk(prisma, row.instanceName)) {
+    return {
+      proven: false,
+      reason: "socket_probe_ok_overrides",
+      sampleJid: null,
+      evoNewestMs: null,
+      crmNewestMs,
+      gapMs: Date.now() - crmNewestMs,
+    }
+  }
 
   // Prova opcional por sonda de socket (flag WHATSAPP_PROBE_AS_HARD_PROOF — desligada por padrão).
   try {
@@ -1124,6 +1153,21 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
           )
           continue
         }
+        const { assertEvolutionActionAllowed } = require("./evolutionActionGuard")
+        const gate = await assertEvolutionActionAllowed({
+          action: "restart",
+          instanceName: row.instanceName,
+          manual: false,
+          source: "sync-health.hybrid",
+          reason: proof.reason,
+          host: row.evolutionHost || "primary",
+        })
+        if (!gate.allowed) {
+          console.warn(
+            `[sync-health] soft-restart blocked by guard ${row.instanceName} code=${gate.code}`,
+          )
+          continue
+        }
         recovering += 1
         const recoveringConn = await prisma.whatsAppConnection.update({
           where: { userId: row.userId },
@@ -1139,7 +1183,11 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
         bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
         let restartOk = false
         try {
-          await restartInstance(row.instanceName)
+          await restartInstance(row.instanceName, {
+            source: "sync-health.hybrid",
+            reason: proof.reason,
+            host: row.evolutionHost || "primary",
+          })
           restartOk = true
           console.warn(
             JSON.stringify({
@@ -1154,6 +1202,7 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
           )
         } catch (err) {
           console.warn(`[sync-health] restart failed ${row.instanceName}:`, err?.message || err)
+          if (err?.code === "EVOLUTION_ACTION_BLOCKED") continue
         }
 
         await wait(2500)
@@ -1188,6 +1237,13 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
       }
 
       // Soft-restarts esgotados COM prova dura: aí sim alerta UI (sem logout).
+      // Evita spam de banner_qr a cada tick do watchdog.
+      const alreadyBannered =
+        String(row.syncHealth || "").toUpperCase() === SYNC_HEALTH.STALE &&
+        recoveryCount >= Math.max(1, MAX_SOFT_RECOVERIES)
+      if (alreadyBannered) {
+        continue
+      }
       markedStale += 1
       const conn = await prisma.whatsAppConnection.update({
         where: { userId: row.userId },
@@ -1297,7 +1353,11 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
 
       bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
       try {
-        await restartInstance(row.instanceName)
+        await restartInstance(row.instanceName, {
+          source: "sync-health.aggressive",
+          reason: "auto_recover",
+          host: row.evolutionHost || "primary",
+        })
         console.warn(
           JSON.stringify({
             tag: "sync-health",
@@ -1310,6 +1370,7 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
         )
       } catch (err) {
         console.warn(`[sync-health] restart failed ${row.instanceName}:`, err?.message || err)
+        if (err?.code === "EVOLUTION_ACTION_BLOCKED") continue
       }
 
       await wait(2500)
@@ -1357,9 +1418,10 @@ async function runWhatsappSyncHealthWatchdog(ctx) {
       `[sync-health] forcing disconnect ${row.instanceName} after ${recoveryCount} recoveries (zombie open)`,
     )
     bindInstanceHost(row.instanceName, row.evolutionHost || "primary")
-    await logoutInstance(row.instanceName).catch((err) => {
-      console.warn(`[sync-health] logout ${row.instanceName}:`, err?.message || err)
-    })
+    // logout automático PROIBIDO pela guarda — só marca CRM disconnect.
+    console.warn(
+      `[sync-health] skip auto logout ${row.instanceName} (guard) — disconnect só no CRM`,
+    )
     const disconnected = await markConnectionDisconnected(row.userId, row, { clearQr: true })
     await prisma.whatsAppConnection
       .update({
@@ -1426,10 +1488,19 @@ async function tryKeepAliveAfterClose(deps, { userId, instanceName, evolutionHos
   bindInstanceHost(instanceName, evolutionHost || "primary")
   console.warn(`[sync-health] keep-alive restart ${instanceName}`)
   try {
-    await restartInstance(instanceName)
+    await restartInstance(instanceName, {
+      source: "sync-health.keep-alive",
+      reason: why || "close",
+      host: evolutionHost || "primary",
+    })
   } catch (err) {
     console.warn(`[sync-health] keep-alive restart failed ${instanceName}:`, err?.message || err)
-    return { attempted: true, ok: false, error: err?.message || String(err) }
+    return {
+      attempted: err?.code !== "EVOLUTION_ACTION_BLOCKED",
+      ok: false,
+      error: err?.message || String(err),
+      blocked: err?.code === "EVOLUTION_ACTION_BLOCKED",
+    }
   }
 
   await wait(2500)

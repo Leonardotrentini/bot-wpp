@@ -944,6 +944,29 @@ model CrmConversationAnalysis {
   @@index([conversationId])
 }
 
+/// Auditoria de mutações Evolution (restart/logout/delete/connect) via guarda central.
+model WhatsAppEvolutionActionAudit {
+  id           String   @id @default(cuid())
+  instanceName String
+  host         String   @default("primary")
+  /// restart | logout | delete | connect
+  action       String
+  allowed      Boolean
+  manual       Boolean  @default(false)
+  source       String?
+  reason       String?
+  /// ok | blocked | error
+  result       String?
+  error        String?
+  meta         Json?
+  createdAt    DateTime @default(now())
+
+  @@index([instanceName, createdAt])
+  @@index([action, createdAt])
+  @@index([allowed, createdAt])
+  @@index([source, createdAt])
+}
+
 /// Sonda ativa Evo1 vs Evo2 (whatsappNumbers no próprio número — sem envio).
 model WhatsAppProbeResult {
   id               String   @id @default(cuid())

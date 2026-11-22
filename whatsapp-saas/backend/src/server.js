@@ -4096,12 +4096,10 @@ async function purgeConflictingConnection(other, { reason } = {}) {
     `[whatsapp] limpando ${other.instanceName} (${other.ownerName}): número compartilhado` +
       (reason ? ` — ${reason}` : ""),
   )
-  try {
-    bindInstanceHost(other.instanceName, other.evolutionHost || "primary")
-    await logoutInstance(other.instanceName)
-  } catch (err) {
-    console.warn("[whatsapp] logout conflito:", err?.message || err)
-  }
+  // Sem logout Evolution automático (guarda): só limpa CRM. Admin pode logout manual depois.
+  console.warn(
+    `[whatsapp] skip evo logout em conflito ${other.instanceName} — política auto_logout_forbidden`,
+  )
   const conn = await prisma.whatsAppConnection.update({
     where: { userId: other.userId },
     data: {
@@ -4142,9 +4140,9 @@ async function enforceOrgNumberConflict({ userId, instanceName, phone }) {
       `derrubando ${instanceName} para não espelhar a inbox.`,
   )
 
-  await logoutInstance(instanceName).catch((err) => {
-    console.warn("[whatsapp] logout da instância em conflito:", err?.message || err)
-  })
+  console.warn(
+    `[whatsapp] skip evo logout NUMBER_CONFLICT ${instanceName} — política auto_logout_forbidden`,
+  )
 
   const conn = await prisma.whatsAppConnection.update({
     where: { userId },
@@ -5125,7 +5123,12 @@ app.post("/api/whatsapp/disconnect", authMiddleware, async (req, res) => {
 
     if (existing.instanceName) {
       bindInstanceHost(existing.instanceName, existing.evolutionHost || "primary")
-      await logoutInstance(existing.instanceName)
+      await logoutInstance(existing.instanceName, {
+        manual: true,
+        source: "api.whatsapp.disconnect",
+        reason: "user_disconnect",
+        host: existing.evolutionHost || "primary",
+      })
     }
     clearPairingCodeCache(userId)
     const conn = await prisma.whatsAppConnection.update({
@@ -5344,6 +5347,12 @@ httpServer.listen(port, () => {
     .catch((err) =>
       console.error("[bootstrap] evolution hosts/webhooks:", err?.message || err),
     )
+  try {
+    const { setGuardPrisma } = require("./lib/evolutionActionGuard")
+    setGuardPrisma(prisma)
+  } catch (err) {
+    console.warn("[evo-guard] setGuardPrisma:", err?.message || err)
+  }
   console.log(`Backend online na porta ${port}`)
   if (BOOT_GRACE_MS > 0) {
     console.log(

@@ -18,8 +18,9 @@ async function releaseEvolutionInstance(userId) {
     select: { instanceName: true },
   })
   if (!conn?.instanceName) return
-  await logoutInstance(conn.instanceName).catch(() => {})
-  await deleteInstance(conn.instanceName).catch(() => {})
+  const manualOpts = { manual: true, source: "adminPurge", reason: "admin_delete_user" }
+  await logoutInstance(conn.instanceName, manualOpts).catch(() => {})
+  await deleteInstance(conn.instanceName, manualOpts).catch(() => {})
 }
 
 async function deleteUserOwnedRows(tx, userId) {

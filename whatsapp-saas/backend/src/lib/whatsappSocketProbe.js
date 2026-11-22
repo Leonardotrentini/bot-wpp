@@ -44,6 +44,42 @@ function ownDigits(conn) {
 }
 
 /**
+ * OPEN com phone null: tenta ownerJid via fetchInstanceInfo e persiste.
+ * Nunca envia mensagem.
+ */
+async function resolveAndPersistOwnPhone(prisma, conn) {
+  let digits = ownDigits(conn)
+  if (digits) return digits
+  if (!conn?.instanceName) return ""
+  try {
+    const { fetchInstanceInfo, pickPhone } = require("./evolution")
+    const { connectionPhoneData } = require("./whatsappPhoneClaim")
+    const info = await fetchInstanceInfo(conn.instanceName)
+    const phone = pickPhone(info)
+    digits = String(phone || "")
+      .replace(/@.*/, "")
+      .replace(/\D/g, "")
+      .trim()
+    if (digits && prisma?.whatsAppConnection) {
+      await prisma.whatsAppConnection
+        .update({
+          where: { instanceName: conn.instanceName },
+          data: connectionPhoneData(digits),
+        })
+        .catch(() => {})
+      conn.phone = digits
+      conn.phoneDigits = digits
+    }
+  } catch (err) {
+    console.warn(
+      `[socket-probe] ownerJid fallback ${conn.instanceName}:`,
+      err?.message || err,
+    )
+  }
+  return digits
+}
+
+/**
  * Uma sonda: whatsappNumbers no próprio número, timeout curto.
  * Nunca envia mensagem.
  */
@@ -60,12 +96,20 @@ async function probeOneInstance(prisma, conn) {
     connectionState = `error:${String(err?.message || err).slice(0, 80)}`
   }
 
-  const digits = ownDigits(conn)
+  const hadPhone = Boolean(ownDigits(conn))
+  let digits = ownDigits(conn)
+  if (!digits) {
+    digits = await resolveAndPersistOwnPhone(prisma, conn)
+  }
   const started = Date.now()
   let probeOk = false
   let error = null
   let latencyMs = null
-  let meta = { method: "whatsappNumbers", selfDigitsSuffix: digits ? digits.slice(-4) : null }
+  let meta = {
+    method: "whatsappNumbers",
+    selfDigitsSuffix: digits ? digits.slice(-4) : null,
+    phoneResolvedFromOwnerJid: !hadPhone && Boolean(digits),
+  }
 
   if (!digits) {
     error = "missing_own_phone"
@@ -481,6 +525,36 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
     }
   })
 
+  let actionAudit = { total: 0, blocked: 0, allowed: 0, byAction: {}, bySource: {}, recent: [] }
+  if (prisma.whatsAppEvolutionActionAudit) {
+    try {
+      const audits = await prisma.whatsAppEvolutionActionAudit.findMany({
+        where: { createdAt: { gte: since } },
+        orderBy: { createdAt: "desc" },
+        take: 500,
+      })
+      actionAudit.total = audits.length
+      actionAudit.blocked = audits.filter((a) => !a.allowed || a.result === "blocked").length
+      actionAudit.allowed = audits.filter((a) => a.allowed && a.result === "ok").length
+      for (const a of audits) {
+        actionAudit.byAction[a.action] = (actionAudit.byAction[a.action] || 0) + 1
+        const src = a.source || "unknown"
+        actionAudit.bySource[src] = (actionAudit.bySource[src] || 0) + 1
+      }
+      actionAudit.recent = audits.slice(0, 40).map((a) => ({
+        instanceName: a.instanceName,
+        action: a.action,
+        allowed: a.allowed,
+        result: a.result,
+        source: a.source,
+        reason: a.reason,
+        createdAt: a.createdAt,
+      }))
+    } catch (err) {
+      actionAudit.error = err?.message || String(err)
+    }
+  }
+
   return {
     ok: true,
     hours: Number(hours) || 72,
@@ -495,6 +569,7 @@ async function buildProbeReport(prisma, { hours = 72 } = {}) {
     instances: cross,
     crmSnapshot,
     inventoryCount: inventoryLatest.size,
+    actionAudit,
   }
 }
 

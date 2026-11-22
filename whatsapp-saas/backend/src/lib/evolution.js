@@ -288,22 +288,40 @@ function isInstanceAlreadyExistsError(err) {
   return message.includes("already") || message.includes("exist") || message.includes("in use")
 }
 
-async function connectInstance(instanceName, { number } = {}) {
+async function connectInstance(instanceName, { number, manual, source, reason, host } = {}) {
+  const { runGuardedEvolutionAction } = require("./evolutionActionGuard")
   const phone = normalizeWhatsappNumber(number)
   const query = phone ? `?number=${encodeURIComponent(phone)}` : ""
-  return firstSuccess([
-    () =>
-      requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
-        method: "GET",
-      }),
-    () => requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}${query}`),
-    ...(phone
-      ? []
-      : [
-          () => requestEvolution(`/instance/qr/${encodeURIComponent(instanceName)}`, { method: "GET" }),
-          () => requestEvolution(`/instance/qrcode/${encodeURIComponent(instanceName)}`, { method: "GET" }),
-        ]),
-  ])
+  return runGuardedEvolutionAction(
+    {
+      action: "connect",
+      instanceName,
+      manual: manual === true,
+      source: source || "connectInstance",
+      reason: reason || "",
+      host,
+    },
+    async () =>
+      firstSuccess([
+        () =>
+          requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
+            method: "GET",
+          }),
+        () => requestEvolution(`/instance/connect/${encodeURIComponent(instanceName)}${query}`),
+        ...(phone
+          ? []
+          : [
+              () =>
+                requestEvolution(`/instance/qr/${encodeURIComponent(instanceName)}`, {
+                  method: "GET",
+                }),
+              () =>
+                requestEvolution(`/instance/qrcode/${encodeURIComponent(instanceName)}`, {
+                  method: "GET",
+                }),
+            ]),
+      ]),
+  )
 }
 
 function pickPairingCode(data) {
@@ -333,10 +351,11 @@ async function recoverPairingCode(instanceName, number) {
     return { qrData: stateData, pairingCode: null, qrReady: false, alreadyOpen: true }
   }
 
+  const manualOpts = { manual: true, source: "recoverPairingCode", reason: "user_pairing" }
   // Evolution não gera pairingCode enquanto state === connecting (devolve QR antigo).
   if (state === "connecting") {
     try {
-      await restartInstance(instanceName)
+      await restartInstance(instanceName, manualOpts)
       await sleep(2000)
     } catch (err) {
       console.warn("[evolution] restart antes do pairing:", err?.message || err)
@@ -345,7 +364,7 @@ async function recoverPairingCode(instanceName, number) {
     state = pickStatus(stateData).toLowerCase()
     if (state === "connecting" || state === "open") {
       try {
-        await logoutInstance(instanceName)
+        await logoutInstance(instanceName, manualOpts)
         await sleep(1500)
       } catch (err) {
         console.warn("[evolution] logout antes do pairing:", err?.message || err)
@@ -353,16 +372,16 @@ async function recoverPairingCode(instanceName, number) {
     }
   }
 
-  let qrData = await connectInstance(instanceName, { number: phone })
+  let qrData = await connectInstance(instanceName, { number: phone, ...manualOpts })
   let pairingCode = pickPairingCode(qrData)
   if (!pairingCode) {
     try {
-      await restartInstance(instanceName)
+      await restartInstance(instanceName, manualOpts)
       await sleep(2000)
     } catch (err) {
       console.warn("[evolution] restart retry pairing:", err?.message || err)
     }
-    qrData = await connectInstance(instanceName, { number: phone })
+    qrData = await connectInstance(instanceName, { number: phone, ...manualOpts })
     pairingCode = pickPairingCode(qrData)
   }
 
@@ -411,13 +430,14 @@ function isEvolutionUnreachableError(err) {
 
 /** Connect; se vier sem QR, restart e tenta de novo (sessão presa em connecting). */
 async function recoverQrIfStuck(instanceName) {
-  let qrData = await connectInstance(instanceName)
+  const manualOpts = { manual: true, source: "recoverQrIfStuck", reason: "user_qr" }
+  let qrData = await connectInstance(instanceName, manualOpts)
   let qrReady = await resolveQrForStorage(qrData)
   if (qrReady) return { qrData, qrReady: true }
   try {
-    await restartInstance(instanceName)
+    await restartInstance(instanceName, manualOpts)
     await new Promise((r) => setTimeout(r, 1500))
-    qrData = await connectInstance(instanceName)
+    qrData = await connectInstance(instanceName, manualOpts)
     qrReady = await resolveQrForStorage(qrData)
   } catch (err) {
     console.warn("[evolution] recoverQrIfStuck:", err?.message || err)
@@ -976,32 +996,57 @@ function extractMediaBase64Payload(resp) {
   return extract(resp)
 }
 
-async function logoutInstance(instanceName) {
-  try {
-    return await requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, {
-      method: "DELETE",
-    })
-  } catch (err) {
-    // Já fechada / inexistente: desconectar no CRM ainda deve concluir.
-    if (isBenignLogoutError(err)) {
-      return { skipped: true, reason: err.message, status: err.status || null }
-    }
-    throw err
-  }
+async function logoutInstance(instanceName, opts = {}) {
+  const { runGuardedEvolutionAction } = require("./evolutionActionGuard")
+  return runGuardedEvolutionAction(
+    {
+      action: "logout",
+      instanceName,
+      manual: opts.manual === true,
+      source: opts.source || "logoutInstance",
+      reason: opts.reason || "",
+      host: opts.host,
+    },
+    async () => {
+      try {
+        return await requestEvolution(`/instance/logout/${encodeURIComponent(instanceName)}`, {
+          method: "DELETE",
+        })
+      } catch (err) {
+        // Já fechada / inexistente: desconectar no CRM ainda deve concluir.
+        if (isBenignLogoutError(err)) {
+          return { skipped: true, reason: err.message, status: err.status || null }
+        }
+        throw err
+      }
+    },
+  )
 }
 
 /** Reinicia sessão Baileys (útil quando fica em connecting sem QR). */
-async function restartInstance(instanceName) {
-  return firstSuccess([
-    () =>
-      requestEvolution(`/instance/restart/${encodeURIComponent(instanceName)}`, {
-        method: "POST",
-      }),
-    () =>
-      requestEvolution(`/instance/restart/${encodeURIComponent(instanceName)}`, {
-        method: "PUT",
-      }),
-  ])
+async function restartInstance(instanceName, opts = {}) {
+  const { runGuardedEvolutionAction } = require("./evolutionActionGuard")
+  return runGuardedEvolutionAction(
+    {
+      action: "restart",
+      instanceName,
+      manual: opts.manual === true,
+      source: opts.source || "restartInstance",
+      reason: opts.reason || "",
+      host: opts.host,
+    },
+    async () =>
+      firstSuccess([
+        () =>
+          requestEvolution(`/instance/restart/${encodeURIComponent(instanceName)}`, {
+            method: "POST",
+          }),
+        () =>
+          requestEvolution(`/instance/restart/${encodeURIComponent(instanceName)}`, {
+            method: "PUT",
+          }),
+      ]),
+  )
 }
 
 function isBenignLogoutError(err) {
@@ -1016,11 +1061,29 @@ function isBenignLogoutError(err) {
   return false
 }
 
-async function deleteInstance(instanceName) {
-  return firstSuccess([
-    () => requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
-    () => requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "GET" }),
-  ])
+async function deleteInstance(instanceName, opts = {}) {
+  const { runGuardedEvolutionAction } = require("./evolutionActionGuard")
+  return runGuardedEvolutionAction(
+    {
+      action: "delete",
+      instanceName,
+      manual: opts.manual === true,
+      source: opts.source || "deleteInstance",
+      reason: opts.reason || "",
+      host: opts.host,
+    },
+    async () =>
+      firstSuccess([
+        () =>
+          requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, {
+            method: "DELETE",
+          }),
+        () =>
+          requestEvolution(`/instance/delete/${encodeURIComponent(instanceName)}`, {
+            method: "GET",
+          }),
+      ]),
+  )
 }
 
 /** Lista etiquetas WhatsApp Business da instância. */
