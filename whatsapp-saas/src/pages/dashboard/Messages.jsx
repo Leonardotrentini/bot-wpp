@@ -35,10 +35,12 @@ import { Modal, ConfirmModal } from '../../components/common/Modal.jsx'
 import {
   getGroups,
   getTemplates,
+  getTemplate,
   createTemplate,
   updateTemplate,
   deleteTemplate,
   getAutomations,
+  getAutomation,
   createAutomation,
   putAutomation,
   updateAutomation,
@@ -55,12 +57,22 @@ import {
   getMembers,
 } from '../../services/api.js'
 import { useToast } from '../../contexts/ToastContext.jsx'
-import { IMAGE_MAX_BYTES, VIDEO_MAX_BYTES, DOCUMENT_MAX_BYTES, imageMaxLabel, videoMaxLabel, documentMaxLabel, mediaLimitLabel } from '../../lib/mediaLimits.js'
+import {
+  IMAGE_MAX_BYTES,
+  VIDEO_MAX_BYTES,
+  DOCUMENT_MAX_BYTES,
+  VIDEO_FILE_ACCEPT,
+  imageMaxLabel,
+  videoMaxLabel,
+  documentMaxLabel,
+  mediaLimitLabel,
+  isAcceptedChatVideo,
+} from '../../lib/mediaLimits.js'
 import { appendComposerFields, emptyMentionsJson, highlightMentionsInText, mentionPartClass } from '../../lib/messageMentions.js'
 import { DocumentMediaPreview, ImageMediaPreview, VideoMediaPreview, revokeMediaPreviewUrl } from '../../components/common/MediaPreview.jsx'
 
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
-const FILE_ACCEPT_MEDIA = 'image/*,video/mp4,.mp4,application/pdf,.pdf'
+const FILE_ACCEPT_MEDIA = `image/*,${VIDEO_FILE_ACCEPT},application/pdf,.pdf`
 const HIST_PAGE_SIZE = 20
 const AUTO_LIST_PAGE = 5
 const ACTIVITY_LIST_PAGE = 8
@@ -77,12 +89,6 @@ const TAB_SUBTITLES = {
   cadencia: 'Organize sequências de disparos por campanha ou dia.',
 }
 
-function isMp4Video(file) {
-  if (/\.mp4$/i.test(file.name || '')) return true
-  const t = (file.type || '').toLowerCase()
-  return t === 'video/mp4' || t === 'application/mp4'
-}
-
 function isPdfFile(file) {
   const t = (file.type || '').toLowerCase()
   if (t === 'application/pdf') return true
@@ -90,9 +96,9 @@ function isPdfFile(file) {
 }
 
 function fileKind(file) {
-  if (file.type.startsWith('image/')) return 'image'
-  if (isMp4Video(file)) return 'video'
-  if (file.type.startsWith('video/') || /\.(mov|avi|mkv|webm|m4v)$/i.test(file.name || '')) return 'unsupported-video'
+  if ((file.type || '').startsWith('image/')) return 'image'
+  if (isAcceptedChatVideo(file)) return 'video'
+  if ((file.type || '').startsWith('video/') || /\.(avi|mkv|webm)$/i.test(file.name || '')) return 'unsupported-video'
   if (isPdfFile(file)) return 'document'
   return 'file'
 }
@@ -378,11 +384,11 @@ function MediaAttachmentBlock({ mediaType, mediaBase64, mediaPreviewUrl, mediaNa
   return (
     <div className="space-y-2">
       <p className="text-sm text-stone-200">
-        Mídia (imagem até {imageMaxLabel}, vídeo MP4 até {videoMaxLabel} ou PDF até {documentMaxLabel})
+        Mídia (imagem até {imageMaxLabel}, vídeo MP4/MOV até {videoMaxLabel} ou PDF até {documentMaxLabel})
       </p>
       {mediaType === 'none' ? (
         <label className="flex cursor-pointer items-center justify-center rounded-xl border border-dashed border-brand-700 px-4 py-4 text-sm text-stone-400 hover:bg-white/5">
-          Clique para anexar imagem, vídeo MP4 ou PDF
+          Clique para anexar imagem, vídeo (MP4/MOV) ou PDF
           <input type="file" accept={FILE_ACCEPT_MEDIA} className="hidden" onChange={onPick} />
         </label>
       ) : (
@@ -532,18 +538,22 @@ export function Messages({ defaultTab = 'criar' }) {
   const reloadInit = useCallback(() => {
     setLoadingInit(true)
     setInitError(null)
-    return Promise.all([
-      getGroups().then((r) =>
-        setGroups((r.data.groups || []).filter((g) => g.status === 'ativo' && g.monitoringEnabled)),
-      ),
-      refreshTemplates(),
-      refreshAutomations(),
-      refreshCadences(),
-      refreshHistory(0),
-      refreshGroupActivity(),
-    ])
-      .catch((err) => {
-        const msg = err?.response?.data?.message || 'Falha ao carregar dados de mensagens.'
+    const tasks = [
+      getGroups()
+        .then((r) => setGroups((r.data.groups || []).filter((g) => g.status === 'ativo' && g.monitoringEnabled)))
+        .catch((err) => ({ _err: err, label: 'grupos' })),
+      refreshTemplates().catch((err) => ({ _err: err, label: 'biblioteca' })),
+      refreshAutomations().catch((err) => ({ _err: err, label: 'automações' })),
+      refreshCadences().catch((err) => ({ _err: err, label: 'cadências' })),
+      refreshHistory(0).catch((err) => ({ _err: err, label: 'histórico' })),
+      refreshGroupActivity().catch((err) => ({ _err: err, label: 'atividade' })),
+    ]
+    return Promise.all(tasks)
+      .then((results) => {
+        const fails = results.filter((r) => r && r._err)
+        if (!fails.length) return
+        const first = fails[0]
+        const msg = first._err?.response?.data?.message || `Falha ao carregar ${first.label}.`
         setInitError(msg)
         toast.error(msg)
       })
@@ -604,17 +614,27 @@ export function Messages({ defaultTab = 'criar' }) {
     setTplModal(true)
   }
 
-  function openEditTemplate(t) {
+  async function openEditTemplate(t) {
+    let full = t
+    if (t.hasMedia || (t.mediaType && t.mediaType !== 'none' && !t.mediaBase64)) {
+      try {
+        const r = await getTemplate(t.id)
+        full = r.data.template || t
+      } catch (err) {
+        toast.error(err?.response?.data?.message || 'Falha ao carregar a mídia da mensagem.')
+        return
+      }
+    }
     setTplForm({
-      id: t.id,
-      name: t.name,
-      body: t.body || '',
-      mediaType: t.mediaType || 'none',
-      mediaBase64: t.mediaBase64 || null,
-      mediaMime: t.mediaMime || null,
-      mediaName: t.mediaName || null,
-      mentionsJson: t.mentionsJson || emptyMentionsJson(),
-      linkPreview: t.linkPreview !== false,
+      id: full.id,
+      name: full.name,
+      body: full.body || '',
+      mediaType: full.mediaType || 'none',
+      mediaBase64: full.mediaBase64 || null,
+      mediaMime: full.mediaMime || null,
+      mediaName: full.mediaName || null,
+      mentionsJson: full.mentionsJson || emptyMentionsJson(),
+      linkPreview: full.linkPreview !== false,
     })
     setTplModal(true)
   }
@@ -623,11 +643,11 @@ export function Messages({ defaultTab = 'criar' }) {
     if (!file) return
     const kind = fileKind(file)
     if (kind === 'unsupported-video') {
-      toast.error('Use vídeo em MP4 (H.264). Converta MOV/AVI antes de anexar.')
+      toast.error('Use vídeo em MP4 ou MOV.')
       return
     }
     if (kind === 'file') {
-      toast.error('Tipo não suportado. Use imagem, vídeo MP4 ou PDF.')
+      toast.error('Tipo não suportado. Use imagem, vídeo (MP4/MOV) ou PDF.')
       return
     }
     const max = kind === 'video' ? VIDEO_MAX_BYTES : kind === 'document' ? DOCUMENT_MAX_BYTES : IMAGE_MAX_BYTES
@@ -637,7 +657,11 @@ export function Messages({ defaultTab = 'criar' }) {
     }
     const previewUrl = kind === 'video' || kind === 'image' ? URL.createObjectURL(file) : null
     let mime = file.type || 'image/jpeg'
-    if (kind === 'video') mime = 'video/mp4'
+    if (kind === 'video') {
+      if (/\.mov$/i.test(file.name || '') || (mime || '').includes('quicktime')) mime = mime || 'video/quicktime'
+      else if (/\.m4v$/i.test(file.name || '')) mime = mime || 'video/x-m4v'
+      else mime = mime && mime.startsWith('video/') ? mime : 'video/mp4'
+    }
     if (kind === 'document') mime = 'application/pdf'
     const dataUrl = await readFileAsDataUrl(file)
     apply({
@@ -717,15 +741,20 @@ export function Messages({ defaultTab = 'criar' }) {
 
   async function duplicateTemplate(t) {
     try {
+      let full = t
+      if (t.hasMedia || (t.mediaType && t.mediaType !== 'none' && !t.mediaBase64)) {
+        const r = await getTemplate(t.id)
+        full = r.data.template || t
+      }
       await createTemplate({
-        name: `${t.name} (cópia)`,
-        body: t.body,
-        mediaType: t.mediaType,
-        mediaBase64: t.mediaBase64,
-        mediaMime: t.mediaMime,
-        mediaName: t.mediaName,
-        mentionsJson: t.mentionsJson,
-        linkPreview: t.linkPreview,
+        name: `${full.name} (cópia)`,
+        body: full.body,
+        mediaType: full.mediaType,
+        mediaBase64: full.mediaBase64,
+        mediaMime: full.mediaMime,
+        mediaName: full.mediaName,
+        mentionsJson: full.mentionsJson,
+        linkPreview: full.linkPreview,
       })
       toast.success('Mensagem duplicada.')
       refreshTemplates()
@@ -817,25 +846,35 @@ export function Messages({ defaultTab = 'criar' }) {
     setGroupSearch('')
   }
 
-  function openEditAuto(a) {
-    setEditingAutoId(a.id)
+  async function openEditAuto(a) {
+    let full = a
+    if (!a.templateId && (a.hasMedia || (a.mediaType && a.mediaType !== 'none' && !a.mediaBase64))) {
+      try {
+        const r = await getAutomation(a.id)
+        full = r.data.automation || a
+      } catch (err) {
+        toast.error(err?.response?.data?.message || 'Falha ao carregar a mídia da automação.')
+        return
+      }
+    }
+    setEditingAutoId(full.id)
     setAutoForm({
-      name: a.name,
-      source: a.templateId ? 'template' : 'inline',
-      templateId: a.templateId || '',
-      body: a.body || '',
-      mediaType: a.mediaType || 'none',
-      mediaBase64: a.mediaBase64 || null,
-      mediaMime: a.mediaMime || null,
-      mediaName: a.mediaName || null,
-      mentionsJson: a.mentionsJson || emptyMentionsJson(),
-      linkPreview: a.linkPreview !== false,
-      groupIds: a.groupJids || [],
-      frequency: a.frequency === 'now' ? 'once' : a.frequency,
-      scheduledAt: toLocalInput(a.scheduledAt),
-      timeOfDay: a.timeOfDay || '09:00',
-      weekday: a.weekday ?? 1,
-      status: a.status === 'pausada' ? 'pausada' : 'ativa',
+      name: full.name,
+      source: full.templateId ? 'template' : 'inline',
+      templateId: full.templateId || '',
+      body: full.body || '',
+      mediaType: full.mediaType || 'none',
+      mediaBase64: full.mediaBase64 || null,
+      mediaMime: full.mediaMime || null,
+      mediaName: full.mediaName || null,
+      mentionsJson: full.mentionsJson || emptyMentionsJson(),
+      linkPreview: full.linkPreview !== false,
+      groupIds: full.groupJids || [],
+      frequency: full.frequency === 'now' ? 'once' : full.frequency,
+      scheduledAt: toLocalInput(full.scheduledAt),
+      timeOfDay: full.timeOfDay || '09:00',
+      weekday: full.weekday ?? 1,
+      status: full.status === 'pausada' ? 'pausada' : 'ativa',
     })
     if (tab !== 'automacoes') changeTab('automacoes')
     formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })

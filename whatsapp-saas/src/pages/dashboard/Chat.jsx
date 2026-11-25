@@ -49,6 +49,7 @@ import { ChatConversationFilters } from '../../components/dashboard/ChatConversa
 import { ChatMessageContent, primeCrmMessageMediaCache } from '../../components/crm/ChatMessageContent.jsx'
 import { MessageDeliveryIcon } from '../../components/crm/MessageDeliveryIcon.jsx'
 import { ChatQuickRepliesMenu } from '../../components/crm/ChatQuickRepliesMenu.jsx'
+import { ChatEmojiPicker } from '../../components/crm/ChatEmojiPicker.jsx'
 import { ContactLeadActions } from '../../components/crm/ContactLeadActions.jsx'
 import { AddCrmContactModal } from '../../components/crm/AddCrmContactModal.jsx'
 import { AudioRecorderButton } from '../../components/crm/AudioRecorderButton.jsx'
@@ -109,7 +110,15 @@ import {
   sortChatListItems,
 } from '../../lib/chatGroups.js'
 import { revokeAudioPreview, warmUpAudioRecording } from '../../lib/audioRecorder.js'
-import { AUDIO_MAX_BYTES, VIDEO_MAX_BYTES, audioMaxLabel, videoMaxLabel, stripBase64Payload } from '../../lib/mediaLimits.js'
+import {
+  AUDIO_MAX_BYTES,
+  VIDEO_MAX_BYTES,
+  VIDEO_FILE_ACCEPT,
+  audioMaxLabel,
+  videoMaxLabel,
+  stripBase64Payload,
+  isAcceptedChatVideo,
+} from '../../lib/mediaLimits.js'
 import {
   appendCachedMessage,
   fetchConversationMessagesCached,
@@ -157,14 +166,13 @@ function dayLabel(iso) {
 }
 
 function mediaTypeFromMime(mime, name = '') {
-  if (!mime && name) {
-    if (/\.pdf$/i.test(name)) return 'document'
-  }
-  if (!mime) return 'none'
-  if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('video/')) return 'video'
-  if (mime.startsWith('audio/')) return 'audio'
-  if (mime === 'application/pdf') return 'document'
+  const m = String(mime || '').toLowerCase()
+  const n = String(name || '')
+  if (/\.pdf$/i.test(n) || m === 'application/pdf') return 'document'
+  if (m.startsWith('image/') || /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(n)) return 'image'
+  if (m.startsWith('video/') || /\.(mp4|mov|m4v|webm)$/i.test(n)) return 'video'
+  if (m.startsWith('audio/') || /\.(mp3|ogg|m4a|aac|wav|opus|oga)$/i.test(n)) return 'audio'
+  if (!m) return 'none'
   return 'none'
 }
 
@@ -263,6 +271,7 @@ export function Chat() {
   const toastApi = useToast()
   const toastRef = useRef(toastApi)
   toastRef.current = toastApi
+  const tagMetaToastAtRef = useRef({ key: '', at: 0 })
   const { user, isImpersonating, isOrgOwner } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const isMobileLayout = useMobileLayout()
@@ -1215,8 +1224,15 @@ export function Chat() {
       toastRef.current.info('Uma conversa foi transferida da IA para atendimento humano.', 'Transferência')
       loadConversationsRef.current()
     })
-    const offTagMeta = onSocketEvent('crm:tag_meta', ({ metaTracking }) => {
-      if (metaTracking) toastMetaTracking(toastRef.current, metaTracking)
+    const offTagMeta = onSocketEvent('crm:tag_meta', ({ contactId, metaTracking }) => {
+      if (!metaTracking) return
+      // Dedup: OWNER pode estar em user:+org: e receber o mesmo evento 2x (legado / race).
+      const key = `${contactId || ''}:${metaTracking.eventName || ''}:${metaTracking.sent ? '1' : '0'}:${metaTracking.reason || ''}:${metaTracking.eventsReceived ?? ''}`
+      const now = Date.now()
+      const prev = tagMetaToastAtRef.current
+      if (prev.key === key && now - prev.at < 4000) return
+      tagMetaToastAtRef.current = { key, at: now }
+      toastMetaTracking(toastRef.current, metaTracking)
     })
     const offRemoved = onSocketEvent('crm:conversation_removed', ({ conversationId, contactId }) => {
       setConversations((prev) =>
@@ -1446,14 +1462,12 @@ export function Chat() {
     if (!file) return
     const type = mediaTypeFromMime(file.type, file.name)
     if (type === 'none') {
-      toastRef.current.error('Envie imagem, vídeo MP4, áudio ou PDF.')
+      toastRef.current.error('Envie imagem, vídeo (MP4/MOV), áudio ou PDF.')
       return
     }
     if (type === 'video') {
-      const mime = String(file.type || '').toLowerCase()
-      const name = String(file.name || '')
-      if (mime && mime !== 'video/mp4' && mime !== 'application/mp4' && !/\.mp4$/i.test(name)) {
-        toastRef.current.error('Use vídeo em formato MP4.')
+      if (!isAcceptedChatVideo(file)) {
+        toastRef.current.error('Use vídeo em MP4 ou MOV.')
         return
       }
       if (file.size > VIDEO_MAX_BYTES) {
@@ -1468,7 +1482,14 @@ export function Chat() {
     const reader = new FileReader()
     reader.onload = () => {
       const base64 = stripBase64Payload(reader.result)
-      const next = { base64, mime: file.type || (type === 'image' ? 'image/jpeg' : file.type), name: file.name, type }
+      let mime = file.type || (type === 'image' ? 'image/jpeg' : file.type)
+      // iOS: galeria manda quicktime/.MOV — preserva mime real p/ o backend converter.
+      if (type === 'video' && !mime) {
+        if (/\.mov$/i.test(file.name || '')) mime = 'video/quicktime'
+        else if (/\.m4v$/i.test(file.name || '')) mime = 'video/x-m4v'
+        else mime = 'video/mp4'
+      }
+      const next = { base64, mime, name: file.name, type }
       if (options.autoSend) {
         void handleSendRef.current(next)
         return
@@ -1477,6 +1498,40 @@ export function Chat() {
     }
     reader.readAsDataURL(file)
   }, [])
+
+  /** Print/Ctrl+V: cola imagem do clipboard como anexo (desktop). */
+  const handleComposerPaste = useCallback(
+    (e) => {
+      const items = Array.from(e.clipboardData?.items || [])
+      const imageItem = items.find((it) => String(it.type || '').startsWith('image/'))
+      if (!imageItem) return
+      const blob = imageItem.getAsFile()
+      if (!blob) return
+      e.preventDefault()
+      if (attachment) {
+        toastRef.current.error('Remova o anexo atual para colar outra imagem.')
+        return
+      }
+      const ext = String(blob.type || 'image/png').split('/')[1] || 'png'
+      const file = new File([blob], `print-${Date.now()}.${ext}`, {
+        type: blob.type || 'image/png',
+      })
+      handleFile(file)
+    },
+    [attachment, handleFile],
+  )
+
+  const syncTextareaHeight = useCallback(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const max = isMobileLayout ? 96 : 160
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`
+  }, [isMobileLayout])
+
+  useEffect(() => {
+    syncTextareaHeight()
+  }, [draft, syncTextareaHeight])
 
   const updateConversation = useCallback(
     async (payload) => {
@@ -1793,6 +1848,27 @@ export function Chat() {
       setQrOpen(false)
     }
   }, [])
+
+  const insertEmojiAtCursor = useCallback((emoji) => {
+    if (!emoji) return
+    const el = inputRef.current
+    const current = el?.value ?? draft ?? ''
+    const start = typeof el?.selectionStart === 'number' ? el.selectionStart : current.length
+    const end = typeof el?.selectionEnd === 'number' ? el.selectionEnd : start
+    const next = `${current.slice(0, start)}${emoji}${current.slice(end)}`
+    onDraftChange(next)
+    const caret = start + emoji.length
+    requestAnimationFrame(() => {
+      const node = inputRef.current
+      if (!node) return
+      node.focus()
+      try {
+        node.setSelectionRange(caret, caret)
+      } catch {
+        /* ignore */
+      }
+    })
+  }, [draft, onDraftChange])
 
   const filteredQuickReplies = useMemo(() => {
     if (!qrFilter) return quickReplies
@@ -2434,8 +2510,14 @@ export function Chat() {
                 </div>
               )}
               {attachment && (
-                <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand-700 bg-brand-800/60 px-3 py-2 text-xs text-stone-300">
-                  {attachment.type === 'audio' ? (
+                <div className="mb-2 flex max-h-20 items-center gap-2 overflow-hidden rounded-lg border border-brand-700 bg-brand-800/60 px-2.5 py-1.5 text-xs text-stone-300">
+                  {attachment.type === 'image' && attachment.base64 ? (
+                    <img
+                      src={`data:${attachment.mime};base64,${attachment.base64}`}
+                      alt=""
+                      className="h-12 w-12 shrink-0 rounded-md object-cover"
+                    />
+                  ) : attachment.type === 'audio' ? (
                     <Mic className="h-3.5 w-3.5 shrink-0" />
                   ) : attachment.type === 'video' ? (
                     <Film className="h-3.5 w-3.5 shrink-0" />
@@ -2445,22 +2527,18 @@ export function Chat() {
                     <Paperclip className="h-3.5 w-3.5 shrink-0" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <span className="block truncate">{attachment.name}</span>
+                    <span className="block truncate">{attachment.name || 'Anexo'}</span>
                     {attachment.type === 'audio' && (
                       <audio
                         src={attachment.previewUrl || `data:${attachment.mime};base64,${attachment.base64}`}
                         controls
-                        className="mt-1 h-8 w-full max-w-xs"
+                        className="mt-0.5 h-7 w-full max-w-[14rem]"
                         preload="auto"
                       />
                     )}
-                    {attachment.type === 'image' && attachment.base64 && (
-                      <img
-                        src={`data:${attachment.mime};base64,${attachment.base64}`}
-                        alt=""
-                        className="mt-1 max-h-28 rounded-lg object-cover"
-                      />
-                    )}
+                    {attachment.type === 'image' ? (
+                      <span className="text-[10px] text-stone-500">Print / imagem pronta para enviar</span>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -2469,6 +2547,7 @@ export function Chat() {
                       setAttachment(null)
                     }}
                     className="shrink-0 text-stone-500 hover:text-stone-200"
+                    aria-label="Remover anexo"
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -2479,7 +2558,7 @@ export function Chat() {
                 <input
                   ref={fileRef}
                   type="file"
-                  accept="image/*,video/mp4,.mp4,audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf"
+                  accept={`image/*,${VIDEO_FILE_ACCEPT},audio/*,.mp3,.ogg,.m4a,.pdf,application/pdf`}
                   className="hidden"
                   onChange={(e) => {
                     handleFile(e.target.files?.[0])
@@ -2489,7 +2568,7 @@ export function Chat() {
                 <input
                   ref={galleryRef}
                   type="file"
-                  accept="image/*,video/mp4,.mp4"
+                  accept={`image/*,${VIDEO_FILE_ACCEPT}`}
                   className="hidden"
                   onChange={(e) => {
                     handleFile(e.target.files?.[0])
@@ -2531,11 +2610,18 @@ export function Chat() {
                     {isMobileLayout ? <Plus className="h-6 w-6" /> : <Paperclip className="h-5 w-5" />}
                   </button>
                 )}
+                {!isRecording && !isMobileLayout && (
+                  <ChatEmojiPicker onPick={insertEmojiAtCursor} disabled={sending} />
+                )}
                 {!isRecording && (
                   <textarea
                     ref={inputRef}
                     value={draft}
-                    onChange={(e) => onDraftChange(e.target.value)}
+                    onChange={(e) => {
+                      onDraftChange(e.target.value)
+                      requestAnimationFrame(syncTextareaHeight)
+                    }}
+                    onPaste={handleComposerPaste}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault()
@@ -2544,8 +2630,12 @@ export function Chat() {
                       if (e.key === 'Escape') setQrOpen(false)
                     }}
                     rows={1}
-                    placeholder={isMobileLayout ? 'Mensagem' : 'Digite uma mensagem… (use / para atalhos)'}
-                    className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-transparent max-lg:bg-[#15241e] max-lg:px-3.5 max-lg:py-2.5 max-lg:text-base max-lg:leading-5 max-lg:focus:border-brand-600/70"
+                    placeholder={
+                      isMobileLayout
+                        ? 'Mensagem'
+                        : 'Digite uma mensagem… (Ctrl+V cola print · / atalhos)'
+                    }
+                    className="max-h-40 min-h-[42px] flex-1 resize-none overflow-y-auto rounded-xl border border-brand-700 bg-brand-900/60 px-4 py-2.5 text-sm text-stone-100 placeholder:text-stone-500 outline-none focus:border-accent-500/60 max-lg:max-h-24 max-lg:min-h-[44px] max-lg:rounded-full max-lg:border-transparent max-lg:bg-[#15241e] max-lg:px-3.5 max-lg:py-2.5 max-lg:text-base max-lg:leading-5 max-lg:focus:border-brand-600/70"
                   />
                 )}
                 {(isMobileLayout ? isRecording || (!draft.trim() && !attachment) : true) && (

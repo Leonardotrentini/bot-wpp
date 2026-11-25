@@ -29,3 +29,29 @@ export function mediaLimitLabel(kind) {
   if (kind === 'document') return documentMaxLabel
   return imageMaxLabel
 }
+
+/** accept= do input — iPhone manda galeria como quicktime/.MOV mesmo quando o usuário acha que é MP4. */
+export const VIDEO_FILE_ACCEPT = 'video/*,video/mp4,video/quicktime,.mp4,.mov,.m4v'
+
+const ACCEPTED_VIDEO_MIME = new Set([
+  'video/mp4',
+  'application/mp4',
+  'video/quicktime',
+  'video/x-quicktime',
+  'video/x-m4v',
+  'video/m4v',
+])
+
+/** MP4 / MOV / M4V — backend converte para H.264 MP4 antes de enviar ao WhatsApp. */
+export function isAcceptedChatVideo(fileOrMime, fileName = '') {
+  const name = String(fileOrMime?.name || fileName || '')
+  const mime = String(fileOrMime?.type || (typeof fileOrMime === 'string' ? fileOrMime : '') || '').toLowerCase()
+  if (/\.(mp4|mov|m4v)$/i.test(name)) return true
+  if (ACCEPTED_VIDEO_MIME.has(mime)) return true
+  // Alguns Android/iOS reportam só "video/*" genérico com extensão correta já coberta acima.
+  return false
+}
+
+export function isChatVideoMimeOrName(mime, name = '') {
+  return isAcceptedChatVideo({ type: mime, name }, name)
+}

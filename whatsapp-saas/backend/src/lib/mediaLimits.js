@@ -41,8 +41,20 @@ function validateMediaContentSize(content) {
   if (mediaType === "video") {
     const mime = (content.mediaMime || "").toLowerCase()
     const name = content.mediaName || ""
-    if (mime && mime !== "video/mp4" && mime !== "application/mp4" && !/\.mp4$/i.test(name)) {
-      return "Use vídeo em formato MP4."
+    // iPhone: galeria costuma mandar video/quicktime (.MOV) mesmo em “MP4”.
+    // Aceita MP4/MOV/M4V — prepareWhatsAppVideo converte para H.264 MP4.
+    const okExt = /\.(mp4|mov|m4v)$/i.test(name)
+    const okMime =
+      !mime ||
+      mime === "video/mp4" ||
+      mime === "application/mp4" ||
+      mime === "video/quicktime" ||
+      mime === "video/x-quicktime" ||
+      mime === "video/x-m4v" ||
+      mime === "video/m4v" ||
+      mime.startsWith("video/")
+    if (mime && !okMime && !okExt) {
+      return "Use vídeo em MP4 ou MOV."
     }
     if (len > VIDEO_MAX_BASE64_LEN) {
       return `Vídeo grande demais. Limite: ${mbLabel(VIDEO_MAX_BYTES)}.`

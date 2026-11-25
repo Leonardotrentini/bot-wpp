@@ -240,7 +240,7 @@ export function ChatCameraCapture({ open, onClose, onCapture, onError }) {
       <input
         ref={fileVideoRef}
         type="file"
-        accept="video/mp4,video/*,.mp4"
+        accept="video/*,video/mp4,video/quicktime,.mp4,.mov,.m4v"
         capture="environment"
         className="hidden"
         onChange={(e) => {
