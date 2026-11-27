@@ -4,6 +4,7 @@ import { Card } from '../common/Card.jsx'
 import { Button } from '../common/Button.jsx'
 import { Badge } from '../common/Badge.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
+import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import {
   disableWebPush,
   enableWebPush,
@@ -30,10 +31,21 @@ export function PushNotificationsCard() {
   })
   const standalone = isStandalonePwa()
   const ios = isIos()
+  const demoMode = !resolveUseRealApi()
 
   const refresh = async () => {
     setLoading(true)
     try {
+      if (demoMode) {
+        setStatus({
+          supported: pushSupported(),
+          configured: false,
+          subscribed: false,
+          devices: 0,
+          permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
+        })
+        return
+      }
       const next = await getPushStatus()
       setStatus(next)
     } finally {
@@ -113,11 +125,19 @@ export function PushNotificationsCard() {
         </div>
       )}
 
-      {!status.supported && (
+      {demoMode && (
+        <p className="text-sm text-stone-400">
+          Em modo demonstração o push fica desligado. No ambiente real (celular/Chrome), após o login
+          aparece o pedido para <strong className="font-medium text-stone-200">Permitir</strong> e as
+          mensagens novas notificam neste aparelho.
+        </p>
+      )}
+
+      {!demoMode && !status.supported && (
         <p className="text-sm text-stone-400">Este navegador não suporta notificações push.</p>
       )}
 
-      {status.supported && !status.configured && !loading && (
+      {!demoMode && status.supported && !status.configured && !loading && (
         <p className="text-sm text-stone-400">
           Servidor ainda sem configuração de push. Se acabou de publicar, aguarde o deploy do backend.
         </p>
@@ -127,7 +147,14 @@ export function PushNotificationsCard() {
         {!status.subscribed ? (
           <Button
             onClick={onEnable}
-            disabled={busy || loading || !status.supported || needsHomeScreen || status.configured === false}
+            disabled={
+              busy ||
+              loading ||
+              demoMode ||
+              !status.supported ||
+              needsHomeScreen ||
+              status.configured === false
+            }
           >
             {busy ? 'Ativando…' : 'Ativar notificações'}
           </Button>

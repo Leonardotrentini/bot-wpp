@@ -380,6 +380,7 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      showReadReceipts: user.showReadReceipts !== false,
       orgId: orgMember?.organizationId || null,
       orgRole: orgMember?.role || null,
       orgName: orgMember?.organization?.name || null,
@@ -417,6 +418,7 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      showReadReceipts: user.showReadReceipts !== false,
       orgId: orgMember?.organizationId || null,
       orgRole: orgMember?.role || null,
       orgName: orgMember?.organization?.name || null,
@@ -456,6 +458,7 @@ app.get("/api/auth/me", authMiddleware, async (req, res) => {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      showReadReceipts: user.showReadReceipts !== false,
       orgId: orgMember?.organizationId || null,
       orgRole: orgMember?.role || null,
       orgName: orgMember?.organization?.name || null,
@@ -470,6 +473,7 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
     email: z.string().trim().email().optional(),
     phone: z.string().trim().max(32).optional().nullable(),
     avatar: z.string().max(1_000_000).optional().nullable(),
+    showReadReceipts: z.boolean().optional(),
     currentPassword: z.string().min(1).max(128).optional(),
     newPassword: z.string().min(6).max(128).optional(),
   })
@@ -502,6 +506,7 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
     if (payload.email !== undefined) data.email = payload.email
     if (payload.phone !== undefined) data.phone = payload.phone || null
     if (payload.avatar !== undefined) data.avatarUrl = payload.avatar || null
+    if (payload.showReadReceipts !== undefined) data.showReadReceipts = payload.showReadReceipts
     if (payload.newPassword) {
       if (!payload.currentPassword) {
         return res.status(400).json({
@@ -523,7 +528,7 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
     const updated = await prisma.user.update({
       where: { id: req.user.sub },
       data,
-      select: { id: true, name: true, email: true, phone: true, avatarUrl: true, role: true },
+      select: { id: true, name: true, email: true, phone: true, avatarUrl: true, role: true, showReadReceipts: true },
     })
 
     return res.json({
@@ -534,6 +539,7 @@ app.put("/api/auth/profile", authMiddleware, async (req, res) => {
         phone: updated.phone || "",
         avatar: updated.avatarUrl || null,
         role: updated.role,
+        showReadReceipts: updated.showReadReceipts !== false,
       },
     })
   } catch (err) {

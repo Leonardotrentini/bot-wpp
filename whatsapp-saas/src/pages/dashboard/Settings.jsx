@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Camera, Shield, Users } from 'lucide-react'
+import { Camera, MessageSquareText, Shield, Users } from 'lucide-react'
 import { Card } from '../../components/common/Card.jsx'
 import { Input } from '../../components/common/Input.jsx'
 import { Button } from '../../components/common/Button.jsx'
 import { Badge } from '../../components/common/Badge.jsx'
+import { Toggle } from '../../components/common/Toggle.jsx'
 import { UserAvatar } from '../../components/common/UserAvatar.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { useToast } from '../../contexts/ToastContext.jsx'
@@ -33,8 +34,10 @@ export function Settings() {
   const [teamMembers, setTeamMembers] = useState([])
   const [teamLoading, setTeamLoading] = useState(false)
   const [teamPhotoBusyId, setTeamPhotoBusyId] = useState(null)
+  const [savingReadReceipts, setSavingReadReceipts] = useState(false)
   const teamPhotoInputRef = useRef(null)
   const teamPhotoTargetRef = useRef(null)
+  const showReadReceipts = user?.showReadReceipts !== false
 
   useEffect(() => {
     setProfile(emptyProfileForm(user))
@@ -197,6 +200,21 @@ export function Settings() {
     }
   }
 
+  const onToggleReadReceipts = async (enabled) => {
+    try {
+      setSavingReadReceipts(true)
+      const data = await updateProfile({ showReadReceipts: enabled })
+      const nextUser = { ...(user || {}), ...(data?.user || {}), showReadReceipts: enabled }
+      localStorage.setItem('vg_auth', JSON.stringify(nextUser))
+      setCurrentUser(nextUser)
+      toast.success(enabled ? 'Visualização de mensagens ativada.' : 'Visualização de mensagens desativada.')
+    } catch (err) {
+      toast.error(err?.response?.data?.message || 'Falha ao atualizar preferência.')
+    } finally {
+      setSavingReadReceipts(false)
+    }
+  }
+
   const savePassword = async () => {
     const currentPassword = passwordForm.currentPassword.trim()
     const newPassword = passwordForm.newPassword.trim()
@@ -226,6 +244,25 @@ export function Settings() {
       </div>
 
       <PushNotificationsCard />
+
+      <Card className="space-y-4">
+        <div className="flex items-center gap-2">
+          <MessageSquareText className="h-5 w-5 text-accent-400" />
+          <div>
+            <h3 className="font-semibold text-stone-50">Preferências do Chat</h3>
+            <p className="text-xs text-stone-500">Controle o que aparece nas conversas do CRM.</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-brand-700/70 bg-brand-950/30 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-stone-100">Mostrar visualização de mensagens</p>
+            <p className="mt-0.5 text-xs text-stone-500">
+              Exibe os ✓ e ✓✓ azuis nas mensagens enviadas (lista e bolhas).
+            </p>
+          </div>
+          <Toggle checked={showReadReceipts} disabled={savingReadReceipts} onChange={onToggleReadReceipts} />
+        </div>
+      </Card>
 
       <Card className="space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">

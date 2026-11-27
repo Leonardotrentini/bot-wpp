@@ -186,6 +186,7 @@ const ConversationListItem = memo(function ConversationListItem({
   selected,
   onToggleSelect,
   compactMobile = false,
+  showReadReceipts = true,
 }) {
   const isGroup = c.kind === 'group'
   const subtitle = isGroup ? null : contactSubtitle(c.contact)
@@ -237,7 +238,9 @@ const ConversationListItem = memo(function ConversationListItem({
             <p className={`truncate text-[10px] ${unidentified ? 'text-amber-400/90' : 'text-stone-500'}`}>{subtitle}</p>
           ) : null}
           <div className="mt-0.5 flex items-center gap-1.5">
-            {c.lastMessageFromMe && <MessageDeliveryIcon status="sent" className="shrink-0" />}
+            {showReadReceipts && c.lastMessageFromMe && (
+              <MessageDeliveryIcon status="sent" className="shrink-0" />
+            )}
             <p className="min-w-0 flex-1 truncate text-[13px] text-stone-400">{c.lastMessagePreview || '—'}</p>
             {c.unreadCount > 0 && (
               <span className="ml-1 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-accent-500 px-1.5 text-[11px] font-bold text-brand-950">
@@ -2164,6 +2167,7 @@ export function Chat() {
                   selected={c.contact?.id ? selectedContactIds.has(c.contact.id) : false}
                   onToggleSelect={toggleContactSelect}
                   compactMobile={isMobileLayout}
+                  showReadReceipts={user?.showReadReceipts !== false}
                 />
               ))}
               {!groupsOnly && hasMoreConversations && (
@@ -2459,7 +2463,9 @@ export function Chat() {
                             {item.msg.source === 'ai' && <Bot className="h-3 w-3 text-sky-400" />}
                             {item.msg.source === 'flow' && <Zap className="h-3 w-3 text-amber-400" />}
                             <span className="text-[10px] text-stone-500">{formatMsgTime(item.msg.timestamp)}</span>
-                            {item.msg.fromMe && <MessageDeliveryIcon status={item.msg.status} />}
+                            {user?.showReadReceipts !== false && item.msg.fromMe && (
+                              <MessageDeliveryIcon status={item.msg.status} />
+                            )}
                           </div>
                         </div>
                       </div>

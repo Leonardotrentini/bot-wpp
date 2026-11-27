@@ -321,6 +321,7 @@ function KanbanCard({
   selectable,
   selected,
   onToggleSelect,
+  showReadReceipts = true,
 }) {
   return (
     <div
@@ -364,7 +365,9 @@ function KanbanCard({
           {c.aiEnabled && <Bot className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" title="IA ativa" />}
         </div>
         <div className="mt-2 flex items-center gap-1.5 text-xs text-stone-400">
-          {c.lastMessageFromMe && <MessageDeliveryIcon status="sent" className="shrink-0" />}
+          {showReadReceipts && c.lastMessageFromMe && (
+            <MessageDeliveryIcon status="sent" className="shrink-0" />
+          )}
           <p className="line-clamp-2 min-w-0 flex-1 leading-snug">{c.lastMessagePreview || '—'}</p>
         </div>
         {(c.contact?.tags || []).length > 0 && (
@@ -596,6 +599,7 @@ function KanbanBoard({
   attendantByUserId,
   selectedContactIds,
   onToggleSelect,
+  showReadReceipts = true,
 }) {
   const [dragId, setDragId] = useState(null)
   const [overStage, setOverStage] = useState(null)
@@ -665,6 +669,7 @@ function KanbanBoard({
       onEdit={onEdit}
       onTags={onTags}
       onRefreshAvatar={onRefreshAvatar}
+      showReadReceipts={showReadReceipts}
     />
   )
 
@@ -2647,6 +2652,7 @@ export function Crm() {
             attendantByUserId={attendantByUserId}
             selectedContactIds={selectedContactIds}
             onToggleSelect={toggleKanbanSelect}
+            showReadReceipts={user?.showReadReceipts !== false}
           />
           <KanbanQuickEditModal
             conversation={kanbanEdit}

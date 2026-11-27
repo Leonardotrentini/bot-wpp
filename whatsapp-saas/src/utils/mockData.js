@@ -11,6 +11,7 @@ export const mockUser = {
   phone: '+55 (11) 99876-5432',
   avatar: avatar('Carlos Mendes'),
   plan: 'Pro',
+  showReadReceipts: true,
 }
 
 export const mockGroups = [

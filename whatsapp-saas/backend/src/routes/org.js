@@ -314,6 +314,7 @@ async function handleAcceptInvite(req, res) {
       phone: user.phone || "",
       avatar: user.avatarUrl || null,
       role: user.role,
+      showReadReceipts: user.showReadReceipts !== false,
       orgId: orgCtx?.organizationId || null,
       orgRole: orgCtx?.role || null,
       orgName: orgCtx?.organization?.name || null,

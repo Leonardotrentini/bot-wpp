@@ -8,6 +8,7 @@ import { useSidebar } from '../../contexts/SidebarContext.jsx'
 import { useAuth } from '../../contexts/AuthContext.jsx'
 import { resolveUseRealApi } from '../../lib/runtimeEnv.js'
 import { syncWebPushIfGranted } from '../../lib/webPushClient.js'
+import { PushEnablePrompt } from '../pwa/PushEnablePrompt.jsx'
 import { Button } from '../common/Button.jsx'
 import { Eye } from 'lucide-react'
 
@@ -93,6 +94,7 @@ export function DashboardLayout() {
           <Outlet key={user?.id || 'anon'} />
         </main>
         </div>
+        <PushEnablePrompt />
       </div>
     </ReminderAlertsProvider>
   )
